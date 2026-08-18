@@ -19,7 +19,7 @@ if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch "1\.8\.19") {
 Write-Host "Installing $core from the pinned board package index..."
 & $resolvedArduino `
     --install-boards $core `
-    --additional-urls $boardManagerUrl
+    --pref "boardsmanager.additional.urls=$boardManagerUrl"
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to install $core."
 }
