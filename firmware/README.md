@@ -61,6 +61,18 @@ Compile the production sketch without touching the board:
   -Sketch .\firmware\AZ3166\AZ3166.ino
 ```
 
+Build artifacts are kept in `.build\firmware` at the repository root by default.
+This directory contains the main generated firmware files, typically
+`AZ3166.ino.bin` and `AZ3166.ino.elf`, and is ignored by Git. Use `-BuildPath`
+(or its `-OutputDirectory` alias) to use a different directory:
+
+```powershell
+& .\firmware\tools\Invoke-Az3166Build.ps1 `
+  -Action Verify `
+  -Sketch .\firmware\AZ3166\AZ3166.ino `
+  -BuildPath .\artifacts\az3166
+```
+
 Compile the production sketch and all ten test sketches:
 
 ```powershell

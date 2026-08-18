@@ -12,7 +12,10 @@ param(
 
     [string]$ArduinoExecutable,
 
-    [string]$ArduinoInstallRoot = (Join-Path (Get-Location) ".tools")
+    [string]$ArduinoInstallRoot = (Join-Path (Get-Location) ".tools"),
+
+    [Alias("OutputDirectory")]
+    [string]$BuildPath
 )
 
 Set-StrictMode -Version Latest
@@ -56,15 +59,22 @@ if ([System.IO.Path]::GetExtension($resolvedSketch) -ne ".ino") {
     throw "Sketch must be an .ino file: $resolvedSketch"
 }
 
+$repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+if ([string]::IsNullOrWhiteSpace($BuildPath)) {
+    $BuildPath = Join-Path $repositoryRoot ".build\firmware"
+}
+$resolvedBuildPath = [System.IO.Path]::GetFullPath($BuildPath)
+New-Item -ItemType Directory -Path $resolvedBuildPath -Force | Out-Null
+
 $arduino = Find-ArduinoExecutable -RequestedExecutable $ArduinoExecutable
 if ($Action -eq "Upload") {
     if ($Port -notmatch "^COM\d+$") {
         throw "Upload requires an explicit ST-Link port such as -Port COM3."
     }
-    $arguments = @("--upload", "--board", $Board, "--port", $Port, $resolvedSketch)
+    $arguments = @("--pref", "build.path=$resolvedBuildPath", "--upload", "--board", $Board, "--port", $Port, $resolvedSketch)
     Write-Host "Uploading $resolvedSketch to $Board on $Port"
 } else {
-    $arguments = @("--verify", "--board", $Board, $resolvedSketch)
+    $arguments = @("--pref", "build.path=$resolvedBuildPath", "--verify", "--board", $Board, $resolvedSketch)
     Write-Host "Verifying $resolvedSketch for $Board"
 }
 
@@ -77,6 +87,15 @@ if ($exitCode -ne 0) {
 }
 if ($Action -eq "Upload" -and $output -notmatch "\*\*\s+Verified OK\s+\*\*") {
     throw "Upload exited successfully, but OpenOCD did not report Verified OK."
+}
+
+Write-Host "Build artifacts: $resolvedBuildPath"
+$artifacts = Get-ChildItem -LiteralPath $resolvedBuildPath -File |
+    Where-Object { $_.Extension -in ".bin", ".elf", ".hex" }
+if ($artifacts) {
+    $artifacts | ForEach-Object { Write-Host "  $($_.Name)" }
+} else {
+    Write-Host "  No .bin, .elf, or .hex files found."
 }
 
 Write-Host "AZ3166 $Action completed successfully."
