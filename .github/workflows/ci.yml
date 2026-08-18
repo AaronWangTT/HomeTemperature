@@ -56,6 +56,9 @@ jobs:
       - name: Build API image
         run: docker build --tag home-temperature-api:ci server
 
+      - name: Run container integration test
+        run: bash server/tests/run-container-integration-test.sh home-temperature-api:ci
+
   firmware:
     name: Firmware compile
     runs-on: windows-2022
