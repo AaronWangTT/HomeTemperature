@@ -40,7 +40,7 @@ not relicensed by this project:
 
 | Component | Version used | License | Source |
 | --- | --- | --- | --- |
-| Python | 3.12.11 image | PSF License | <https://www.python.org/> |
+| Python | 3.14.7 image | PSF License | <https://www.python.org/> |
 | FastAPI | 0.141.1 | MIT | <https://github.com/fastapi/fastapi> |
 | Uvicorn | 0.52.3 | BSD-3-Clause | <https://github.com/encode/uvicorn> |
 | httpx2 | 2.10.0 (tests) | BSD-3-Clause | <https://github.com/pydantic/httpx2> |
