@@ -90,7 +90,6 @@ Transfer this `server` directory to the VM first, or transfer it after Docker is
 installed. Run the included bootstrap on Ubuntu 22.04 or 24.04:
 
 ```bash
-chmod +x scripts/*.sh
 ./scripts/bootstrap-ubuntu.sh
 ```
 
@@ -100,22 +99,46 @@ Buildx, and the Compose plugin. It deliberately keeps Docker commands behind
 
 ## 4. Transfer the Deployment Project
 
-From Windows PowerShell, package the directory contents and extract them into a
-fixed destination. The archive reuses `.dockerignore`, so local secrets, tests,
-and runtime files are not uploaded.
+Build the release archive from an immutable Git revision, not from the working
+directory. The helper runs `git archive` from the repository root so root
+`.gitattributes` rules apply, then audits the archive for required files,
+forbidden runtime paths, symbolic links, shell executable modes, and CRLF shell
+scripts.
 
 ```powershell
-$source = (Resolve-Path '.\server').Path
-$archive = "$env:TEMP\az3166-gateway.tar.gz"
-tar -czf $archive -X "$source\.dockerignore" -C $source .
-scp $archive <ssh-user>@telemetry.example.com:~/
-ssh <ssh-user>@telemetry.example.com "mkdir -p ~/az3166-gateway && tar -xzf ~/az3166-gateway.tar.gz -C ~/az3166-gateway && rm ~/az3166-gateway.tar.gz"
+if (git status --porcelain) {
+  throw "Create releases from a clean checkout."
+}
+
+$revision = (git rev-parse HEAD).Trim()
+$archiveName = "az3166-gateway-$revision.tar.gz"
+$archive = Join-Path $env:TEMP $archiveName
+$target = "<ssh-user>@telemetry.example.com"
+$release = ./server/tools/New-ServerReleaseArchive.ps1 `
+  -Revision $revision `
+  -OutputPath $archive
+
+scp $release.Archive "${target}:~/$archiveName"
+if ($LASTEXITCODE -ne 0) {
+  throw "Release upload failed."
+}
+
+$remoteHashOutput = (ssh $target "sha256sum -- '$archiveName'" | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) {
+  throw "Remote checksum command failed."
+}
+$remoteSha256 = ($remoteHashOutput -split '\s+', 2)[0].ToLowerInvariant()
+if ($remoteSha256 -ne $release.Sha256) {
+  throw "Release checksum mismatch."
+}
+
 Remove-Item $archive
 ```
 
-Extracting the archive contents, rather than the `server` directory, avoids an
-extra `~/az3166-gateway/server` level. Repeating the command leaves the existing
-VM-side `.env` in place.
+Only committed files under `server/` enter the archive. Local `.env`, database,
+backup, cache, and untracked files cannot enter it. Check the immutable
+revision's CI status before transferring it. The local archive is removed only
+after upload and remote checksum verification succeed.
 
 Then connect:
 
@@ -126,9 +149,72 @@ ssh <ssh-user>@telemetry.example.com
 On the VM:
 
 ```bash
-cd ~/az3166-gateway
-chmod +x scripts/*.sh
+set -euo pipefail
+
+revision=<full-40-character-git-sha>
+project_dir="$HOME/az3166-gateway"
+archive="$HOME/az3166-gateway-${revision}.tar.gz"
+release_dir=$(mktemp -d "$HOME/az3166-gateway-release.XXXXXX")
+previous_dir=""
+
+restore_previous_release() {
+  status=$?
+  if [[ "$status" -ne 0 && -n "$previous_dir" && -d "$previous_dir" ]]; then
+    rm -rf -- "$project_dir"
+    mv -- "$previous_dir" "$project_dir"
+  fi
+  if [[ -n "$release_dir" && -d "$release_dir" ]]; then
+    rm -rf -- "$release_dir"
+  fi
+  exit "$status"
+}
+trap restore_previous_release EXIT
+
+test "$project_dir" = "$HOME/az3166-gateway"
+tar -xzf "$archive" -C "$release_dir" --strip-components=1
+test -f "$release_dir/compose.yaml"
+test -f "$release_dir/scripts/deploy.sh"
+
+while IFS= read -r -d '' shell_script; do
+  test -x "$shell_script"
+  IFS= read -r shebang < "$shell_script"
+  test "$shebang" = '#!/usr/bin/env bash'
+  ! LC_ALL=C grep -q $'\r' "$shell_script"
+done < <(find "$release_dir" -type f -name '*.sh' -print0)
+rm "$archive"
+
+if [[ -e "$project_dir" ]]; then
+  test -d "$project_dir"
+  if [[ -f "$project_dir/.env" ]]; then
+    cp -p -- "$project_dir/.env" "$release_dir/.env"
+  fi
+  if [[ -d "$project_dir/backups" ]]; then
+    cp -a -- "$project_dir/backups" "$release_dir/backups"
+  fi
+
+  previous_dir=$(mktemp -d "$HOME/az3166-gateway-previous.XXXXXX")
+  rmdir "$previous_dir"
+  mv -- "$project_dir" "$previous_dir"
+fi
+
+mv -- "$release_dir" "$project_dir"
+release_dir=""
+cd "$project_dir"
+trap - EXIT
+if [[ -n "$previous_dir" ]]; then
+  printf 'Previous source retained at: %s\n' "$previous_dir"
+fi
 ```
+
+Shell scripts are executable in Git and retain that mode in the release
+archive. A missing executable bit therefore indicates a damaged or unsupported
+transfer path; rebuild and transfer the archive instead of repairing it in
+place. All copying and validation occur before the fixed project directory
+changes. The final sibling-directory rename prevents stale source files; if a
+rename fails, the exit trap restores the prior directory. The previous source
+directory remains until post-deployment acceptance succeeds; remove it only
+after recording its path. For an upgrade, create all rollback assets in
+section 9 before running this installation block.
 
 ## 5. Create Secrets
 
@@ -164,16 +250,25 @@ the secrets into chat. The device key will later be copied into the firmware.
 Run:
 
 ```bash
-./scripts/deploy.sh
+RELEASE_REVISION=<full-40-character-git-sha> ./scripts/deploy.sh
 sudo docker compose logs -f --tail=100
 ```
 
 The deployment script performs these checks before starting:
 
+- `.env` has mode `600`.
+- Every required `.env` key appears exactly once and has a nonempty value.
 - Compose configuration is valid.
 - Caddy accepts the configuration.
-- Required secrets are present and placeholders are gone.
-- Current container images are pulled and the API image builds successfully.
+- Placeholder values are gone.
+- `RELEASE_REVISION` is a full lowercase Git commit SHA.
+- Docker Compose supports the required `--wait` and `--wait-timeout` options.
+- The pinned Caddy tag is freshly pulled and the API image builds successfully.
+- Compose reports the API healthy before deployment succeeds.
+
+The API image stores the supplied revision in the
+`org.opencontainers.image.revision` OCI label. The deployment script refuses
+to build without that immutable release identity.
 
 Caddy obtains and renews a public certificate automatically through the
 TLS-ALPN-01 challenge. TCP 443 must reach Caddy directly during issuance and
@@ -188,6 +283,15 @@ curl --fail --resolve \
   telemetry.example.com:443:127.0.0.1 \
   https://telemetry.example.com/healthz
 curl --fail https://telemetry.example.com/healthz
+```
+
+Confirm that the running API image identifies the intended release:
+
+```bash
+api_container=$(sudo docker compose ps -q api)
+sudo docker inspect \
+  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+  "${api_container}"
 ```
 
 Submit a test record without putting the key into shell history:
@@ -273,12 +377,6 @@ sudo docker compose logs --tail=200 api
 sudo docker compose logs --tail=200 caddy
 ```
 
-Update after transferring new source files:
-
-```bash
-./scripts/deploy.sh
-```
-
 Create a consistent SQLite backup:
 
 ```bash
@@ -289,13 +387,284 @@ Keep backups outside the host, for example in encrypted object storage. In the
 Azure example, Azure Storage is one suitable destination. A VM disk snapshot
 is not a substitute for regular application-level backups.
 
-Restore procedure:
+### Production Upgrade
 
-1. Stop the stack with `sudo docker compose down`.
-2. Start only the API container with `sudo docker compose up -d api`.
-3. Find it with `sudo docker compose ps -q api`.
-4. Copy the selected backup to `/data/telemetry.db` with `sudo docker cp`.
-5. Start all services with `sudo docker compose up -d`.
+Before replacing source files, record five rollback assets on the VM: a
+consistent database backup, the current source tree, the current `.env`, a tag
+for the running API image, and a protected file containing that image's ID and
+configured reference. The following commands do not print secrets or telemetry
+rows:
+
+```bash
+cd ~/az3166-gateway
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p backups
+chmod 700 backups
+
+./scripts/backup.sh "$PWD/backups"
+tar \
+  --exclude='./.env' \
+  --exclude='./backups' \
+  -czf "backups/source-pre-${timestamp}.tar.gz" .
+cp --preserve=mode,timestamps .env "backups/env-pre-${timestamp}"
+chmod 600 "backups/env-pre-${timestamp}"
+
+api_container=$(sudo docker compose ps -q api)
+test -n "${api_container}"
+old_image_id=$(sudo docker inspect --format '{{.Image}}' "${api_container}")
+old_image_reference=$(sudo docker inspect --format '{{.Config.Image}}' "${api_container}")
+printf 'image_id=%s\nimage_reference=%s\n' \
+  "$old_image_id" "$old_image_reference" \
+  > "backups/api-image-pre-${timestamp}.txt"
+chmod 600 "backups/api-image-pre-${timestamp}.txt"
+sudo docker image tag \
+  "$old_image_id" \
+  "az3166-gateway-api:rollback-${timestamp}"
+```
+
+Compose assigns the API image the stable name
+`az3166-gateway-api:latest`, independent of the project directory or
+`COMPOSE_PROJECT_NAME`. The timestamped tag and recorded image ID remain
+reliable rollback identities, including when the previous release predates
+that stable name.
+
+Retain the timestamp and copy the backups to independent storage. Transfer and
+extract the audited archive as described in section 4. Preserve `.env`; when a
+release adds a required key such as `PUBLIC_HOST`, edit the file on the VM,
+keep exactly one nonempty assignment, and restore mode `600`. Never replace
+production `.env` with `.env.example`.
+
+Deploy the same revision used to build the archive:
+
+```bash
+cd ~/az3166-gateway
+RELEASE_REVISION=<full-40-character-git-sha> ./scripts/deploy.sh
+```
+
+Complete the checks in section 7. At minimum, verify internal and external
+`/healthz`, the image revision label, expected `401` responses without
+credentials, a valid authenticated write/read cycle, and a post-deployment
+SQLite backup. Confirm that Caddy access logs do not contain the test device
+key used for acceptance.
+
+### Application Rollback
+
+Use the matching pre-upgrade timestamp. Preserve failed-release logs before
+the rollback. Prepare and validate the restored source in a sibling directory
+before stopping Compose. The failure trap restores the failed-release source if
+the directory swap or rollback startup fails:
+
+```bash
+set -euo pipefail
+
+project_dir="$HOME/az3166-gateway"
+test -d "$project_dir"
+rollback_image="az3166-gateway-api:rollback-<timestamp>"
+expected_image_id=$(sudo docker image inspect \
+  --format '{{.Id}}' "$rollback_image")
+recorded_image_id=$(sed -n 's/^image_id=//p' \
+  "$project_dir/backups/api-image-pre-<timestamp>.txt")
+test -n "$recorded_image_id"
+test "$expected_image_id" = "$recorded_image_id"
+
+rollback_dir=$(mktemp -d "$HOME/az3166-gateway-rollback.XXXXXX")
+failed_dir=""
+
+restore_failed_release() {
+  status=$?
+  if [[ "$status" -ne 0 && -n "$failed_dir" && -d "$failed_dir" ]]; then
+    if [[ -f "$project_dir/compose.yaml" ]]; then
+      (
+        cd "$project_dir"
+        sudo docker compose \
+          -f compose.yaml \
+          -f "$rollback_override" \
+          down
+      ) >/dev/null 2>&1 || true
+    fi
+    rm -rf -- "$project_dir"
+    mv -- "$failed_dir" "$project_dir"
+  fi
+  if [[ -n "$rollback_dir" && -d "$rollback_dir" ]]; then
+    rm -rf -- "$rollback_dir"
+  fi
+  exit "$status"
+}
+trap restore_failed_release EXIT
+
+tar -xzf "$project_dir/backups/source-pre-<timestamp>.tar.gz" \
+  -C "$rollback_dir"
+test -f "$rollback_dir/compose.yaml"
+test -f "$rollback_dir/scripts/deploy.sh"
+cp "$project_dir/backups/env-pre-<timestamp>" "$rollback_dir/.env"
+chmod 600 "$rollback_dir/.env"
+cp -a "$project_dir/backups" "$rollback_dir/backups"
+
+rollback_override="backups/rollback-<timestamp>.override.yaml"
+cat > "$rollback_dir/$rollback_override" <<EOF
+services:
+  api:
+    image: ${rollback_image}
+EOF
+chmod 600 "$rollback_dir/$rollback_override"
+
+(
+  cd "$project_dir"
+  sudo docker compose down
+)
+cd "$HOME"
+
+failed_dir=$(mktemp -d "$HOME/az3166-gateway-failed.XXXXXX")
+rmdir "$failed_dir"
+mv -- "$project_dir" "$failed_dir"
+mv -- "$rollback_dir" "$project_dir"
+rollback_dir=""
+
+(
+  cd "$project_dir"
+  sudo docker compose \
+    -f compose.yaml \
+    -f "$rollback_override" \
+    up \
+    -d \
+    --remove-orphans \
+    --no-build \
+    --force-recreate \
+    --wait \
+    --wait-timeout 120
+)
+
+api_container=$(
+  cd "$project_dir"
+  sudo docker compose \
+    -f compose.yaml \
+    -f "$rollback_override" \
+    ps -q api
+)
+test -n "$api_container"
+actual_image_id=$(sudo docker inspect \
+  --format '{{.Image}}' "$api_container")
+test "$actual_image_id" = "$expected_image_id"
+trap - EXIT
+printf 'Failed release retained at: %s\n' "$failed_dir"
+cd "$project_dir"
+```
+
+The override binds the restored Compose definition directly to the saved image,
+including during the first upgrade to a release that defines the stable image
+name. Verify health and authentication again. Older images may not contain the
+OCI revision label, so exact image-ID equality is the rollback identity check.
+Keep the failed-release directory until acceptance succeeds, then remove it
+after recording its path. Restore the database only when the failed release
+changed or damaged stored data; an application rollback normally reuses the
+existing persistent volume.
+
+### Database Restore
+
+Keep the API stopped while replacing SQLite files. If the current database is
+readable, create one final backup before stopping the stack. Select the backup
+by path without printing its contents. After an application rollback, export
+`ROLLBACK_OVERRIDE=backups/rollback-<timestamp>.override.yaml` so every
+one-off container uses the exact saved image:
+
+```bash
+cd ~/az3166-gateway
+backup="$HOME/az3166-gateway-backups/telemetry-<timestamp>.db"
+test -f "$backup"
+compose_files=(-f compose.yaml)
+if [[ -n "${ROLLBACK_OVERRIDE:-}" ]]; then
+  test -f "$ROLLBACK_OVERRIDE"
+  compose_files+=(-f "$ROLLBACK_OVERRIDE")
+fi
+sudo docker compose "${compose_files[@]}" down
+
+sudo docker compose "${compose_files[@]}" run \
+  --rm \
+  --no-deps \
+  --no-build \
+  -T \
+  --entrypoint sh \
+  api \
+  -c 'umask 077; cat > /data/telemetry.restore.db' < "$backup"
+
+sudo docker compose "${compose_files[@]}" run \
+  --rm \
+  --no-deps \
+  --no-build \
+  -T \
+  --entrypoint python \
+  api - <<'PY'
+import sqlite3
+from pathlib import Path
+
+staged = Path("/data/telemetry.restore.db")
+database = Path("/data/telemetry.db")
+database_set = (
+  database,
+  Path(f"{database}-wal"),
+  Path(f"{database}-shm"),
+)
+previous_set = (
+  Path("/data/telemetry.pre-restore.db"),
+  Path("/data/telemetry.pre-restore.db-wal"),
+  Path("/data/telemetry.pre-restore.db-shm"),
+)
+
+
+def quick_check(path: Path) -> bool:
+  connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+  try:
+    return connection.execute("PRAGMA quick_check").fetchall() == [("ok",)]
+  finally:
+    connection.close()
+
+
+if not quick_check(staged):
+  raise SystemExit("Backup failed SQLite quick_check.")
+
+staged.chmod(0o600)
+for previous in previous_set:
+  previous.unlink(missing_ok=True)
+
+moved_pairs = []
+restore_installed = False
+try:
+  for current, previous in zip(database_set, previous_set, strict=True):
+    if current.exists():
+      current.replace(previous)
+      moved_pairs.append((current, previous))
+
+  staged.replace(database)
+  restore_installed = True
+  if not quick_check(database):
+    raise RuntimeError("Restored database failed SQLite quick_check.")
+except Exception:
+  if restore_installed:
+    database.unlink(missing_ok=True)
+  for current, previous in reversed(moved_pairs):
+    if previous.exists():
+      previous.replace(current)
+  raise
+else:
+  for previous in previous_set:
+    previous.unlink(missing_ok=True)
+PY
+
+sudo docker compose "${compose_files[@]}" up \
+  -d \
+  --remove-orphans \
+  --no-build \
+  --wait \
+  --wait-timeout 120
+```
+
+Both restore containers run as the image's unprivileged application user, so
+the restored file keeps the ownership required by the API. The original
+database, WAL, and shared-memory files remain recoverable until the restored
+database passes its second `quick_check`; any exception restores each file that
+was successfully moved without deleting unmoved WAL or shared-memory files. No
+telemetry rows are printed. Complete the service checks in section 7 and create
+a new backup after restoration.
 
 ## 10. Capacity and Upgrade Path
 

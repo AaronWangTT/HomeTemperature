@@ -39,7 +39,17 @@ jobs:
         run: python -m compileall -q server/app server/tests
 
       - name: Check shell syntax
-        run: bash -n server/scripts/*.sh
+        run: bash -n server/scripts/*.sh server/tests/*.sh
+
+      - name: Test deployment preflight
+        run: bash server/tests/run-deploy-preflight-tests.sh
+
+      - name: Build audited server release archive
+        shell: pwsh
+        run: |
+          & ./server/tools/New-ServerReleaseArchive.ps1 `
+            -Revision $env:GITHUB_SHA `
+            -OutputPath (Join-Path $env:RUNNER_TEMP "home-temperature-server.tar.gz")
 
       - name: Validate Compose configuration
         run: docker compose --file server/compose.yaml --env-file server/.env.example config --quiet
@@ -54,7 +64,17 @@ jobs:
           caddy validate --config /etc/caddy/Caddyfile
 
       - name: Build API image
-        run: docker build --tag home-temperature-api:ci server
+        run: >-
+          docker build
+          --build-arg VCS_REF="${GITHUB_SHA}"
+          --tag home-temperature-api:ci
+          server
+
+      - name: Verify API image revision
+        run: >-
+          test "$(docker image inspect
+          --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
+          home-temperature-api:ci)" = "${GITHUB_SHA}"
 
       - name: Run container integration test
         run: bash server/tests/run-container-integration-test.sh home-temperature-api:ci

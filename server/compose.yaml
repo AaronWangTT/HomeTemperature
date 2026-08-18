@@ -2,6 +2,7 @@ services:
   api:
     build:
       context: .
+    image: az3166-gateway-api:latest
     restart: unless-stopped
     environment:
       DATABASE_PATH: /data/telemetry.db

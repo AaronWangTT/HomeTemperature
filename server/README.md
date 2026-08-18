@@ -97,14 +97,16 @@ After configuring `server/.env` and public DNS:
 
 ```bash
 cd server
-./scripts/deploy.sh
+RELEASE_REVISION=<full-40-character-git-sha> ./scripts/deploy.sh
 ```
 
-The deployment script validates placeholders, expands the Compose
-configuration, validates the Caddyfile, builds the API image, and starts the
-stack. The public host must route TCP 443 directly to Caddy so ACME TLS-ALPN-01
-certificate issuance and renewal can succeed. Do not expose port 8000 or the
-database.
+The deployment script requires a full release SHA and `.env` mode `600`,
+validates required variables and placeholders, checks Compose health-wait
+support, expands the Compose configuration, pulls the pinned Caddy tag,
+validates the Caddyfile, records the release revision in the API image, builds
+the image, and waits for the stack to become healthy. The public host must
+route TCP 443 directly to Caddy so ACME TLS-ALPN-01 certificate issuance and
+renewal can succeed. Do not expose port 8000 or the database.
 
 Run the stack on a maintained Linux host with Docker Engine and the Compose
 plugin installed. Keep operating-system, firewall, and cloud-network hardening
@@ -125,7 +127,8 @@ cd server
 
 Backups default to `~/az3166-gateway-backups/`, outside the repository. Copy
 them to independent storage, define a retention policy, and periodically test
-an offline restore.
+an offline restore. Keep the API stopped while replacing the SQLite database;
+the runbook provides a staged, integrity-checked restore procedure.
 
 ## Security Notes
 
@@ -149,5 +152,6 @@ $env:PYTHONPATH = "server"
 .\.venv\Scripts\python.exe -m pytest server\tests -q
 ```
 
-CI additionally validates shell syntax, Compose expansion, the Caddyfile, and
-the API container build.
+CI additionally validates shell syntax, Compose expansion, the Caddyfile, an
+audited Git release archive, the API image revision, and the running API
+container.
