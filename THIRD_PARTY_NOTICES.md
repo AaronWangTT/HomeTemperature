@@ -42,8 +42,8 @@ not relicensed by this project:
 | --- | --- | --- | --- |
 | Python | 3.12.11 image | PSF License | <https://www.python.org/> |
 | FastAPI | 0.141.1 | MIT | <https://github.com/fastapi/fastapi> |
-| Uvicorn | 0.52.1 | BSD-3-Clause | <https://github.com/encode/uvicorn> |
-| httpx2 | 2.0.0 (tests) | BSD-3-Clause | <https://github.com/Kludex/httpx> |
+| Uvicorn | 0.52.3 | BSD-3-Clause | <https://github.com/encode/uvicorn> |
+| httpx2 | 2.10.0 (tests) | BSD-3-Clause | <https://github.com/pydantic/httpx2> |
 | Caddy | 2.10.2 image | Apache-2.0 | <https://github.com/caddyserver/caddy> |
 
 Transitive Python packages and container image contents retain their upstream
