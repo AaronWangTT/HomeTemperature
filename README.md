@@ -107,8 +107,7 @@ The verified Windows toolchain is Arduino IDE 1.8.19 with AZ3166 Core 2.0.0
 and board `AZ3166:stm32f4:MXCHIP_AZ3166`.
 
 ```powershell
-& .\firmware\tools\Install-Az3166Toolchain.ps1 `
-  -ArduinoExecutable 'C:\Program Files (x86)\Arduino\arduino_debug.exe'
+& .\firmware\tools\Install-Az3166Toolchain.ps1
 
 & .\firmware\tools\Invoke-Az3166Build.ps1 `
   -Action Verify `

@@ -10,7 +10,9 @@ param(
 
     [string]$Board = "AZ3166:stm32f4:MXCHIP_AZ3166",
 
-    [string]$ArduinoExecutable
+    [string]$ArduinoExecutable,
+
+    [string]$ArduinoInstallRoot = (Join-Path (Get-Location) ".tools")
 )
 
 Set-StrictMode -Version Latest
@@ -26,6 +28,7 @@ function Find-ArduinoExecutable {
     if ($env:ARDUINO_IDE_PATH) {
         $candidates.Add($env:ARDUINO_IDE_PATH)
     }
+    $candidates.Add((Join-Path $ArduinoInstallRoot "arduino-1.8.19\arduino_debug.exe"))
     if (${env:ProgramFiles(x86)}) {
         $candidates.Add((Join-Path ${env:ProgramFiles(x86)} "Arduino\arduino_debug.exe"))
     }

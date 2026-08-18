@@ -22,12 +22,16 @@ That index declares `AZ3166-2.0.0.zip` with MD5
 `4f51c0ebf4d510f28c06d203a4ce23f8`. Arduino Board Manager verifies the
 archive against the index while installing it.
 
-On Windows, install the pinned Core with:
+On Windows, install Arduino IDE 1.8.19 and the pinned Core with:
 
 ```powershell
-& .\firmware\tools\Install-Az3166Toolchain.ps1 `
-  -ArduinoExecutable 'C:\Program Files (x86)\Arduino\arduino_debug.exe'
+& .\firmware\tools\Install-Az3166Toolchain.ps1
 ```
+
+The script reuses an existing Arduino IDE from `-ArduinoExecutable`,
+`ARDUINO_IDE_PATH`, a standard Program Files installation, or `PATH`. If none is
+found, it downloads Arduino IDE 1.8.19 into `.tools\arduino-1.8.19` before
+installing `AZ3166:stm32f4:2.0.0`.
 
 ## Configuration
 
