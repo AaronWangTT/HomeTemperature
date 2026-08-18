@@ -626,18 +626,22 @@ staged.chmod(0o600)
 for previous in previous_set:
   previous.unlink(missing_ok=True)
 
+moved_pairs = []
+restore_installed = False
 try:
   for current, previous in zip(database_set, previous_set, strict=True):
     if current.exists():
       current.replace(previous)
+      moved_pairs.append((current, previous))
 
   staged.replace(database)
+  restore_installed = True
   if not quick_check(database):
     raise RuntimeError("Restored database failed SQLite quick_check.")
 except Exception:
-  for current in database_set:
-    current.unlink(missing_ok=True)
-  for current, previous in zip(database_set, previous_set, strict=True):
+  if restore_installed:
+    database.unlink(missing_ok=True)
+  for current, previous in reversed(moved_pairs):
     if previous.exists():
       previous.replace(current)
   raise
@@ -656,10 +660,11 @@ sudo docker compose "${compose_files[@]}" up \
 
 Both restore containers run as the image's unprivileged application user, so
 the restored file keeps the ownership required by the API. The original
-database, WAL, and shared-memory files remain a recoverable set until the
-restored database passes its second `quick_check`; any exception restores that
-entire set. No telemetry rows are printed. Complete the service checks in
-section 7 and create a new backup after restoration.
+database, WAL, and shared-memory files remain recoverable until the restored
+database passes its second `quick_check`; any exception restores each file that
+was successfully moved without deleting unmoved WAL or shared-memory files. No
+telemetry rows are printed. Complete the service checks in section 7 and create
+a new backup after restoration.
 
 ## 10. Capacity and Upgrade Path
 
