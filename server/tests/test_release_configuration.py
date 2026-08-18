@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+import subprocess
 
 
 SERVER_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,67 @@ class ReleaseConfigurationTests(unittest.TestCase):
 
         self.assertIn("telemetry\\.example\\.com", deploy_script)
 
+    def test_deployment_validates_environment_and_waits_for_health(self) -> None:
+        deploy_script = (SERVER_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+
+        for variable in (
+            "ACME_EMAIL",
+            "PUBLIC_HOST",
+            "DEVICE_API_KEY",
+            "DASHBOARD_USERNAME",
+            "DASHBOARD_PASSWORD",
+        ):
+            with self.subTest(variable=variable):
+                self.assertIn(variable, deploy_script)
+
+        self.assertIn('grep -c "^${variable}=" .env', deploy_script)
+        self.assertIn('env_mode=$(stat -c \'%a\' .env)', deploy_script)
+        self.assertIn(".env must have mode 600", deploy_script)
+        self.assertIn("must contain exactly one", deploy_script)
+        self.assertIn("contains an empty", deploy_script)
+        self.assertIn("docker compose up --help", deploy_script)
+        self.assertIn("docker compose pull caddy", deploy_script)
+        self.assertIn("--wait", deploy_script)
+        self.assertIn("--wait-timeout", deploy_script)
+
+    def test_api_image_records_release_revision(self) -> None:
+        dockerfile = (SERVER_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        compose = (SERVER_ROOT / "compose.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("ARG VCS_REF=unknown", dockerfile)
+        self.assertIn('org.opencontainers.image.revision="${VCS_REF}"', dockerfile)
+        self.assertIn("image: az3166-gateway-api:latest", compose)
+
+    def test_shell_scripts_are_lf_and_executable_in_git(self) -> None:
+        tracked_paths = subprocess.run(
+            ["git", "ls-files", "--", "server"],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        shell_scripts = tuple(
+            REPOSITORY_ROOT / path for path in tracked_paths if path.endswith(".sh")
+        )
+        self.assertTrue(shell_scripts)
+
+        for script in shell_scripts:
+            relative_path = script.relative_to(REPOSITORY_ROOT).as_posix()
+            content = script.read_bytes()
+            index_entry = subprocess.run(
+                ["git", "ls-files", "--stage", "--", relative_path],
+                cwd=REPOSITORY_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.subTest(path=relative_path):
+                self.assertTrue(content.startswith(b"#!/usr/bin/env bash\n"))
+                self.assertNotIn(b"\r", content)
+                self.assertTrue(index_entry)
+                self.assertEqual("100755", index_entry.split(maxsplit=1)[0])
+
     def test_public_release_metadata_exists(self) -> None:
         required_paths = (
             "LICENSE",
@@ -44,6 +106,8 @@ class ReleaseConfigurationTests(unittest.TestCase):
             "THIRD_PARTY_NOTICES.md",
             ".github/workflows/ci.yml",
             ".github/workflows/secret-scan.yml",
+            ".github/skills/production-deployment/SKILL.md",
+            "server/tools/New-ServerReleaseArchive.ps1",
         )
 
         for relative_path in required_paths:

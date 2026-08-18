@@ -10,12 +10,61 @@ if [[ ! -f .env ]]; then
     exit 1
 fi
 
+env_mode=$(stat -c '%a' .env)
+if [[ "${env_mode}" != "600" ]]; then
+    echo ".env must have mode 600; current mode is ${env_mode}." >&2
+    exit 1
+fi
+
+required_variables=(
+    ACME_EMAIL
+    PUBLIC_HOST
+    DEVICE_API_KEY
+    DASHBOARD_USERNAME
+    DASHBOARD_PASSWORD
+)
+
+for variable in "${required_variables[@]}"; do
+    count=$(grep -c "^${variable}=" .env || true)
+    if [[ "${count}" -ne 1 ]]; then
+        echo ".env must contain exactly one ${variable} entry." >&2
+        exit 1
+    fi
+
+    value=$(sed -n "s/^${variable}=//p" .env)
+    value=${value%$'\r'}
+    if [[ -z "${value}" ]]; then
+        echo ".env contains an empty ${variable} value." >&2
+        exit 1
+    fi
+done
+
 if grep -Eq 'replace-with|you@example\.com|telemetry\.example\.com' .env; then
     echo ".env still contains placeholder values." >&2
     exit 1
 fi
 
+release_revision="${RELEASE_REVISION:-}"
+if [[ ! "${release_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "RELEASE_REVISION must be a full 40-character lowercase Git SHA." >&2
+    exit 1
+fi
+
+deploy_wait_timeout="${DEPLOY_WAIT_TIMEOUT_SECONDS:-120}"
+if [[ ! "${deploy_wait_timeout}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "DEPLOY_WAIT_TIMEOUT_SECONDS must be a positive integer." >&2
+    exit 1
+fi
+
+compose_up_help=$(sudo docker compose up --help)
+if ! grep -Eq -- '(^|[^[:alnum:]_-])--wait([^[:alnum:]_-]|$)' <<<"${compose_up_help}" ||
+    ! grep -Eq -- '(^|[^[:alnum:]_-])--wait-timeout([^[:alnum:]_-]|$)' <<<"${compose_up_help}"; then
+    echo "Docker Compose must support --wait and --wait-timeout." >&2
+    exit 1
+fi
+
 sudo docker compose config --quiet
+sudo docker compose pull caddy
 sudo docker run --rm \
     -e ACME_EMAIL="$(sed -n 's/^ACME_EMAIL=//p' .env)" \
     -e PUBLIC_HOST="$(sed -n 's/^PUBLIC_HOST=//p' .env)" \
@@ -23,10 +72,14 @@ sudo docker run --rm \
     caddy:2.10.2-alpine \
     caddy validate --config /etc/caddy/Caddyfile
 
-sudo docker compose build --pull
-sudo docker compose up -d --remove-orphans
+sudo docker compose build --pull --build-arg "VCS_REF=${release_revision}"
+sudo docker compose up \
+    -d \
+    --remove-orphans \
+    --wait \
+    --wait-timeout "${deploy_wait_timeout}"
 sudo docker compose ps
 
 echo
-echo "Deployment started. Follow certificate and application logs with:"
+echo "Deployment completed and services are healthy. Follow logs with:"
 echo "  sudo docker compose logs -f --tail=100"
