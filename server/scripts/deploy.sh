@@ -16,6 +16,11 @@ if [[ "${env_mode}" != "600" ]]; then
     exit 1
 fi
 
+if grep -q $'\r' .env; then
+    echo ".env must use LF line endings; carriage returns are not allowed." >&2
+    exit 1
+fi
+
 required_variables=(
     ACME_EMAIL
     PUBLIC_HOST
@@ -32,7 +37,6 @@ for variable in "${required_variables[@]}"; do
     fi
 
     value=$(sed -n "s/^${variable}=//p" .env)
-    value=${value%$'\r'}
     if [[ -z "${value}" ]]; then
         echo ".env contains an empty ${variable} value." >&2
         exit 1

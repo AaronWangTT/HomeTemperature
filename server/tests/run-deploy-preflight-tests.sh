@@ -106,6 +106,11 @@ expect_failure missing-environment 'Missing ' 600 "${VALID_REVISION}" 30 yes
 write_environment
 expect_failure environment-mode '.env must have mode 600' 644 "${VALID_REVISION}" 30 yes
 
+write_environment
+sed 's/$/\r/' "${PROJECT_DIR}/.env" > "${PROJECT_DIR}/.env.crlf"
+mv "${PROJECT_DIR}/.env.crlf" "${PROJECT_DIR}/.env"
+expect_failure environment-line-endings '.env must use LF line endings' 600 "${VALID_REVISION}" 30 yes
+
 write_environment test-device-key-000000000000000000000000 yes
 expect_failure duplicate-variable 'exactly one PUBLIC_HOST entry' 600 "${VALID_REVISION}" 30 yes
 
