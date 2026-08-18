@@ -75,18 +75,15 @@ jobs:
           path: .tools/arduino-1.8.19
           key: arduino-ide-1.8.19-windows
 
-      - name: Download Arduino IDE 1.8.19
-        if: steps.arduino-ide-cache.outputs.cache-hit != 'true'
+      - name: Cache AZ3166 board package
+        uses: actions/cache@v6
+        with:
+          path: ~/AppData/Local/Arduino15
+          key: az3166-core-2.0.0-windows
+
+      - name: Install pinned AZ3166 toolchain
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path .tools -Force | Out-Null
-          Invoke-WebRequest `
-            -Uri https://downloads.arduino.cc/arduino-1.8.19-windows.zip `
-            -OutFile .tools/arduino-1.8.19-windows.zip
-          Expand-Archive `
-            -Path .tools/arduino-1.8.19-windows.zip `
-            -DestinationPath .tools
-          Remove-Item .tools/arduino-1.8.19-windows.zip
+        run: ./firmware/tools/Install-Az3166Toolchain.ps1
 
       - name: Configure Arduino IDE path
         shell: pwsh
@@ -96,18 +93,6 @@ jobs:
             -FilePath $env:GITHUB_ENV `
             -Encoding utf8 `
             -Append
-
-      - name: Cache AZ3166 board package
-        uses: actions/cache@v6
-        with:
-          path: ~/AppData/Local/Arduino15
-          key: az3166-core-2.0.0-windows
-
-      - name: Install pinned AZ3166 toolchain
-        shell: pwsh
-        run: >-
-          & ./firmware/tools/Install-Az3166Toolchain.ps1
-          -ArduinoExecutable $env:ARDUINO_IDE_PATH
 
       - name: Verify production and test sketches
         shell: pwsh
