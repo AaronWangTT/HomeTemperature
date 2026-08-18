@@ -67,7 +67,7 @@ jobs:
 
       - name: Cache Arduino IDE
         id: arduino-ide-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .tools/arduino-1.8.19
           key: arduino-ide-1.8.19-windows
@@ -95,7 +95,7 @@ jobs:
             -Append
 
       - name: Cache AZ3166 board package
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/AppData/Local/Arduino15
           key: az3166-core-2.0.0-windows
