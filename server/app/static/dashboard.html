@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AZ3166 Telemetry</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211d;
+      --muted: #68746d;
+      --line: #d9dfdb;
+      --surface: #ffffff;
+      --page: #eef1ed;
+      --forest: #176b4d;
+      --teal: #148b8b;
+      --coral: #d9654f;
+      --warning: #9b5a12;
+      --shadow: 0 8px 24px rgba(25, 43, 35, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        linear-gradient(rgba(23, 107, 77, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23, 107, 77, 0.04) 1px, transparent 1px),
+        var(--page);
+      background-size: 28px 28px;
+      color: var(--ink);
+      font-family: "Aptos", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, select { font: inherit; letter-spacing: 0; }
+
+    .shell {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .mark {
+      display: grid;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      border: 1px solid #0f5d42;
+      background: var(--forest);
+      color: white;
+      font-family: Consolas, monospace;
+      font-weight: 700;
+    }
+
+    h1 { margin: 0; font-size: 22px; line-height: 1.15; }
+    .subtitle { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+
+    .connection {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--warning);
+      box-shadow: 0 0 0 3px rgba(155, 90, 18, 0.12);
+    }
+
+    .status-dot.online {
+      background: var(--forest);
+      box-shadow: 0 0 0 3px rgba(23, 107, 77, 0.13);
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 22px 0 16px;
+    }
+
+    .field { display: grid; gap: 6px; }
+    label { color: var(--muted); font-size: 12px; font-weight: 650; }
+
+    select, .icon-button, .segment button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    select { min-width: 145px; padding: 0 34px 0 10px; }
+    .actions { display: flex; align-items: center; gap: 8px; }
+
+    .icon-button {
+      display: grid;
+      width: 36px;
+      place-items: center;
+      cursor: pointer;
+    }
+
+    .icon-button:hover, .segment button:hover { border-color: #9eaaa3; }
+    .icon-button:focus-visible, select:focus-visible, .segment button:focus-visible {
+      outline: 3px solid rgba(20, 139, 139, 0.22);
+      outline-offset: 1px;
+    }
+
+    .readings {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .reading {
+      min-width: 0;
+      border-top: 3px solid var(--metric-color);
+      border-radius: 6px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 17px 18px 16px;
+    }
+
+    .reading-name { color: var(--muted); font-size: 13px; font-weight: 650; }
+    .reading-value {
+      margin-top: 9px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(30px, 5vw, 45px);
+      line-height: 1;
+      overflow-wrap: anywhere;
+    }
+    .unit { margin-left: 5px; color: var(--muted); font-family: "Aptos", sans-serif; font-size: 14px; }
+
+    .panel {
+      margin-top: 14px;
+      border-radius: 6px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 { margin: 0; font-size: 16px; }
+    .panel-meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+    .segment {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .segment button {
+      min-width: 45px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      padding: 0 10px;
+      cursor: pointer;
+    }
+    .segment button:last-child { border-right: 0; }
+    .segment button.active { background: var(--forest); color: white; }
+
+    .chart-wrap {
+      position: relative;
+      height: 350px;
+      padding: 16px 18px 12px;
+    }
+
+    canvas { display: block; width: 100%; height: 100%; }
+    .empty {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .footer-line {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      padding: 13px 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .footer-line strong { color: var(--ink); font-weight: 650; }
+
+    .error-banner {
+      display: none;
+      margin-top: 14px;
+      border-left: 3px solid var(--coral);
+      background: #fff4f1;
+      padding: 11px 13px;
+      color: #803627;
+      font-size: 13px;
+    }
+
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 20px, 1120px); padding-top: 14px; }
+      header, .toolbar, .panel-header { align-items: stretch; flex-direction: column; }
+      .connection { align-self: flex-start; }
+      .toolbar { margin-top: 16px; }
+      .actions { justify-content: space-between; }
+      .readings { grid-template-columns: 1fr; }
+      .reading { display: grid; grid-template-columns: 1fr auto; align-items: center; }
+      .reading-value { margin: 0; font-size: 34px; }
+      .segment { width: 100%; }
+      .chart-wrap { height: 300px; padding-inline: 8px; }
+      .footer-line { grid-template-columns: 1fr; gap: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark">AZ</div>
+        <div>
+          <h1>Environment telemetry</h1>
+          <p class="subtitle">MXCHIP AZ3166 gateway</p>
+        </div>
+      </div>
+      <div class="connection">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="connectionText">Connecting</span>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <div class="field">
+        <label for="metric">Chart metric</label>
+        <select id="metric">
+          <option value="temperature">Temperature</option>
+          <option value="humidity">Humidity</option>
+          <option value="pressure">Pressure</option>
+        </select>
+      </div>
+      <div class="actions">
+        <div class="segment" aria-label="History range">
+          <button type="button" data-hours="1">1h</button>
+          <button type="button" data-hours="6">6h</button>
+          <button type="button" data-hours="24" class="active">24h</button>
+          <button type="button" data-hours="168">7d</button>
+        </div>
+        <button class="icon-button" type="button" id="refresh" title="Refresh telemetry" aria-label="Refresh telemetry">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0 2 5.3"></path><path d="M20 4v7h-7"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <section class="readings" aria-label="Latest readings">
+      <article class="reading" style="--metric-color: var(--coral)">
+        <div class="reading-name">Temperature</div>
+        <div class="reading-value"><span id="temperature">--</span><span class="unit">°C</span></div>
+      </article>
+      <article class="reading" style="--metric-color: var(--teal)">
+        <div class="reading-name">Relative humidity</div>
+        <div class="reading-value"><span id="humidity">--</span><span class="unit">%</span></div>
+      </article>
+      <article class="reading" style="--metric-color: var(--forest)">
+        <div class="reading-name">Atmospheric pressure</div>
+        <div class="reading-value"><span id="pressure">--</span><span class="unit">hPa</span></div>
+      </article>
+    </section>
+
+    <div class="error-banner" id="errorBanner" role="alert"></div>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2 id="chartTitle">Temperature history</h2>
+          <div class="panel-meta" id="chartMeta">Waiting for telemetry</div>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div class="empty" id="emptyState">No data in this time range</div>
+      </div>
+      <div class="footer-line">
+        <span>Device <strong id="deviceId">--</strong></span>
+        <span>Last received <strong id="lastReceived">--</strong></span>
+        <span>Device records <strong id="recordCount">--</strong></span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const metricConfig = {
+      temperature: { label: "Temperature", unit: "°C", color: "#d9654f" },
+      humidity: { label: "Humidity", unit: "%", color: "#148b8b" },
+      pressure: { label: "Pressure", unit: "hPa", color: "#176b4d" }
+    };
+
+    const state = { history: [], hours: 24, metric: "temperature", recordCount: 0 };
+    const elements = {
+      chart: document.getElementById("chart"),
+      empty: document.getElementById("emptyState"),
+      error: document.getElementById("errorBanner"),
+      statusDot: document.getElementById("statusDot"),
+      connection: document.getElementById("connectionText")
+    };
+
+    async function fetchJson(url) {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      return response.json();
+    }
+
+    function formatTime(value) {
+      if (!value) return "--";
+      return new Intl.DateTimeFormat(undefined, {
+        month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit"
+      }).format(new Date(value));
+    }
+
+    async function refresh() {
+      elements.connection.textContent = "Updating";
+      elements.statusDot.classList.remove("online");
+      elements.error.style.display = "none";
+
+      try {
+        const latest = await fetchJson("/api/v1/telemetry/latest");
+        const historyQuery = new URLSearchParams({
+          deviceId: latest.deviceId,
+          hours: String(state.hours),
+          limit: "5000"
+        });
+        const countQuery = new URLSearchParams({
+          deviceId: latest.deviceId,
+          hours: String(state.hours)
+        });
+        const [history, count] = await Promise.all([
+          fetchJson(`/api/v1/telemetry/history?${historyQuery}`),
+          fetchJson(`/api/v1/telemetry/count?${countQuery}`)
+        ]);
+
+        document.getElementById("temperature").textContent = latest.temperature.toFixed(1);
+        document.getElementById("humidity").textContent = latest.humidity.toFixed(1);
+        document.getElementById("pressure").textContent = latest.pressure.toFixed(1);
+        document.getElementById("deviceId").textContent = latest.deviceId;
+        document.getElementById("lastReceived").textContent = formatTime(latest.receivedAt);
+        document.getElementById("recordCount").textContent = count.recordCount.toLocaleString();
+
+        state.history = history;
+        state.recordCount = count.recordCount;
+        elements.connection.textContent = "Gateway online";
+        elements.statusDot.classList.add("online");
+        drawChart();
+      } catch (error) {
+        elements.connection.textContent = "Data unavailable";
+        elements.error.textContent = `Unable to load telemetry: ${error.message}`;
+        elements.error.style.display = "block";
+      }
+    }
+
+    function drawChart() {
+      const canvas = elements.chart;
+      const context = canvas.getContext("2d");
+      const ratio = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      canvas.width = Math.max(1, Math.floor(width * ratio));
+      canvas.height = Math.max(1, Math.floor(height * ratio));
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+
+      const config = metricConfig[state.metric];
+      document.getElementById("chartTitle").textContent = `${config.label} history`;
+      const rangeLabel = state.hours === 168 ? "7 days" : `${state.hours} ${state.hours === 1 ? "hour" : "hours"}`;
+      const plottedLabel = state.recordCount > state.history.length
+        ? `${state.history.length.toLocaleString()} plotted of ${state.recordCount.toLocaleString()} readings`
+        : `${state.recordCount.toLocaleString()} readings`;
+      document.getElementById("chartMeta").textContent = `${plottedLabel} · last ${rangeLabel}`;
+
+      if (!state.history.length) {
+        elements.empty.style.display = "grid";
+        return;
+      }
+      elements.empty.style.display = "none";
+
+      const padding = { top: 12, right: 20, bottom: 34, left: 58 };
+      const plotWidth = Math.max(1, width - padding.left - padding.right);
+      const plotHeight = Math.max(1, height - padding.top - padding.bottom);
+      const values = state.history.map(point => Number(point[state.metric]));
+      let minimum = Math.min(...values);
+      let maximum = Math.max(...values);
+      const spread = maximum - minimum || Math.max(Math.abs(maximum) * 0.02, 1);
+      minimum -= spread * 0.12;
+      maximum += spread * 0.12;
+
+      context.font = "12px Aptos, Segoe UI, sans-serif";
+      context.fillStyle = "#68746d";
+      context.strokeStyle = "#e1e5e2";
+      context.lineWidth = 1;
+
+      for (let index = 0; index <= 4; index += 1) {
+        const y = padding.top + (plotHeight * index / 4);
+        const value = maximum - ((maximum - minimum) * index / 4);
+        context.beginPath();
+        context.moveTo(padding.left, y);
+        context.lineTo(width - padding.right, y);
+        context.stroke();
+        context.textAlign = "right";
+        context.textBaseline = "middle";
+        context.fillText(value.toFixed(state.metric === "pressure" ? 0 : 1), padding.left - 9, y);
+      }
+
+      const startTime = new Date(state.history[0].receivedAt);
+      const endTime = new Date(state.history[state.history.length - 1].receivedAt);
+      context.textBaseline = "bottom";
+      context.textAlign = "left";
+      context.fillText(formatTime(startTime), padding.left, height - 4);
+      context.textAlign = "right";
+      context.fillText(formatTime(endTime), width - padding.right, height - 4);
+
+      context.beginPath();
+      state.history.forEach((point, index) => {
+        const x = padding.left + (plotWidth * index / Math.max(1, state.history.length - 1));
+        const value = Number(point[state.metric]);
+        const y = padding.top + ((maximum - value) / (maximum - minimum)) * plotHeight;
+        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+      });
+      context.strokeStyle = config.color;
+      context.lineWidth = 2;
+      context.lineJoin = "round";
+      context.lineCap = "round";
+      context.stroke();
+    }
+
+    document.getElementById("metric").addEventListener("change", event => {
+      state.metric = event.target.value;
+      drawChart();
+    });
+    document.getElementById("refresh").addEventListener("click", refresh);
+    document.querySelectorAll("[data-hours]").forEach(button => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-hours]").forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+        state.hours = Number(button.dataset.hours);
+        refresh();
+      });
+    });
+    window.addEventListener("resize", drawChart);
+
+    refresh();
+    window.setInterval(refresh, 60000);
+  </script>
+</body>
+</html>

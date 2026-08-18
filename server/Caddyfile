@@ -1,0 +1,39 @@
+{
+	email {$ACME_EMAIL}
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+	auto_https disable_redirects
+	admin off
+}
+
+{$PUBLIC_HOST} {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+
+	encode zstd gzip
+
+	request_body {
+		max_size 16KB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+		-Server
+	}
+
+	log {
+		output stdout
+		format filter {
+			request>headers>X-Device-Key delete
+			wrap json
+		}
+	}
+
+	reverse_proxy api:8000
+}
