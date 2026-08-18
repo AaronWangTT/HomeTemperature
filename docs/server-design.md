@@ -388,7 +388,7 @@ driver with three 10 MiB files. Caddy waits for the API health check before
 starting. The API health check calls `/healthz` on loopback every 30 seconds,
 with a five-second timeout, three retries, and a ten-second startup allowance.
 
-The API image is based on Python 3.12.11 slim Bookworm and installs pinned
+The API image is based on Python 3.14.7 slim Bookworm and installs pinned
 FastAPI and Uvicorn versions. It runs as the non-root `app` user with UID and
 GID 10001. Uvicorn accepts proxy headers from the private Compose network; the
 API port is not published directly to the host, so Caddy is its intended proxy.
