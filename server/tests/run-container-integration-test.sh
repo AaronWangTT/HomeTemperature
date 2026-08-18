@@ -8,7 +8,12 @@ dashboard_username="integration-viewer"
 dashboard_password="integration-dashboard-password"
 
 cleanup() {
+    status=$?
+    if ((status != 0)); then
+        docker logs "$container_name" || true
+    fi
     docker rm --force "$container_name" >/dev/null 2>&1 || true
+    exit "$status"
 }
 trap cleanup EXIT
 
@@ -24,14 +29,16 @@ docker run \
 port="$(docker port "$container_name" 8000/tcp | awk -F: 'NR == 1 { print $NF }')"
 base_url="http://127.0.0.1:$port"
 
-curl \
-    --fail \
-    --retry 20 \
-    --retry-all-errors \
-    --retry-delay 1 \
-    --silent \
-    --show-error \
-    "$base_url/healthz" >/dev/null
+for attempt in {1..20}; do
+    if curl --fail --silent --show-error "$base_url/healthz" >/dev/null 2>&1; then
+        break
+    fi
+    if ((attempt == 20)); then
+        echo "Container did not become healthy after $attempt attempts." >&2
+        exit 1
+    fi
+    sleep 1
+done
 
 ingested="$(curl \
     --fail-with-body \
