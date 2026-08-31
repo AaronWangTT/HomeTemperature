@@ -140,7 +140,7 @@ void testRequestContract() {
         payload,
         sizeof(payload) - 1);
     expect(result.status == TELEMETRY_UPLOAD_SUCCESS,
-           "HTTP 201 completes a cloud upload");
+           "HTTP 2xx completes a cloud upload");
     expect(sendCallCount == 1,
            "valid payload performs one HTTPS request");
     expect(strcmp(capturedRequest.endpoint,
@@ -215,12 +215,14 @@ void testResponseHandling() {
 }
 
 void testHttpStatusContract() {
+    expect(CloudTelemetry::isSuccessfulStatus(200),
+           "HTTP 200 is a successful telemetry response");
     expect(CloudTelemetry::isSuccessfulStatus(201),
            "HTTP 201 is a successful telemetry response");
-    expect(!CloudTelemetry::isSuccessfulStatus(200),
-           "HTTP 200 is not the ingestion success contract");
-    expect(!CloudTelemetry::isSuccessfulStatus(202),
-           "HTTP 202 is not the ingestion success contract");
+    expect(CloudTelemetry::isSuccessfulStatus(202),
+           "HTTP 202 is a successful telemetry response");
+    expect(CloudTelemetry::isSuccessfulStatus(204),
+           "HTTP 204 is a successful telemetry response");
     expect(!CloudTelemetry::isSuccessfulStatus(400),
            "HTTP 400 is a failed telemetry response");
     expect(!CloudTelemetry::isSuccessfulStatus(401),

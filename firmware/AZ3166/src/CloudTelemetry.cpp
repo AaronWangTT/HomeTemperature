@@ -188,7 +188,7 @@ bool CloudTelemetry::isApiKeyConfigured(
 }
 
 bool CloudTelemetry::isSuccessfulStatus(int statusCode) {
-    return statusCode == 201;
+    return statusCode >= 200 && statusCode <= 299;
 }
 
 bool CloudTelemetry::isRetryableStatus(int statusCode) {
