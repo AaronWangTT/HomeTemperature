@@ -1,6 +1,6 @@
 # AZ3166 Firmware Design
 
-Status: current implementation as of 2026-08-18.
+Status: current implementation as of 2026-09-01.
 
 ## 1. Scope
 
@@ -236,19 +236,22 @@ The emitted JSON shape is:
 }
 ```
 
-All measurements are JSON numbers with exactly one decimal digit. The payload
-is built in a fixed 160-byte buffer. `buildPayload()` returns the byte length
-on success and one of these negative errors on failure; the pure
-`formatPayload()` path can return only `PAYLOAD_FORMAT_ERROR`:
+All measurements are JSON numbers with exactly one decimal digit. Before
+formatting, readings are checked against the ingestion contract: temperature
+must be -50 to 100 degrees Celsius, humidity 0 to 100 percent, and pressure
+300 to 1200 hPa. The payload is built in a fixed 160-byte buffer.
+`buildPayload()` returns the byte length on success and one of these negative
+errors on failure:
 
 | Result | Meaning |
 | --- | --- |
-| `PAYLOAD_SENSOR_ERROR` | At least one sensor driver read failed. |
-| `PAYLOAD_FORMAT_ERROR` | An argument, measurement, conversion, or output capacity was invalid. |
+| `PAYLOAD_SENSOR_ERROR` | A sensor driver read failed, or a reading was non-finite or outside the ingestion range. |
+| `PAYLOAD_FORMAT_ERROR` | An argument, conversion, or output capacity was invalid. |
 
-Formatting rejects `NaN`, infinity, `dtostrf` overflow, and `snprintf`
-truncation. Callers send only a positive length strictly smaller than the
-buffer capacity.
+Reading validation rejects `NaN`, infinity, and out-of-range measurements as
+transient sensor failures. Formatting rejects `dtostrf` overflow and
+`snprintf` truncation. Callers send only a positive length strictly smaller
+than the buffer capacity.
 
 ## 9. Local HTTP Interface
 
@@ -295,7 +298,7 @@ The server handles one client at a time in `poll()`:
 | Valid telemetry request | `200 OK` | Current telemetry JSON |
 | Incomplete, empty, or timed-out request | `400 Bad Request` | `{"error":"bad request"}` |
 | Unknown route | `404 Not Found` | `{"error":"not found"}` |
-| Sensor read failure | `503 Service Unavailable` | `{"error":"sensor read failed"}` |
+| Sensor read failure or invalid reading | `503 Service Unavailable` | `{"error":"sensor read failed"}` |
 | Payload formatting failure | `500 Internal Server Error` | `{"error":"payload formatting failed"}` |
 
 The local interface is plain HTTP and has no application authentication. Its
@@ -319,8 +322,8 @@ all cloud gates are ready.
 | Previous result or action | Next behavior |
 | --- | --- |
 | Successful upload | Wait 5 minutes from completion. |
-| Sensor, network, HTTP 408/425/429, or HTTP 5xx failure | Retry 15 seconds after completion. |
-| Invalid payload, disabled dependency, or other non-201 HTTP response | Suppress scheduled uploads. |
+| Sensor, network, HTTP 408/422/425/429, or HTTP 5xx failure | Retry 15 seconds after completion. |
+| Invalid payload, disabled dependency, or non-retryable HTTP response | Suppress scheduled uploads. |
 | Button A | Queue an immediate manual upload. |
 | Button B pauses | Suppress scheduled uploads. |
 | Button B resumes | Clear the delay so a scheduled upload is immediately due unless non-retryable suppression is active. |
@@ -363,8 +366,11 @@ least 32 characters, and differs from the configured placeholder. The API key
 is not included in telemetry JSON or serial request logging.
 
 Only HTTP `201` is considered a successful upload. Network failures retain the
-platform error code. HTTP `408`, `425`, `429`, and `5xx` responses are classified
-as retryable; every other non-201 response is classified as rejected. HTTP
+platform error code. HTTP `408`, `422`, `425`, `429`, and `5xx` responses are
+classified as retryable; every other non-201 response is classified as
+rejected. Treating `422` as retryable is a defense in depth: production
+firmware rejects known out-of-range sensor readings locally, but a server-side
+validation response must not permanently suppress scheduled uploads. HTTP
 status codes are retained as result detail, and a non-success response body is
 written to serial output when present.
 
@@ -476,7 +482,7 @@ included in test fixtures.
 ## 15. Error and State Invariants
 
 - Sensor data is never sent when any required sensor read fails.
-- Non-finite, overflowing, or truncated telemetry is never sent.
+- Non-finite, out-of-range, overflowing, or truncated telemetry is never sent.
 - Local and cloud telemetry share the same sensor and JSON implementation.
 - Cloud transport is never entered without Wi-Fi, synchronized time, configured
   credentials, and a due scheduler state.
@@ -501,11 +507,11 @@ explicit pass/fail result.
 | `ButtonDebouncerTests` | Stable transitions, bounce, holds, startup state, and `millis()` wraparound. |
 | `ButtonControllerTests` | Button-to-event mapping, simultaneous events, and active-low behavior. |
 | `DeviceIdentityTests` | UID formatting, padding, invalid buffers, uninitialized fallback, internal storage, hardware initialization, and configured sizes. |
-| `TelemetryServiceTests` | Identity injection, JSON shape, rounding, non-finite values, buffer errors, `dtostrf` regression, and onboard sensors. |
+| `TelemetryServiceTests` | Identity injection, JSON shape, rounding, ingestion-range validation, buffer errors, `dtostrf` regression, and onboard sensors. |
 | `LocalWebServerTests` | Route matching, unknown routes, retry configuration, and safe disconnected polling. |
 | `UploadSchedulerTests` | Initial upload, typed outcomes, pause, manual upload, retry, non-retryable suppression, recovery, and wraparound. |
-| `CloudTelemetryTests` | API-key validation, request fields, typed network/HTTP outcomes, and the HTTP 201 contract. |
-| `CloudUploadControllerTests` | Readiness gates, pause/manual behavior, completion-time retry, result mapping, non-retryable suppression, and manual recovery. |
+| `CloudTelemetryTests` | API-key validation, request fields, typed network/HTTP outcomes, HTTP 201 success, and HTTP 422 retry. |
+| `CloudUploadControllerTests` | Readiness gates, pause/manual behavior, completion-time retry, HTTP 422 automatic recovery, non-retryable suppression, and manual recovery. |
 | `ConnectivityManagerTests` | Retry progression, blocking-attempt timing, disconnect/reconnect, NTP retry, and wraparound. |
 | `TelemetryUploaderTests` | Builder invocation, exact bytes and length, build failures, bounds, missing dependencies, and transport failure. |
 

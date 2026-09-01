@@ -5,6 +5,24 @@
 #include <LPS22HBSensor.h>
 #include <Sensor.h>
 
+#include "AppConfig.h"
+
+namespace {
+
+bool isValidTelemetryReading(const TelemetryReading &reading) {
+    return isfinite(reading.temperature) &&
+           reading.temperature >= AppConfig::TELEMETRY_MIN_TEMPERATURE_C &&
+           reading.temperature <= AppConfig::TELEMETRY_MAX_TEMPERATURE_C &&
+           isfinite(reading.humidity) &&
+           reading.humidity >= AppConfig::TELEMETRY_MIN_HUMIDITY_PERCENT &&
+           reading.humidity <= AppConfig::TELEMETRY_MAX_HUMIDITY_PERCENT &&
+           isfinite(reading.pressure) &&
+           reading.pressure >= AppConfig::TELEMETRY_MIN_PRESSURE_HPA &&
+           reading.pressure <= AppConfig::TELEMETRY_MAX_PRESSURE_HPA;
+}
+
+}  // namespace
+
 TelemetryService::TelemetryService()
     : deviceId_(NULL),
       devI2c_(D14, D15),
@@ -35,10 +53,8 @@ int TelemetryService::formatPayload(
     }
 
     payload[0] = '\0';
-    if (!isfinite(reading.temperature) ||
-        !isfinite(reading.humidity) ||
-        !isfinite(reading.pressure)) {
-        return PAYLOAD_FORMAT_ERROR;
+    if (!isValidTelemetryReading(reading)) {
+        return PAYLOAD_SENSOR_ERROR;
     }
 
     char temperatureText[16];
