@@ -91,27 +91,77 @@ void testRounding() {
            "telemetry values round to one decimal place");
 }
 
-void testNonFiniteValues() {
+void expectInvalidSensorReading(
+    const TelemetryReading &reading,
+    const char *name) {
     char payload[AppConfig::TELEMETRY_PAYLOAD_SIZE];
-    TelemetryReading notANumber = {NAN, 45.0f, 1013.2f};
+    memset(payload, 'x', sizeof(payload));
     expect(
         TelemetryService::formatPayload(
             "invalid",
-            notANumber,
+            reading,
             payload,
-            sizeof(payload)) == TelemetryService::PAYLOAD_FORMAT_ERROR,
-        "NaN telemetry value is rejected");
-    expect(payload[0] == '\0', "NaN payload buffer remains empty");
+            sizeof(payload)) == TelemetryService::PAYLOAD_SENSOR_ERROR,
+        name);
+    expect(payload[0] == '\0',
+           "invalid sensor reading leaves the payload empty");
+}
+
+void testSensorReadingValidation() {
+    char payload[AppConfig::TELEMETRY_PAYLOAD_SIZE];
+    TelemetryReading minimum = {-50.0f, 0.0f, 300.0f};
+    expect(
+        TelemetryService::formatPayload(
+            "minimum",
+            minimum,
+            payload,
+            sizeof(payload)) > 0,
+        "server minimum telemetry values are accepted");
+
+    TelemetryReading maximum = {100.0f, 100.0f, 1200.0f};
+    expect(
+        TelemetryService::formatPayload(
+            "maximum",
+            maximum,
+            payload,
+            sizeof(payload)) > 0,
+        "server maximum telemetry values are accepted");
+
+    TelemetryReading notANumber = {NAN, 45.0f, 1013.2f};
+    expectInvalidSensorReading(
+        notANumber,
+        "NaN telemetry value is a transient sensor failure");
 
     TelemetryReading infinite = {23.5f, INFINITY, 1013.2f};
-    expect(
-        TelemetryService::formatPayload(
-            "invalid",
-            infinite,
-            payload,
-            sizeof(payload)) == TelemetryService::PAYLOAD_FORMAT_ERROR,
-        "infinite telemetry value is rejected");
-    expect(payload[0] == '\0', "infinite payload buffer remains empty");
+    expectInvalidSensorReading(
+        infinite,
+        "infinite telemetry value is a transient sensor failure");
+
+    TelemetryReading startupPressure = {31.1f, 70.9f, 253.1f};
+    expectInvalidSensorReading(
+        startupPressure,
+        "observed 253.1 hPa startup outlier is rejected locally");
+
+    TelemetryReading lowTemperature = {-50.1f, 45.0f, 1013.2f};
+    expectInvalidSensorReading(
+        lowTemperature,
+        "temperature below the server range is rejected locally");
+    TelemetryReading highTemperature = {100.1f, 45.0f, 1013.2f};
+    expectInvalidSensorReading(
+        highTemperature,
+        "temperature above the server range is rejected locally");
+    TelemetryReading lowHumidity = {23.5f, -0.1f, 1013.2f};
+    expectInvalidSensorReading(
+        lowHumidity,
+        "humidity below the server range is rejected locally");
+    TelemetryReading highHumidity = {23.5f, 100.1f, 1013.2f};
+    expectInvalidSensorReading(
+        highHumidity,
+        "humidity above the server range is rejected locally");
+    TelemetryReading highPressure = {23.5f, 45.0f, 1200.1f};
+    expectInvalidSensorReading(
+        highPressure,
+        "pressure above the server range is rejected locally");
 }
 
 void testInvalidOutput() {
@@ -177,10 +227,20 @@ void testOnboardSensors() {
     }
 
     char payload[AppConfig::TELEMETRY_PAYLOAD_SIZE];
-    int length = telemetryService.buildPayload(
-        payload,
-        sizeof(payload));
-    expect(length > 0, "onboard sensors produce a telemetry payload");
+    int length = TelemetryService::PAYLOAD_SENSOR_ERROR;
+    for (int attempt = 0;
+         attempt < 3 &&
+             length == TelemetryService::PAYLOAD_SENSOR_ERROR;
+         ++attempt) {
+        length = telemetryService.buildPayload(
+            payload,
+            sizeof(payload));
+        if (length == TelemetryService::PAYLOAD_SENSOR_ERROR) {
+            delay(100);
+        }
+    }
+    expect(length > 0,
+           "onboard sensors recover to a valid telemetry payload");
     if (length > 0) {
         expect(length == static_cast<int>(strlen(payload)),
                "sensor payload reports its JSON length");
@@ -200,7 +260,7 @@ void setup() {
     testKnownPayload();
     testSignedAndBoundaryValues();
     testRounding();
-    testNonFiniteValues();
+    testSensorReadingValidation();
     testInvalidOutput();
     testUnconfiguredIdentity();
     testOnboardSensors();

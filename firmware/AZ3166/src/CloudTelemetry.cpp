@@ -193,6 +193,7 @@ bool CloudTelemetry::isSuccessfulStatus(int statusCode) {
 
 bool CloudTelemetry::isRetryableStatus(int statusCode) {
     return statusCode == 408 ||
+           statusCode == 422 ||
            statusCode == 425 ||
            statusCode == 429 ||
            (statusCode >= 500 && statusCode <= 599);

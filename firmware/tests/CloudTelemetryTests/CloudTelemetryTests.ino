@@ -194,6 +194,16 @@ void testResponseHandling() {
     expect(rejected.detailCode == 401,
            "rejected HTTP status is preserved");
 
+    fakeResponse.statusCode = 422;
+    fakeResponse.body = "{\"detail\":\"invalid telemetry\"}";
+    fakeResponse.bodyLength = strlen(fakeResponse.body);
+    TelemetryUploadResult invalidReading = telemetry.upload("{}", 2);
+    expect(
+        invalidReading.status == TELEMETRY_UPLOAD_HTTP_RETRYABLE,
+        "HTTP 422 is retryable after transient sensor validation failures");
+    expect(invalidReading.detailCode == 422,
+           "HTTP 422 status is preserved");
+
     fakeResponse.statusCode = 429;
     TelemetryUploadResult throttled = telemetry.upload("{}", 2);
     expect(
@@ -227,14 +237,16 @@ void testHttpStatusContract() {
            "HTTP 401 is a failed telemetry response");
     expect(!CloudTelemetry::isSuccessfulStatus(500),
            "HTTP 500 is a failed telemetry response");
-        expect(CloudTelemetry::isRetryableStatus(408),
-            "HTTP 408 is retryable");
-        expect(CloudTelemetry::isRetryableStatus(429),
-            "HTTP 429 is retryable");
-        expect(CloudTelemetry::isRetryableStatus(503),
-            "HTTP 503 is retryable");
-        expect(!CloudTelemetry::isRetryableStatus(401),
-            "HTTP 401 is not retryable");
+    expect(CloudTelemetry::isRetryableStatus(408),
+           "HTTP 408 is retryable");
+    expect(CloudTelemetry::isRetryableStatus(422),
+           "HTTP 422 is retryable");
+    expect(CloudTelemetry::isRetryableStatus(429),
+           "HTTP 429 is retryable");
+    expect(CloudTelemetry::isRetryableStatus(503),
+           "HTTP 503 is retryable");
+    expect(!CloudTelemetry::isRetryableStatus(401),
+           "HTTP 401 is not retryable");
 }
 
 void setup() {

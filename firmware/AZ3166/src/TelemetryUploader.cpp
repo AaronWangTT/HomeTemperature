@@ -38,7 +38,8 @@ TelemetryUploadResult TelemetryUploader::upload() {
         payload,
         sizeof(payload));
     if (payloadLength == TelemetryService::PAYLOAD_SENSOR_ERROR) {
-        Serial.println("Cloud upload skipped: sensor read failed");
+        Serial.println(
+            "Cloud upload skipped: sensor reading unavailable or invalid");
         return {
             TELEMETRY_UPLOAD_SENSOR_UNAVAILABLE,
             payloadLength

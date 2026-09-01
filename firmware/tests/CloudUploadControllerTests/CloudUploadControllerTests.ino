@@ -202,6 +202,50 @@ void testRetryDelayStartsAtCompletion() {
            "retry becomes due from the upload completion time");
 }
 
+void testHttp422RetriesAutomatically() {
+    resetFakes();
+    UploadScheduler scheduler = createScheduler();
+    CloudTelemetry cloudTelemetry =
+        createCloudTelemetry(VALID_API_KEY);
+    TelemetryUploader uploader(
+        cloudTelemetry,
+        buildFakePayload);
+    CloudUploadController controller(
+        scheduler,
+        uploader,
+        readFakeClock);
+
+    fakeNow = 1000;
+    fakeCompletionTime = 2000;
+    controller.update(true);
+    expect(sendCallCount == 1,
+           "initial telemetry upload succeeds");
+
+    fakeNow =
+        fakeCompletionTime + AppConfig::CLOUD_UPLOAD_INTERVAL_MS;
+    fakeCompletionTime = fakeNow + 1000;
+    fakeUploadResult.status = TELEMETRY_UPLOAD_HTTP_RETRYABLE;
+    fakeUploadResult.detailCode = 422;
+    controller.update(true);
+    expect(sendCallCount == 2,
+           "HTTP 422 records a retryable upload failure");
+
+    fakeNow =
+        fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS - 1;
+    controller.update(true);
+    expect(sendCallCount == 2,
+           "HTTP 422 waits for the retry interval");
+
+    fakeNow =
+        fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS;
+    fakeCompletionTime = fakeNow + 1000;
+    fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
+    fakeUploadResult.detailCode = 201;
+    controller.update(true);
+    expect(sendCallCount == 3,
+           "HTTP 422 retries without requiring Button A");
+}
+
 void testNonRetryableFailureRequiresManualRecovery() {
     resetFakes();
     UploadScheduler scheduler = createScheduler();
@@ -301,6 +345,7 @@ void setup() {
     testManualUploadWaitsForPrerequisites();
     testUnconfiguredUploadIsRejected();
     testRetryDelayStartsAtCompletion();
+    testHttp422RetriesAutomatically();
     testNonRetryableFailureRequiresManualRecovery();
     testUploadResultClassification();
 }
