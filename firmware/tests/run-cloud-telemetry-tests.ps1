@@ -18,9 +18,10 @@ Invoke-Az3166TestSuite `
     -SuiteName "CloudTelemetryTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "CloudTelemetry.h",
-        "CloudTelemetry.cpp",
-        "TelemetryUploadResult.h"
+        "cloud/CloudTelemetry.h",
+        "cloud/CloudTelemetry.cpp",
+        "cloud/TelemetryUploadResult.h"
     ) `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port

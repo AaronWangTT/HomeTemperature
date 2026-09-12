@@ -115,7 +115,10 @@ function Invoke-Az3166TestSuite {
             New-Item $stagingSource -ItemType Directory -Force | Out-Null
         }
         foreach ($sourceFile in $SourceFiles) {
-            Copy-Item (Join-Path $SourceRoot $sourceFile) $stagingSource -Recurse
+            $destination = Join-Path $stagingSource $sourceFile
+            New-Item (Split-Path -Parent $destination) -ItemType Directory -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $SourceRoot $sourceFile) `
+                -Destination $destination -Recurse
         }
 
         $testSketch = Join-Path $stagingSketch "$SuiteName.ino"

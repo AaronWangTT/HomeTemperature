@@ -2,9 +2,9 @@
 
 #include <Arduino.h>
 
-#include "AppConfig.h"
+#include "../config/AppConfig.h"
 #include "CloudTelemetry.h"
-#include "TelemetryService.h"
+#include "../telemetry/TelemetryService.h"
 
 TelemetryUploader::TelemetryUploader(
         CloudTelemetry &cloudTelemetry,

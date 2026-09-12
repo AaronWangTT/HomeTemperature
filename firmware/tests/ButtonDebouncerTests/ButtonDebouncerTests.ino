@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
-#include "AppConfig.h"
-#include "ButtonDebouncer.h"
+#include "src/config/AppConfig.h"
+#include "src/input/ButtonDebouncer.h"
 
 int failureCount = 0;
 

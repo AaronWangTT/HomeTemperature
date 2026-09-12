@@ -35,18 +35,26 @@ installing `AZ3166:stm32f4:2.0.0`.
 
 ## Configuration
 
+Application settings, cloud configuration, and the TLS trust anchor live under
+`AZ3166/src/config/`, separate from the reusable transport in `AZ3166/src/cloud/`.
 Cloud upload is disabled in a clean checkout. Local deployment files are
 optional and ignored by Git:
 
 ```powershell
-Copy-Item firmware/AZ3166/cloud_deployment.example.h firmware/AZ3166/cloud_deployment.h
-Copy-Item firmware/AZ3166/cloud_secrets.example.h firmware/AZ3166/cloud_secrets.h
+Copy-Item firmware/AZ3166/src/config/cloud_deployment.example.h firmware/AZ3166/src/config/cloud_deployment.h
+Copy-Item firmware/AZ3166/src/config/cloud_secrets.example.h firmware/AZ3166/src/config/cloud_secrets.h
 ```
 
 Set the HTTPS endpoint in `cloud_deployment.h` and a random device key of at
 least 32 characters in `cloud_secrets.h`. Verify that `cloud_ca.h` contains the
 trust anchor for the server's current certificate chain. Never put a key in an
 example, test fixture, command line, build log, or issue report.
+
+When migrating an existing checkout, move its ignored `cloud_deployment.h` and
+`cloud_secrets.h` from `AZ3166/` into `AZ3166/src/config/` instead of replacing
+them with the example values. Only the new private paths are ignored; migrate
+or remove any legacy copies before staging changes. The sketch includes `cloud_config.h`
+before `AppConfig.h`, preserving deployment overrides and fallback defaults.
 
 Wi-Fi provisioning is owned by the AZ3166 board package and is not stored in
 this repository.
@@ -90,7 +98,7 @@ or cloud dependencies:
 
 ```cpp
 #include <string.h>
-#include "src/LocalWebServer.h"
+#include "src/http/LocalWebServer.h"
 
 class ExampleHandler : public LocalHttpHandler {
 public:
@@ -115,16 +123,19 @@ readiness, bound address, and the last lifecycle error. Calling
 `http.update(false, 0)` requests shutdown of the listener; the worker remains
 available for a later reconnect. Destroying the server joins its worker.
 
-For discovery, pass an optional `LocalHttpServiceUpdate` callback and context to
-the constructor. That callback runs on the HTTP worker and can call
-`LocalDiscovery::update(available, address)`. Supply a `LocalDiscoveryService`
+For discovery, pass an optional `LocalHttpServiceUpdate` to the constructor.
+This is a typed `mbed::Callback<void(bool, uint32_t)>`; bind discovery directly
+with `mbed::callback(&localDiscovery, &LocalDiscovery::update)`, without a wrapper
+function or a separate context pointer. The server stores a copy of the callback
+and invokes it on the HTTP worker. An empty callback disables notifications.
+Supply a `LocalDiscoveryService`
 descriptor containing the hostname (without `.local`), instance/service name
 (such as `example._http`), matching listener port, and DNS-SD length-prefixed TXT
 data. The application sketch demonstrates the complete wiring.
 
-- Initialize handlers and sensors before the first connected update. The handler,
-  callback context, discovery instance, and borrowed metadata strings must outlive
-  the server's worker.
+- Initialize handlers and sensors before the first connected update. The callback
+  does not own its bound object: the handler, discovery instance or other callback
+  target, and borrowed metadata strings must outlive the server's worker.
 - Handlers and lifecycle callbacks must be bounded and must not destroy the
   server from its own worker. Synchronize any application state they share with
   the main loop; the telemetry handler delegates sensor synchronization to
@@ -142,6 +153,14 @@ data. The application sketch demonstrates the complete wiring.
   limits or make an arbitrary blocking handler safe.
 
 ## Build and Test
+
+Production components are grouped by capability under `AZ3166/src/`, with
+headers beside implementations. Sketches include explicit paths such as
+`src/http/LocalWebServer.h`; cross-component source includes are relative to
+their owning folder. Test runners select individual dependencies and preserve
+the same paths under each staged sketch's `src/` tree. See
+[../docs/firmware-design.md](../docs/firmware-design.md#4-source-organization)
+for the folder map.
 
 Compile the production sketch without touching the board:
 

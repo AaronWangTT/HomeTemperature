@@ -1,6 +1,6 @@
 .venv/
-firmware/AZ3166/cloud_secrets.h
-firmware/AZ3166/cloud_deployment.h
+firmware/AZ3166/src/config/cloud_secrets.h
+firmware/AZ3166/src/config/cloud_deployment.h
 server/.env
 server/.env.*
 !server/.env.example

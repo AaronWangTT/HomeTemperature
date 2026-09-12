@@ -23,7 +23,7 @@ licenses in the installed package continue to apply.
 ## Firmware mDNS Responder
 
 The firmware vendors ArduinoMDNS 1.0.1, based on Georg Kaindl's EthernetBonjour,
-under [firmware/AZ3166/src/mdns/README.md](firmware/AZ3166/src/mdns/README.md).
+under [firmware/AZ3166/src/discovery/mdns/README.md](firmware/AZ3166/src/discovery/mdns/README.md).
 
 - Source: <https://github.com/arduino-libraries/ArduinoMDNS>
 - Release archive: <https://downloads.arduino.cc/libraries/github.com/arduino-libraries/ArduinoMDNS-1.0.1.zip>
@@ -31,7 +31,7 @@ under [firmware/AZ3166/src/mdns/README.md](firmware/AZ3166/src/mdns/README.md).
   `df7a8c48cb74541c652c75d90e9dbe04ba0f0c0d06e515dca2a80380b0945c11`
 - Library license: LGPL-3.0-or-later; the Arduino wrapper header carries its
   original LGPL-2.1-or-later notice.
-- License text: [firmware/AZ3166/src/mdns/LICENSE.txt](firmware/AZ3166/src/mdns/LICENSE.txt).
+- License text: [firmware/AZ3166/src/discovery/mdns/LICENSE.txt](firmware/AZ3166/src/discovery/mdns/LICENSE.txt).
 
 The AZ3166 port substitutes an injectable datagram interface for the missing
 Arduino UDP base, makes includes relative, removes the WIZnet startup delay,
@@ -49,7 +49,7 @@ available with releases.
 
 ## Embedded Trust Anchor
 
-`firmware/AZ3166/cloud_ca.h` contains the self-signed ISRG Root X1 certificate
+`firmware/AZ3166/src/config/cloud_ca.h` contains the self-signed ISRG Root X1 certificate
 used as a TLS trust anchor. Its authoritative source is the Let's Encrypt
 certificate repository:
 

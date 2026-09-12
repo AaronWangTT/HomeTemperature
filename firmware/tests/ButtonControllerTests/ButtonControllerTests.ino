@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
-#include "AppConfig.h"
-#include "ButtonController.h"
+#include "src/config/AppConfig.h"
+#include "src/input/ButtonController.h"
 
 int failureCount = 0;
 

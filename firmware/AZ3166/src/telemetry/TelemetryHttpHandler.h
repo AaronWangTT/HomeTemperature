@@ -1,7 +1,7 @@
 #ifndef TELEMETRY_HTTP_HANDLER_H
 #define TELEMETRY_HTTP_HANDLER_H
 
-#include "LocalHttpHandler.h"
+#include "../http/LocalHttpHandler.h"
 
 class TelemetryService;
 

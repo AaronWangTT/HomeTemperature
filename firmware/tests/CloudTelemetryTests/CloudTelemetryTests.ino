@@ -1,6 +1,6 @@
 #include <Arduino.h>
 
-#include "CloudTelemetry.h"
+#include "src/cloud/CloudTelemetry.h"
 
 const char VALID_API_KEY[] =
     "0123456789ABCDEF0123456789ABCDEF";

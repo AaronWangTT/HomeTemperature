@@ -18,15 +18,16 @@ Invoke-Az3166TestSuite `
     -SuiteName "LocalWebServerTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "AppConfig.h",
-        "LocalWebServer.h",
-        "LocalWebServer.cpp",
-        "LocalHttpHandler.h",
-        "TelemetryHttpHandler.h",
-        "TelemetryHttpHandler.cpp",
-        "FloatFormatting.cpp",
-        "TelemetryService.h",
-        "TelemetryService.cpp"
+        "config/AppConfig.h",
+        "http/LocalWebServer.h",
+        "http/LocalWebServer.cpp",
+        "http/LocalHttpHandler.h",
+        "telemetry/TelemetryHttpHandler.h",
+        "telemetry/TelemetryHttpHandler.cpp",
+        "platform/FloatFormatting.cpp",
+        "telemetry/TelemetryService.h",
+        "telemetry/TelemetryService.cpp"
     ) `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port

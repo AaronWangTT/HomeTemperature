@@ -18,13 +18,13 @@ Invoke-Az3166TestSuite `
     -SuiteName "LocalDiscoveryTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "AppConfig.h",
-        "LocalDiscovery.h",
-        "LocalDiscovery.cpp",
-        "MdnsTransport.h",
-        "MdnsUdpTransport.h",
-        "MdnsUdpTransport.cpp",
-        "mdns"
+        "config/AppConfig.h",
+        "discovery/LocalDiscovery.h",
+        "discovery/LocalDiscovery.cpp",
+        "discovery/MdnsTransport.h",
+        "discovery/MdnsUdpTransport.h",
+        "discovery/MdnsUdpTransport.cpp",
+        "discovery/mdns"
     ) `
     -StageSourcesUnderSrc `
     -Action $Action `

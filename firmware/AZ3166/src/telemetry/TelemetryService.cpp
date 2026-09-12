@@ -5,7 +5,7 @@
 #include <LPS22HBSensor.h>
 #include <Sensor.h>
 
-#include "AppConfig.h"
+#include "../config/AppConfig.h"
 
 namespace {
 

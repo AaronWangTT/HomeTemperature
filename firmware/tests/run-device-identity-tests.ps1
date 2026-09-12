@@ -17,6 +17,7 @@ Invoke-Az3166TestSuite `
     -SourceRoot $sourceRoot `
     -SuiteName "DeviceIdentityTests" `
     -TestSource $testSource `
-    -SourceFiles @("AppConfig.h", "DeviceIdentity.h", "DeviceIdentity.cpp") `
+    -SourceFiles @("config/AppConfig.h", "platform/DeviceIdentity.h", "platform/DeviceIdentity.cpp") `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port

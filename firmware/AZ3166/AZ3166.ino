@@ -1,24 +1,24 @@
-#include "cloud_config.h"
-#include "src/AppConfig.h"
-#include "src/ButtonController.h"
-#include "src/CloudTelemetry.h"
-#include "src/CloudUploadController.h"
-#include "src/ConnectivityManager.h"
-#include "src/DeviceIdentity.h"
-#include "src/LocalDiscovery.h"
-#include "src/LocalWebServer.h"
-#include "src/TelemetryService.h"
-#include "src/TelemetryHttpHandler.h"
-#include "src/TelemetryUploader.h"
-#include "src/UploadScheduler.h"
-#include "src/WatchdogController.h"
-#include "cloud_ca.h"
+#include "src/config/cloud_config.h"
+#include "src/config/AppConfig.h"
+#include "src/input/ButtonController.h"
+#include "src/cloud/CloudTelemetry.h"
+#include "src/cloud/CloudUploadController.h"
+#include "src/connectivity/ConnectivityManager.h"
+#include "src/platform/DeviceIdentity.h"
+#include "src/discovery/LocalDiscovery.h"
+#include "src/http/LocalWebServer.h"
+#include "src/telemetry/TelemetryService.h"
+#include "src/telemetry/TelemetryHttpHandler.h"
+#include "src/cloud/TelemetryUploader.h"
+#include "src/cloud/UploadScheduler.h"
+#include "src/platform/WatchdogController.h"
+#include "src/config/cloud_ca.h"
 
 // Telemetry acquisition
 DeviceIdentity deviceIdentity;
 TelemetryService telemetryService;
 
-// Telemetry delivery
+// Telemetry service via local web server
 const LocalDiscoveryService localHttpService = {
     AppConfig::LOCAL_HOSTNAME,
     AppConfig::LOCAL_HTTP_SERVICE_NAME,
@@ -27,18 +27,14 @@ const LocalDiscoveryService localHttpService = {
 };
 LocalDiscovery localDiscovery(
     AppConfig::LOCAL_DISCOVERY_RETRY_INTERVAL_MS, localHttpService);
-
-void updateLocalHttpAdvertisement(bool available, uint32_t address, void *context) {
-    static_cast<LocalDiscovery *>(context)->update(available, address);
-}
-
 TelemetryHttpHandler telemetryHttpHandler(telemetryService);
 LocalWebServer localWebServer(
     telemetryHttpHandler,
     AppConfig::LOCAL_TELEMETRY_PORT,
     AppConfig::LOCAL_WEB_SERVER_RETRY_INTERVAL_MS,
-    updateLocalHttpAdvertisement,
-    &localDiscovery);
+    mbed::callback(&localDiscovery, &LocalDiscovery::update));
+
+// Telemetry delivery via cloud services
 CloudTelemetry cloudTelemetry(
     AppConfig::CLOUD_TELEMETRY_URL,
     ISRG_ROOT_X1_CERTIFICATE,

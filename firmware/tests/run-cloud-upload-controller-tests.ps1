@@ -18,19 +18,20 @@ Invoke-Az3166TestSuite `
     -SuiteName "CloudUploadControllerTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "AppConfig.h",
-        "CloudTelemetry.h",
-        "CloudTelemetry.cpp",
-        "CloudUploadController.h",
-        "CloudUploadController.cpp",
-        "FloatFormatting.cpp",
-        "TelemetryService.h",
-        "TelemetryService.cpp",
-        "TelemetryUploadResult.h",
-        "TelemetryUploader.h",
-        "TelemetryUploader.cpp",
-        "UploadScheduler.h",
-        "UploadScheduler.cpp"
+        "config/AppConfig.h",
+        "cloud/CloudTelemetry.h",
+        "cloud/CloudTelemetry.cpp",
+        "cloud/CloudUploadController.h",
+        "cloud/CloudUploadController.cpp",
+        "platform/FloatFormatting.cpp",
+        "telemetry/TelemetryService.h",
+        "telemetry/TelemetryService.cpp",
+        "cloud/TelemetryUploadResult.h",
+        "cloud/TelemetryUploader.h",
+        "cloud/TelemetryUploader.cpp",
+        "cloud/UploadScheduler.h",
+        "cloud/UploadScheduler.cpp"
     ) `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port
