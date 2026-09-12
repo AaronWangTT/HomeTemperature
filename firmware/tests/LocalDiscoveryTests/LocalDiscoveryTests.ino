@@ -10,6 +10,12 @@ static_assert(std::is_abstract<LocalDiscoveryOperations>::value,
               "LocalDiscoveryOperations must remain an interface");
 static_assert(std::has_virtual_destructor<LocalDiscoveryOperations>::value,
               "LocalDiscoveryOperations must have a virtual destructor");
+static_assert(!std::is_copy_constructible<LocalDiscovery>::value &&
+                  !std::is_copy_assignable<LocalDiscovery>::value,
+              "LocalDiscovery must not copy an active session");
+static_assert(!std::is_move_constructible<LocalDiscovery>::value &&
+                  !std::is_move_assignable<LocalDiscovery>::value,
+              "LocalDiscovery must remain at its callback-bound address");
 
 class FakeLocalDiscoveryOperations : public LocalDiscoveryOperations {
 public:
@@ -38,12 +44,9 @@ public:
 
 int failureCount = 0;
 
-LocalDiscovery createDiscovery(LocalDiscoveryOperations &operations) {
-    LocalDiscoveryService service = {
-        "az3166", "az3166._http", 80, "\x13" "path=/api/telemetry"
-    };
-    return LocalDiscovery(5000, service, operations);
-}
+const LocalDiscoveryService TEST_SERVICE = {
+    "az3166", "az3166._http", 80, "\x13" "path=/api/telemetry"
+};
 
 void expect(bool condition, const char *name) {
     Serial.print(condition ? "PASS: " : "FAIL: ");
@@ -53,9 +56,100 @@ void expect(bool condition, const char *name) {
     }
 }
 
+void testScopeCleanup() {
+    FakeLocalDiscoveryOperations operations;
+    {
+        LocalDiscovery discovery(5000, TEST_SERVICE, operations);
+    }
+    expect(operations.startCount == 0 && operations.stopCount == 0,
+           "an unused controller does not stop its backend");
+
+    {
+        LocalDiscovery discovery(5000, TEST_SERVICE, operations);
+        discovery.update(true, 0xC0000201UL);
+    }
+    expect(operations.startCount == 1 && operations.stopCount == 1,
+           "scope exit stops an active session exactly once");
+
+    {
+        LocalDiscovery discovery(5000, TEST_SERVICE, operations);
+        discovery.update(true, 0xC0000201UL);
+        discovery.update(false, 0);
+    }
+    expect(operations.startCount == 2 && operations.stopCount == 2,
+           "destruction does not repeat explicit session cleanup");
+
+    operations.fakeStartResult = false;
+    {
+        LocalDiscovery discovery(5000, TEST_SERVICE, operations);
+        discovery.update(true, 0xC0000201UL);
+    }
+    expect(operations.startCount == 3 && operations.stopCount == 3,
+           "failed startup is cleaned once without a second destructor stop");
+}
+
+void testSharedBackendOwnership() {
+    FakeLocalDiscoveryOperations operations;
+    {
+        LocalDiscovery waiting(5000, TEST_SERVICE, operations);
+        {
+            LocalDiscovery owner(5000, TEST_SERVICE, operations);
+            owner.update(true, 0xC0000201UL);
+            waiting.update(true, 0xC0000202UL);
+            expect(owner.isRunning() && !waiting.isRunning() &&
+                       operations.startCount == 1 && operations.stopCount == 0 &&
+                       operations.lastStartedAddress == 0xC0000201UL,
+                   "a busy backend cannot be restarted by another controller");
+
+            {
+                LocalDiscovery rejected(5000, TEST_SERVICE, operations);
+                rejected.update(true, 0xC0000203UL);
+                rejected.update(false, 0);
+            }
+            expect(owner.isRunning() && operations.stopCount == 0,
+                   "a non-owner cannot stop the active session on disconnect or destruction");
+
+            operations.fakeNow = 4999;
+            waiting.update(true, 0xC0000202UL);
+            expect(operations.startCount == 1,
+                   "a waiting controller respects the retry interval");
+        }
+        expect(operations.stopCount == 1,
+               "owner destruction releases the shared backend");
+        operations.fakeNow = 5000;
+        waiting.update(true, 0xC0000202UL);
+        expect(waiting.isRunning() && operations.startCount == 2 &&
+                   operations.lastStartedAddress == 0xC0000202UL,
+               "a waiting controller acquires the released backend on retry");
+    }
+    expect(operations.stopCount == 2,
+           "each shared-backend session is stopped by its own owner once");
+}
+
+void testFailedStartupReleasesOwnership() {
+    FakeLocalDiscoveryOperations operations;
+    operations.fakeStartResult = false;
+    LocalDiscovery failed(5000, TEST_SERVICE, operations);
+    failed.update(true, 0xC0000201UL);
+
+    operations.fakeStartResult = true;
+    {
+        LocalDiscovery replacement(5000, TEST_SERVICE, operations);
+        replacement.update(true, 0xC0000202UL);
+        expect(replacement.isRunning() && operations.startCount == 2 &&
+                   operations.stopCount == 1,
+               "failed startup releases its lease for a different controller");
+        failed.update(false, 0);
+        expect(replacement.isRunning() && operations.stopCount == 1,
+               "the failed controller cannot clean up the replacement session");
+    }
+    expect(operations.stopCount == 2,
+           "the replacement session is released on scope exit");
+}
+
 void testConnectionLifecycle() {
     FakeLocalDiscoveryOperations operations;
-    LocalDiscovery discovery = createDiscovery(operations);
+    LocalDiscovery discovery(5000, TEST_SERVICE, operations);
     discovery.update(false, 0xC0000201UL);
     discovery.update(true, 0);
     expect(operations.startCount == 0 && !discovery.isRunning(),
@@ -100,7 +194,7 @@ void testStartFailureBackoff() {
     FakeLocalDiscoveryOperations operations;
     operations.fakeStartResult = false;
     operations.fakeStartDuration = 100;
-    LocalDiscovery discovery = createDiscovery(operations);
+    LocalDiscovery discovery(5000, TEST_SERVICE, operations);
     discovery.update(true, 0xC0000201UL);
     expect(!discovery.isRunning() && operations.stopCount == 1,
            "failed startup releases partial responder state");
@@ -116,7 +210,7 @@ void testStartFailureBackoff() {
 
 void testTransportFailure() {
     FakeLocalDiscoveryOperations operations;
-    LocalDiscovery discovery = createDiscovery(operations);
+    LocalDiscovery discovery(5000, TEST_SERVICE, operations);
     discovery.update(true, 0xC0000201UL);
     operations.fakeHealthy = false;
     operations.fakeNow = 100;
@@ -138,7 +232,7 @@ void testRetryAddressChangeAndWraparound() {
     FakeLocalDiscoveryOperations operations;
     operations.fakeStartResult = false;
     operations.fakeNow = 0xFFFFFF00UL;
-    LocalDiscovery discovery = createDiscovery(operations);
+    LocalDiscovery discovery(5000, TEST_SERVICE, operations);
     discovery.update(true, 0xC0000201UL);
     operations.fakeNow = 0xFFFFFF00UL + 4999UL;
     discovery.update(true, 0xC0000201UL);
@@ -156,8 +250,8 @@ void testIndependentOperations() {
     FakeLocalDiscoveryOperations firstOperations;
     FakeLocalDiscoveryOperations secondOperations;
     secondOperations.fakeStartResult = false;
-    LocalDiscovery firstDiscovery = createDiscovery(firstOperations);
-    LocalDiscovery secondDiscovery = createDiscovery(secondOperations);
+    LocalDiscovery firstDiscovery(5000, TEST_SERVICE, firstOperations);
+    LocalDiscovery secondDiscovery(5000, TEST_SERVICE, secondOperations);
 
     firstDiscovery.update(true, 0xC0000201UL);
     secondDiscovery.update(true, 0xC0000202UL);
@@ -351,6 +445,9 @@ void setup() {
     while (!Serial);
     delay(3000);
     Serial.println("TEST_SUITE: LocalDiscoveryTests");
+    testScopeCleanup();
+    testSharedBackendOwnership();
+    testFailedStartupReleasesOwnership();
     testIndependentOperations();
     testConnectionLifecycle();
     testServiceConfiguration();

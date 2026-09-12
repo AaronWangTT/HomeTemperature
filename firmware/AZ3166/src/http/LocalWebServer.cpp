@@ -1,5 +1,6 @@
 #include "LocalWebServer.h"
 
+#include <mutex>
 #include <Arduino.h>
 #include <stdio.h>
 #include <string.h>
@@ -50,8 +51,8 @@ int socketReady(int descriptor, bool writing) {
 }
 
 int Az3166LocalWebServerOperations::openListener(uint32_t address, uint16_t port) {
-    int descriptor = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (descriptor < 0) {
+    LocalHttpSocket descriptor(*this, lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+    if (!descriptor) {
         return -1;
     }
     sockaddr_in local = {};
@@ -60,16 +61,15 @@ int Az3166LocalWebServerOperations::openListener(uint32_t address, uint16_t port
     local.sin_port = htons(port);
     local.sin_addr.s_addr = htonl(address);
     int reuse = 1;
-    if (lwip_setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR,
+    if (lwip_setsockopt(descriptor.get(), SOL_SOCKET, SO_REUSEADDR,
                        &reuse, sizeof(reuse)) != 0 ||
-        !setNonblocking(descriptor) ||
-        lwip_bind(descriptor, reinterpret_cast<sockaddr *>(&local),
+        !setNonblocking(descriptor.get()) ||
+        lwip_bind(descriptor.get(), reinterpret_cast<sockaddr *>(&local),
                   sizeof(local)) != 0 ||
-        lwip_listen(descriptor, 2) != 0) {
-        closeSocket(descriptor);
+        lwip_listen(descriptor.get(), 2) != 0) {
         return -1;
     }
-    return descriptor;
+    return descriptor.release();
 }
 
 int Az3166LocalWebServerOperations::acceptClient(int listener) {
@@ -80,18 +80,17 @@ int Az3166LocalWebServerOperations::acceptClient(int listener) {
     if (ready < 0) {
         return LocalWebServer::ACCEPT_ERROR;
     }
-    int client = lwip_accept(listener, NULL, NULL);
-    if (client < 0) {
+    LocalHttpSocket client(*this, lwip_accept(listener, NULL, NULL));
+    if (!client) {
         return LocalWebServer::ACCEPT_ERROR;
     }
     int noDelay = 1;
-    if (!setNonblocking(client) ||
-        lwip_setsockopt(client, IPPROTO_TCP, TCP_NODELAY,
+    if (!setNonblocking(client.get()) ||
+        lwip_setsockopt(client.get(), IPPROTO_TCP, TCP_NODELAY,
                        &noDelay, sizeof(noDelay)) != 0) {
-        closeSocket(client);
         return LocalWebServer::ACCEPT_IDLE;
     }
-    return client;
+    return client.release();
 }
 
 int Az3166LocalWebServerOperations::receiveBytes(int client, char *buffer, size_t size) {
@@ -112,6 +111,52 @@ int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, si
 }
 
 }  // namespace
+
+LocalHttpSocket::LocalHttpSocket(LocalWebServerOperations &operations, int descriptor)
+    : operations_(&operations), descriptor_(descriptor) {
+}
+
+LocalHttpSocket::~LocalHttpSocket() {
+    reset();
+}
+
+LocalHttpSocket::LocalHttpSocket(LocalHttpSocket &&other) noexcept
+    : operations_(other.operations_), descriptor_(other.release()) {
+}
+
+LocalHttpSocket &LocalHttpSocket::operator=(LocalHttpSocket &&other) noexcept {
+    if (this != &other) {
+        reset();
+        operations_ = other.operations_;
+        descriptor_ = other.release();
+    }
+    return *this;
+}
+
+int LocalHttpSocket::get() const noexcept {
+    return descriptor_;
+}
+
+LocalHttpSocket::operator bool() const noexcept {
+    return descriptor_ >= 0;
+}
+
+int LocalHttpSocket::release() noexcept {
+    int descriptor = descriptor_;
+    descriptor_ = -1;
+    return descriptor;
+}
+
+void LocalHttpSocket::reset(int descriptor) noexcept {
+    if (descriptor_ == descriptor) {
+        return;
+    }
+    int previous = descriptor_;
+    descriptor_ = descriptor;
+    if (previous >= 0) {
+        operations_->closeSocket(previous);
+    }
+}
 
 LocalWebServer::LocalWebServer(
     LocalHttpHandler &handler,
@@ -141,10 +186,12 @@ LocalWebServer::LocalWebServer(
 }
 
 LocalWebServer::~LocalWebServer() {
-    stateMutex_.lock();
-    requested_.shutdown = true;
-    bool started = state_.workerStarted;
-    stateMutex_.unlock();
+    bool started;
+    {
+        std::lock_guard<rtos::Mutex> lock(stateMutex_);
+        requested_.shutdown = true;
+        started = state_.workerStarted;
+    }
     if (started) {
         worker_.join();
     }
@@ -156,7 +203,7 @@ LocalWebServerOperations &LocalWebServer::defaultOperations() {
 }
 
 void LocalWebServer::update(bool wifiConnected, uint32_t address) {
-    stateMutex_.lock();
+    std::lock_guard<rtos::Mutex> lock(stateMutex_);
     uint32_t requestedAddress = wifiConnected ? address : 0;
     if (requested_.address != requestedAddress) {
         requested_.address = requestedAddress;
@@ -178,21 +225,16 @@ void LocalWebServer::update(bool wifiConnected, uint32_t address) {
             Serial.println("Local HTTP worker start failed; retrying later");
         }
     }
-    stateMutex_.unlock();
 }
 
 LocalWebServerState LocalWebServer::state() const {
-    stateMutex_.lock();
-    LocalWebServerState snapshot = state_;
-    stateMutex_.unlock();
-    return snapshot;
+    std::lock_guard<rtos::Mutex> lock(stateMutex_);
+    return state_;
 }
 
 LocalWebServer::RequestedState LocalWebServer::requestedState() const {
-    stateMutex_.lock();
-    RequestedState snapshot = requested_;
-    stateMutex_.unlock();
-    return snapshot;
+    std::lock_guard<rtos::Mutex> lock(stateMutex_);
+    return requested_;
 }
 
 bool LocalWebServer::isCurrent(uint32_t generation) const {
@@ -202,14 +244,13 @@ bool LocalWebServer::isCurrent(uint32_t generation) const {
 }
 
 bool LocalWebServer::publishState(uint32_t generation, uint32_t address, int error) {
-    stateMutex_.lock();
+    std::lock_guard<rtos::Mutex> lock(stateMutex_);
     bool current = !requested_.shutdown && requested_.generation == generation;
     if (current) {
         state_.listening = address != 0;
         state_.address = address;
         state_.error = error;
     }
-    stateMutex_.unlock();
     return current;
 }
 
@@ -220,7 +261,7 @@ void LocalWebServer::notifyService(bool available, uint32_t address) {
 }
 
 void LocalWebServer::run() {
-    int listener = -1;
+    LocalHttpSocket listener(operations_);
     uint32_t generation = 0;
     uint32_t lastAttempt = 0;
     bool attempted = false;
@@ -232,43 +273,35 @@ void LocalWebServer::run() {
         }
         if (generation != requested.generation) {
             notifyService(false, 0);
-            if (listener >= 0) {
-                operations_.closeSocket(listener);
-                listener = -1;
-            }
+            listener.reset();
             generation = requested.generation;
             attempted = false;
         }
 
-        if (requested.address != 0 && listener < 0 &&
+        if (requested.address != 0 && !listener &&
             (!attempted || operations_.currentTime() - lastAttempt >=
                 startRetryIntervalMs_)) {
-            listener = operations_.openListener(requested.address, port_);
+            listener.reset(operations_.openListener(requested.address, port_));
             attempted = true;
             lastAttempt = operations_.currentTime();
-            if (!publishState(generation, listener >= 0 ? requested.address : 0,
-                              listener >= 0 ? 0 : listener)) {
-                if (listener >= 0) {
-                    operations_.closeSocket(listener);
-                    listener = -1;
-                }
+            if (!publishState(generation, listener ? requested.address : 0,
+                              listener ? 0 : listener.get())) {
+                listener.reset();
                 continue;
             }
-            if (listener < 0) {
+            if (!listener) {
                 Serial.println("Local HTTP listener start failed; retrying later");
             }
         }
 
-        if (listener >= 0 && isCurrent(generation)) {
+        if (listener && isCurrent(generation)) {
             notifyService(true, requested.address);
-            int client = operations_.acceptClient(listener);
-            if (client >= 0) {
-                serveClient(client, generation);
-                operations_.closeSocket(client);
-            } else if (client == ACCEPT_ERROR) {
+            LocalHttpSocket client(operations_, operations_.acceptClient(listener.get()));
+            if (client) {
+                serveClient(client.get(), generation);
+            } else if (client.get() == ACCEPT_ERROR) {
                 notifyService(false, 0);
-                operations_.closeSocket(listener);
-                listener = -1;
+                listener.reset();
                 publishState(generation, 0, ACCEPT_ERROR);
                 lastAttempt = operations_.currentTime();
             }
@@ -279,9 +312,6 @@ void LocalWebServer::run() {
     }
 
     notifyService(false, 0);
-    if (listener >= 0) {
-        operations_.closeSocket(listener);
-    }
 }
 
 void LocalWebServer::serveClient(int client, uint32_t generation) {

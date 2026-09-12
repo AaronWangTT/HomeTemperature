@@ -1,5 +1,6 @@
 #include "LocalDiscovery.h"
 
+#include <mutex>
 #include <Arduino.h>
 #include "MdnsUdpTransport.h"
 #include "mdns/MDNS.h"
@@ -9,34 +10,68 @@ namespace {
 
 class Az3166LocalDiscoveryOperations : public LocalDiscoveryOperations {
 public:
+    Az3166LocalDiscoveryOperations();
+    ~Az3166LocalDiscoveryOperations() override;
+
     uint32_t currentTime() override;
     bool start(uint32_t address, const LocalDiscoveryService &service) override;
     void stop() override;
     bool isHealthy() override;
+
+private:
+    void serviceDiscovery();
+
+    MdnsUdpTransport transport_;
+    MDNS responder_;
+    rtos::Mutex responderMutex_;
+    alignas(8) unsigned char workerStack_[4096];
+    rtos::Thread worker_;
+    bool workerStarted_;
+    bool shutdown_;
+    bool responderRunning_;
+    bool followupPending_;
+    uint32_t firstAnnouncement_;
 };
 
-MdnsUdpTransport transport;
-MDNS responder(transport);
-rtos::Mutex responderMutex;
-alignas(8) unsigned char workerStack[4096];
-rtos::Thread worker(osPriorityNormal, sizeof(workerStack), workerStack);
-bool workerStarted = false;
-bool responderRunning = false;
-bool followupPending = false;
-uint32_t firstAnnouncement = 0;
+Az3166LocalDiscoveryOperations::Az3166LocalDiscoveryOperations()
+    : responder_(transport_),
+      worker_(osPriorityNormal, sizeof(workerStack_), workerStack_),
+      workerStarted_(false),
+      shutdown_(false),
+      responderRunning_(false),
+      followupPending_(false),
+      firstAnnouncement_(0) {
+}
 
-void serviceDiscovery() {
+Az3166LocalDiscoveryOperations::~Az3166LocalDiscoveryOperations() {
+    bool started;
+    {
+        std::lock_guard<rtos::Mutex> lock(responderMutex_);
+        shutdown_ = true;
+        started = workerStarted_;
+    }
+    if (started) {
+        worker_.join();
+    }
+    stop();
+}
+
+void Az3166LocalDiscoveryOperations::serviceDiscovery() {
     for (;;) {
-        responderMutex.lock();
-        if (responderRunning) {
-            responder.run();
-            if (followupPending && millis() - firstAnnouncement >= 1000UL) {
-                responder.announce();
-                followupPending = false;
+        {
+            std::lock_guard<rtos::Mutex> lock(responderMutex_);
+            if (shutdown_) {
+                return;
             }
-            responderRunning = !transport.failed();
+            if (responderRunning_) {
+                responder_.run();
+                if (followupPending_ && millis() - firstAnnouncement_ >= 1000UL) {
+                    responder_.announce();
+                    followupPending_ = false;
+                }
+                responderRunning_ = !transport_.failed();
+            }
         }
-        responderMutex.unlock();
         rtos::Thread::wait(20);
     }
 }
@@ -52,45 +87,50 @@ bool Az3166LocalDiscoveryOperations::start(
         service.port == 0) {
         return false;
     }
-    responderMutex.lock();
-    transport.setLocalIPv4Address(address);
+    std::lock_guard<rtos::Mutex> lock(responderMutex_);
+    transport_.setLocalIPv4Address(address);
     IPAddress localAddress(
         static_cast<uint8_t>(address >> 24),
         static_cast<uint8_t>(address >> 16),
         static_cast<uint8_t>(address >> 8),
         static_cast<uint8_t>(address));
-    bool started = responder.begin(localAddress, service.hostname) &&
-        responder.addServiceRecord(
+    bool started = responder_.begin(localAddress, service.hostname) &&
+        responder_.addServiceRecord(
             service.serviceName, service.port, MDNSServiceTCP, service.txtRecord);
-    if (started && !workerStarted) {
-        workerStarted = worker.start(mbed::callback(serviceDiscovery)) == osOK;
-        started = workerStarted;
+    if (started && !workerStarted_) {
+        workerStarted_ = worker_.start(mbed::callback(
+            this, &Az3166LocalDiscoveryOperations::serviceDiscovery)) == osOK;
+        started = workerStarted_;
     }
-    responderRunning = started;
-    followupPending = started;
-    firstAnnouncement = millis();
+    responderRunning_ = started;
+    followupPending_ = started;
+    firstAnnouncement_ = millis();
     if (!started) {
-        responder.end();
+        responder_.end();
     }
-    responderMutex.unlock();
     return started;
 }
 
 void Az3166LocalDiscoveryOperations::stop() {
-    responderMutex.lock();
-    responderRunning = false;
-    followupPending = false;
-    responder.end();
-    responderMutex.unlock();
+    std::lock_guard<rtos::Mutex> lock(responderMutex_);
+    responderRunning_ = false;
+    followupPending_ = false;
+    responder_.end();
 }
 
 bool Az3166LocalDiscoveryOperations::isHealthy() {
-    responderMutex.lock();
-    bool healthy = responderRunning;
-    responderMutex.unlock();
-    return healthy;
+    std::lock_guard<rtos::Mutex> lock(responderMutex_);
+    return responderRunning_;
 }
 
+}
+
+bool LocalDiscoveryOperations::tryAcquire() {
+    return !sessionInUse_.test_and_set(std::memory_order_acquire);
+}
+
+void LocalDiscoveryOperations::release() {
+    sessionInUse_.clear(std::memory_order_release);
 }
 
 LocalDiscovery::LocalDiscovery(
@@ -109,7 +149,12 @@ LocalDiscovery::LocalDiscovery(
       requestedAddress_(0),
       lastAttempt_(0),
       attempted_(false),
-      running_(false) {
+    running_(false),
+    sessionOwned_(false) {
+}
+
+LocalDiscovery::~LocalDiscovery() {
+    stopSession();
 }
 
 LocalDiscoveryOperations &LocalDiscovery::defaultOperations() {
@@ -117,13 +162,19 @@ LocalDiscoveryOperations &LocalDiscovery::defaultOperations() {
     return operations;
 }
 
+void LocalDiscovery::stopSession() {
+    if (sessionOwned_) {
+        operations_.stop();
+        sessionOwned_ = false;
+        operations_.release();
+    }
+    running_ = false;
+}
+
 void LocalDiscovery::update(bool serviceAvailable, uint32_t address) {
     uint32_t requested = serviceAvailable ? address : 0;
     if (requested != requestedAddress_) {
-        if (running_) {
-            operations_.stop();
-        }
-        running_ = false;
+        stopSession();
         attempted_ = false;
         requestedAddress_ = requested;
     }
@@ -133,8 +184,7 @@ void LocalDiscovery::update(bool serviceAvailable, uint32_t address) {
 
     if (running_) {
         if (!operations_.isHealthy()) {
-            operations_.stop();
-            running_ = false;
+            stopSession();
             attempted_ = true;
             lastAttempt_ = operations_.currentTime();
             Serial.println("mDNS transport failed; retrying later");
@@ -147,11 +197,18 @@ void LocalDiscovery::update(bool serviceAvailable, uint32_t address) {
         return;
     }
 
+    sessionOwned_ = operations_.tryAcquire();
+    if (!sessionOwned_) {
+        attempted_ = true;
+        lastAttempt_ = now;
+        return;
+    }
+
     running_ = operations_.start(requestedAddress_, service_);
     attempted_ = true;
     lastAttempt_ = operations_.currentTime();
     if (!running_) {
-        operations_.stop();
+        stopSession();
         Serial.println("mDNS start failed; retrying later");
     } else {
         Serial.print("Local mDNS service: ");

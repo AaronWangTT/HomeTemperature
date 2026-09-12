@@ -18,6 +18,26 @@ public:
     virtual void closeSocket(int descriptor) = 0;
 };
 
+class LocalHttpSocket {
+public:
+    explicit LocalHttpSocket(LocalWebServerOperations &operations, int descriptor = -1);
+    ~LocalHttpSocket();
+
+    LocalHttpSocket(const LocalHttpSocket &) = delete;
+    LocalHttpSocket &operator=(const LocalHttpSocket &) = delete;
+    LocalHttpSocket(LocalHttpSocket &&other) noexcept;
+    LocalHttpSocket &operator=(LocalHttpSocket &&other) noexcept;
+
+    int get() const noexcept;
+    explicit operator bool() const noexcept;
+    int release() noexcept;
+    void reset(int descriptor = -1) noexcept;
+
+private:
+    LocalWebServerOperations *operations_;
+    int descriptor_;
+};
+
 struct LocalWebServerState {
     bool workerStarted;
     bool listening;

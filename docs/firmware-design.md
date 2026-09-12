@@ -50,7 +50,7 @@ flowchart LR
         Main -->|updates| Connectivity
         Main -->|publishes Wi-Fi and cached IPv4| Local
         Local -->|listener readiness callback| Discovery
-        Discovery -->|starts and stops worker| Mdns
+        Discovery -->|owns service session| Mdns
         Main -->|passes readiness and commands| Controller
         Main -.->|reports startup configuration| Cloud
         Main -->|initializes| Telemetry
@@ -87,6 +87,14 @@ runs. Local HTTP and mDNS use separate bounded RTOS workers. HTTP dispatch does
 not wait for a cloud POST to finish, and a slow HTTP client cannot block mDNS
 queries. Short mutexes protect the HTTP connectivity snapshot, sensor acquisition,
 and mDNS responder lifecycle; no network request holds the sensor mutex.
+
+First-party firmware uses `std::lock_guard<rtos::Mutex>` for critical sections,
+so normal returns and early exits release the lock automatically. HTTP state
+getters copy their snapshots while the guard is alive. The HTTP destructor uses
+an inner lock scope to publish shutdown, then joins the worker only after that
+scope ends. Sensor acquisition releases its guard before formatting or network
+I/O; worker waits also remain outside lock scopes. Include `<mutex>` before
+`<Arduino.h>` to avoid that SDK's `min`/`max` macro collisions.
 
 ## 4. Source Organization
 
@@ -167,7 +175,9 @@ The adapters call the same platform APIs as before; the discovery default still
 uses one shared mDNS responder per device, not one responder per controller.
 
 Interfaces allow stateful implementations and independent test fixtures, but do
-not provide synchronization. HTTP's `currentTime()` may be called by both the
+not provide general synchronization. `LocalDiscoveryOperations` reserves one
+active session per backend with an atomic lease; this does not make concurrent
+calls on one controller safe. HTTP's `currentTime()` may be called by both the
 main loop and HTTP worker; its socket methods run on the worker and must retain
 the nonblocking contract. Stateful injected backends must synchronize shared
 state as appropriate. Connectivity and cloud calls remain synchronous.
@@ -326,6 +336,19 @@ configuration, and upload state are not required:
   completion. A new address bypasses the previous address's retry delay.
 - Discovery failures do not reset Wi-Fi or disable direct-IP HTTP or cloud work.
 
+`LocalDiscovery` is a noncopyable, nonmovable RAII session owner. It acquires an
+exclusive lease on its supplied `LocalDiscoveryOperations` before starting the
+service. Destruction stops and releases an owned session; explicit shutdown and
+failed startup also release it, without repeating cleanup at destruction. A
+controller that cannot acquire a busy backend retries at its configured interval
+and never starts or stops the current owner's service.
+
+The backend remains borrowed and must outlive the controller, including its
+destructor's bounded, nonthrowing `stop()` call. Controllers bound to an HTTP
+callback must outlive that server's worker shutdown and join. Access to each
+controller must remain serialized; the atomic lease protects backend ownership,
+not the controller's cached state or a backend's clock implementation.
+
 ArduinoMDNS 1.0.1 supplies DNS encoding, query handling, and service registration.
 The source is vendored with its LGPL notices and local compatibility fixes; the
 installed AZ3166 board package is not modified. Its native mDNS header
@@ -341,12 +364,20 @@ Registration announces immediately, a worker sends a follow-up after one second,
 and the library refreshes services every 90 seconds. Service goodbye records are
 best effort; cached names can remain until their TTL expires after link loss.
 
-The worker is created once, uses a fixed 4096-byte stack, services at most one
-received datagram every 20 milliseconds, and does not access sensors or mutate
-connectivity state. The HTTP worker and mDNS worker serialize responder access
-with a mutex. Multicast UDP uses port 5353 and `224.0.0.251` on the current IPv4 interface,
-nonblocking sockets, a 1536-byte receive buffer, and a 512-byte send buffer.
-Oversized packets are discarded rather than passed partially to the parser.
+The default process-lifetime backend owns the transport, responder, mutex,
+worker, and fixed 4096-byte worker stack as members. It is constructed before
+its first controller finishes construction. Backend destruction requests worker
+shutdown, releases the mutex, joins the worker, and ends the responder before
+member teardown. Ending an individual service session leaves the worker idle
+and available for the next session rather than destroying the backend.
+
+The worker services at most one received datagram every 20 milliseconds and
+does not access sensors or mutate connectivity state. The HTTP worker and mDNS
+worker serialize responder access with `std::lock_guard<rtos::Mutex>`; waits and
+joins remain outside the lock scope. Multicast UDP uses port 5353 and
+`224.0.0.251` on the current IPv4 interface, nonblocking sockets, a 1536-byte
+receive buffer, and a 512-byte send buffer. Oversized packets are discarded
+rather than passed partially to the parser.
 
 This is an IPv4 LAN responder, not router DNS registration or a `.local` client
 resolver. Clients must support IPv4 mDNS and multicast must reach the device.
@@ -448,6 +479,29 @@ ownership of its bound object or provide synchronization for that object.
 starts one normal-priority RTOS worker when an address first becomes available.
 It does not poll clients or perform network I/O in the main loop. The worker
 uses a 6144-byte stack allocated at startup and is reused across reconnects.
+
+`LocalHttpSocket` owns one descriptor and borrows the `LocalWebServerOperations`
+backend that must close it. The owner is move-only and allocates no memory. All
+nonnegative descriptors, including zero, are valid; negative results retain
+their error values but are never closed. `reset()` closes the previous socket
+and adopts a replacement, while resetting to the same descriptor is a no-op.
+`release()` transfers a raw descriptor without closing it. Moves transfer both
+the descriptor and its backend binding, leaving the source empty; move
+assignment first closes the destination through its original backend.
+
+The native adapter adopts sockets immediately after `socket` or `accept`, so
+failed option setup, bind, or listen automatically closes them. It releases
+ownership only when returning a successfully configured descriptor. Injected
+backends must follow the same contract: return ownership on success and clean
+up any partial acquisition before returning a negative result. `closeSocket()`
+must be bounded and nonthrowing, and the backend must outlive every owner bound
+to it. The socket owner does not add synchronization or connection retry policy.
+
+The worker keeps its listener owner across iterations and resets it on address
+changes or errors. Each accepted client has an inner scope that ends before the
+worker's next wait. On shutdown, the worker withdraws service availability before
+the listener owner's destructor closes the socket. Read/write helpers only
+borrow descriptors; they do not close them.
 
 - Only the HTTP worker creates, accepts, reads, writes, and closes HTTP sockets.
 - Startup uses lwIP `socket`, `bind`, and `listen` results directly, avoiding the
@@ -742,8 +796,8 @@ production and tests and allows Arduino to compile nested sources recursively.
 | `ButtonControllerTests` | Button-to-event mapping, simultaneous events, and active-low behavior. |
 | `DeviceIdentityTests` | UID formatting, padding, invalid buffers, uninitialized fallback, internal storage, hardware initialization, and configured sizes. |
 | `TelemetryServiceTests` | Identity injection, JSON shape, rounding, ingestion-range validation, buffer errors, `dtostrf` regression, and onboard sensors. |
-| `LocalWebServerTests` | Interface contract and independent backends, application response mapping, actual RTOS worker execution, listener readiness/retries, stale startup, reconnects, partial I/O, binary responses, bounds, deadlines, and cleanup. |
-| `LocalDiscoveryTests` | Interface contract and independent backends, caller-supplied metadata, address lifecycle, retry timing, worker failure recovery, A/AAAA responses, service records, malformed queries, transport bounds, and repeated cleanup. |
+| `LocalWebServerTests` | Interface contract, move-only socket ownership, reset/release and cross-backend moves, independent backends, application response mapping, actual RTOS worker execution, listener readiness/retries, stale startup, reconnects, partial I/O, binary responses, bounds, deadlines, and exactly-once active-client shutdown cleanup. |
+| `LocalDiscoveryTests` | Interface contract, noncopyability, scoped cleanup, exclusive shared-backend ownership and handoff, failed-start lease release, independent backends, caller-supplied metadata, address lifecycle, retry timing, worker failure recovery, A/AAAA responses, service records, malformed queries, transport bounds, and repeated cleanup. |
 | `UploadSchedulerTests` | Initial upload, typed outcomes, pause, manual upload, retry, non-retryable suppression, recovery, and wraparound. |
 | `CloudTelemetryTests` | Interface contract and independent backends, API-key validation, request fields, typed network/HTTP outcomes, HTTP 201 success, and HTTP 422 retry. |
 | `CloudUploadControllerTests` | Readiness gates, pause/manual behavior, completion-time retry, HTTP 422 automatic recovery, non-retryable suppression, and manual recovery. |
@@ -761,7 +815,8 @@ mocking framework:
   remain in static test storage rather than on the embedded test stack.
 - `TelemetryHttpPayloadBuilder` replaces telemetry acquisition in HTTP response-contract tests.
 - `LocalDiscoveryOperations` injects clock, responder startup/shutdown, and health
-  checks through a stateful fake implementation.
+  checks through a stateful fake implementation. Shared-backend cases verify
+  exclusive ownership, scope cleanup, and retry handoff without live multicast.
 - `MdnsTransport` lets protocol tests capture datagrams without using real Wi-Fi.
 - `CloudTelemetryOperations` injects HTTPS send behavior into transport, uploader,
   and upload-controller tests. Test backends are constructed before their consumers.
