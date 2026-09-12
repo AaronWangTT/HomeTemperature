@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "AppConfig.h"
+#include "../config/AppConfig.h"
 #include "TelemetryService.h"
 
 namespace {

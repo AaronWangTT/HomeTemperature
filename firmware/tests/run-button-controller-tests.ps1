@@ -18,11 +18,12 @@ Invoke-Az3166TestSuite `
     -SuiteName "ButtonControllerTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "AppConfig.h",
-        "ButtonDebouncer.h",
-        "ButtonDebouncer.cpp",
-        "ButtonController.h",
-        "ButtonController.cpp"
+        "config/AppConfig.h",
+        "input/ButtonDebouncer.h",
+        "input/ButtonDebouncer.cpp",
+        "input/ButtonController.h",
+        "input/ButtonController.cpp"
     ) `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port

@@ -18,9 +18,10 @@ Invoke-Az3166TestSuite `
     -SuiteName "ConnectivityManagerTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "AppConfig.h",
-        "ConnectivityManager.h",
-        "ConnectivityManager.cpp"
+        "config/AppConfig.h",
+        "connectivity/ConnectivityManager.h",
+        "connectivity/ConnectivityManager.cpp"
     ) `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port

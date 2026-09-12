@@ -107,10 +107,9 @@ LocalWebServer::LocalWebServer(
     LocalHttpHandler &handler,
     uint16_t port,
     uint32_t startRetryIntervalMs,
-    LocalHttpServiceUpdate serviceUpdate,
-    void *serviceContext)
+    LocalHttpServiceUpdate serviceUpdate)
     : LocalWebServer(handler, port, startRetryIntervalMs, defaultOperations(),
-                     serviceUpdate, serviceContext) {
+                     serviceUpdate) {
 }
 
 LocalWebServer::LocalWebServer(
@@ -118,14 +117,12 @@ LocalWebServer::LocalWebServer(
     uint16_t port,
     uint32_t startRetryIntervalMs,
     const LocalWebServerOperations &operations,
-    LocalHttpServiceUpdate serviceUpdate,
-    void *serviceContext)
+    LocalHttpServiceUpdate serviceUpdate)
     : handler_(handler),
       port_(port),
       startRetryIntervalMs_(startRetryIntervalMs),
       operations_(operations),
       serviceUpdate_(serviceUpdate),
-      serviceContext_(serviceContext),
       worker_(osPriorityNormal, WORKER_STACK_SIZE),
       requested_({0, 0, false}),
       state_({false, false, 0, 0}),
@@ -210,8 +207,8 @@ bool LocalWebServer::publishState(uint32_t generation, uint32_t address, int err
 }
 
 void LocalWebServer::notifyService(bool available, uint32_t address) {
-    if (serviceUpdate_ != NULL) {
-        serviceUpdate_(available, address, serviceContext_);
+    if (serviceUpdate_) {
+        serviceUpdate_(available, address);
     }
 }
 

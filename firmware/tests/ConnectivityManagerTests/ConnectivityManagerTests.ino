@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
-#include "AppConfig.h"
-#include "ConnectivityManager.h"
+#include "src/config/AppConfig.h"
+#include "src/connectivity/ConnectivityManager.h"
 
 uint32_t fakeNow = 0;
 uint32_t fakeConnectDuration = 0;

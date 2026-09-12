@@ -18,9 +18,10 @@ Invoke-Az3166TestSuite `
     -SuiteName "UploadSchedulerTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "AppConfig.h",
-        "UploadScheduler.h",
-        "UploadScheduler.cpp"
+        "config/AppConfig.h",
+        "cloud/UploadScheduler.h",
+        "cloud/UploadScheduler.cpp"
     ) `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port

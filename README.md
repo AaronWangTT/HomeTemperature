@@ -25,6 +25,11 @@ Use the complete application as a working example, or adapt the components you
 need for another AZ3166 project. Hardware and network APIs are wrapped behind
 small interfaces, with retry and scheduling policy kept separate from transport.
 
+Sources are grouped by capability under `firmware/AZ3166/src/`: `config/`,
+`connectivity/`, `http/`, `discovery/`, `telemetry/`, `cloud/`, `input/`, and
+`platform/`. Headers stay beside their implementations, and the vendored
+responder is isolated in `discovery/mdns/`.
+
 | Capability | Components | What They Encapsulate |
 | --- | --- | --- |
 | Wi-Fi and time | `ConnectivityManager` | Connection state, reconnect backoff, IPv4 address changes, and NTP synchronization retries. |
@@ -172,8 +177,8 @@ A clean checkout compiles with cloud upload disabled. To configure a private
 deployment, copy the two examples and edit only the ignored local files:
 
 ```powershell
-Copy-Item firmware/AZ3166/cloud_deployment.example.h firmware/AZ3166/cloud_deployment.h
-Copy-Item firmware/AZ3166/cloud_secrets.example.h firmware/AZ3166/cloud_secrets.h
+Copy-Item firmware/AZ3166/src/config/cloud_deployment.example.h firmware/AZ3166/src/config/cloud_deployment.h
+Copy-Item firmware/AZ3166/src/config/cloud_secrets.example.h firmware/AZ3166/src/config/cloud_secrets.h
 ```
 
 See [firmware/README.md](firmware/README.md) for installation, hardware tests,

@@ -91,28 +91,56 @@ and mDNS responder lifecycle; no network request holds the sensor mutex.
 ## 4. Source Organization
 
 The production Arduino sketch root is `firmware/AZ3166/`. Arduino-recursive
-production sources live in `src/`, with the vendored responder in `src/mdns/`.
+production sources are grouped by capability under `src/`:
+
+```text
+src/
+  config/
+  connectivity/
+  http/
+  discovery/
+    mdns/
+  telemetry/
+  cloud/
+  input/
+  platform/
+```
+
+Headers stay beside their implementations. `http/` contains only the reusable
+HTTP engine and handler interface; the application-specific HTTP adapter lives
+in `telemetry/`. `cloud/` owns transport and upload coordination. `platform/`
+holds device identity, watchdog support, and the SDK compatibility overrides.
+The vendored responder, metadata, and license stay together in `discovery/mdns/`.
+`config/` holds `AppConfig.h`, the cloud configuration loader, the public root
+certificate, deployment templates, and ignored local overrides. These remain
+separate from the reusable implementation in `cloud/`. The Arduino sketch stays
+at the sketch root and loads cloud overrides before application settings.
+
+Production and test sketches use explicit `src/<capability>/...` include paths.
+Sources include sibling headers by filename and other components through
+relative paths, so no extra component directories are needed in global compiler
+or IntelliSense include search paths. The existing editor roots remain valid.
 Focused test sketches and staging scripts live separately under `firmware/tests/`.
 
 | Area | Files | Responsibility |
 | --- | --- | --- |
 | Composition | `firmware/AZ3166/AZ3166.ino` | Creates long-lived objects, performs startup, and orchestrates the loop. |
-| Configuration | `firmware/AZ3166/src/AppConfig.h` | Owns endpoint, port, timing, payload capacity, and watchdog constants. |
-| Device identity | `firmware/AZ3166/src/DeviceIdentity.h/.cpp` | Derives and stores a stable identifier from the STM32 hardware UID. |
-| Input | `firmware/AZ3166/src/ButtonDebouncer.h/.cpp`, `ButtonController.h/.cpp` | Converts active-low button samples into one-shot application events. |
-| Watchdog | `firmware/AZ3166/src/WatchdogController.h/.cpp` | Owns watchdog configuration, reset-cause reporting, enabled state, and timer feeds. |
-| Connectivity | `firmware/AZ3166/src/ConnectivityManager.h/.cpp` | Owns Wi-Fi reconnect policy, connection state, NTP retry, and connectivity events. |
-| Sensor and JSON | `firmware/AZ3166/src/TelemetryService.h/.cpp` | Stores an injected device ID pointer, owns and reads sensor objects, and formats the shared telemetry payload. |
-| Local HTTP | `firmware/AZ3166/src/LocalWebServer.h/.cpp`, `LocalHttpHandler.h` | Owns the nonblocking lwIP listener, dedicated worker, bounded HTTP protocol, synchronized status, and optional service-lifecycle callback. |
-| Telemetry HTTP adapter | `firmware/AZ3166/src/TelemetryHttpHandler.h/.cpp` | Implements the application route and JSON/status mapping using its injected payload builder. |
-| Local discovery | `LocalDiscovery`, `MdnsTransport`, `MdnsUdpTransport`, vendored ArduinoMDNS | Owns discovery lifecycle, bounded multicast transport, and the synchronized background responder. |
-| Upload workflow | `firmware/AZ3166/src/CloudUploadController.h/.cpp` | Gates attempts, translates upload outcomes into scheduling policy, and records completion-time results. |
-| Upload coordination | `firmware/AZ3166/src/TelemetryUploader.h/.cpp` | Builds one payload and forwards its exact bytes and length to cloud transport. |
-| Upload policy | `firmware/AZ3166/src/UploadScheduler.h/.cpp` | Decides when scheduled, retry, and manual uploads are due. |
-| Upload result | `firmware/AZ3166/src/TelemetryUploadResult.h` | Carries typed upload status and the underlying network or HTTP detail code. |
-| HTTPS transport | `firmware/AZ3166/src/CloudTelemetry.h/.cpp` | Builds the authenticated HTTPS request and classifies the response. |
-| Core compatibility | `firmware/AZ3166/src/FloatFormatting.cpp` | Replaces the defective AZ3166 Core `dtostrf` implementation. |
-| SDK behavior | `firmware/AZ3166/src/disable_system_telemetry.cpp` | Replaces SDK system telemetry hooks with no-op definitions. |
+| Configuration | `firmware/AZ3166/src/config/`: `AppConfig.h` and cloud headers | Owns application constants, the cloud configuration loader, trust anchor, templates, and ignored local overrides. |
+| Device identity | `firmware/AZ3166/src/platform/DeviceIdentity.h/.cpp` | Derives and stores a stable identifier from the STM32 hardware UID. |
+| Input | `firmware/AZ3166/src/input/ButtonDebouncer.h/.cpp`, `ButtonController.h/.cpp` | Converts active-low button samples into one-shot application events. |
+| Watchdog | `firmware/AZ3166/src/platform/WatchdogController.h/.cpp` | Owns watchdog configuration, reset-cause reporting, enabled state, and timer feeds. |
+| Connectivity | `firmware/AZ3166/src/connectivity/ConnectivityManager.h/.cpp` | Owns Wi-Fi reconnect policy, connection state, NTP retry, and connectivity events. |
+| Sensor and JSON | `firmware/AZ3166/src/telemetry/TelemetryService.h/.cpp` | Stores an injected device ID pointer, owns and reads sensor objects, and formats the shared telemetry payload. |
+| Local HTTP | `firmware/AZ3166/src/http/LocalWebServer.h/.cpp`, `LocalHttpHandler.h` | Owns the nonblocking lwIP listener, dedicated worker, bounded HTTP protocol, synchronized status, and optional service-lifecycle callback. |
+| Telemetry HTTP adapter | `firmware/AZ3166/src/telemetry/TelemetryHttpHandler.h/.cpp` | Implements the application route and JSON/status mapping using its injected payload builder. |
+| Local discovery | `firmware/AZ3166/src/discovery/`: `LocalDiscovery`, `MdnsTransport`, `MdnsUdpTransport`, vendored ArduinoMDNS | Owns discovery lifecycle, bounded multicast transport, and the synchronized background responder. |
+| Upload workflow | `firmware/AZ3166/src/cloud/CloudUploadController.h/.cpp` | Gates attempts, translates upload outcomes into scheduling policy, and records completion-time results. |
+| Upload coordination | `firmware/AZ3166/src/cloud/TelemetryUploader.h/.cpp` | Builds one payload and forwards its exact bytes and length to cloud transport. |
+| Upload policy | `firmware/AZ3166/src/cloud/UploadScheduler.h/.cpp` | Decides when scheduled, retry, and manual uploads are due. |
+| Upload result | `firmware/AZ3166/src/cloud/TelemetryUploadResult.h` | Carries typed upload status and the underlying network or HTTP detail code. |
+| HTTPS transport | `firmware/AZ3166/src/cloud/CloudTelemetry.h/.cpp` | Builds the authenticated HTTPS request and classifies the response. |
+| Core compatibility | `firmware/AZ3166/src/platform/FloatFormatting.cpp` | Replaces the defective AZ3166 Core `dtostrf` implementation. |
+| SDK behavior | `firmware/AZ3166/src/platform/disable_system_telemetry.cpp` | Replaces SDK system telemetry hooks with no-op definitions. |
 
 ## 5. Startup and Main Loop
 
@@ -358,9 +386,15 @@ than the buffer capacity.
 ### 9.1 Worker and Listener Ownership
 
 `LocalWebServer` is a reusable HTTP engine with an injected `LocalHttpHandler`
-and an optional `LocalHttpServiceUpdate` callback/context. It does not include
+and an optional typed `LocalHttpServiceUpdate` callback. It does not include
 `AppConfig`, know the telemetry schema, or depend on discovery. The application
 selects port 80 and supplies `TelemetryHttpHandler` plus its mDNS callback.
+
+`LocalHttpServiceUpdate` is `mbed::Callback<void(bool, uint32_t)>`. The sketch
+binds `LocalDiscovery::update` directly with `mbed::callback`, eliminating the
+raw context pointer and forwarding wrapper. The server stores the callback by
+value; an empty callback is allowed. Copying a callback does not transfer
+ownership of its bound object or provide synchronization for that object.
 
 `update(wifiConnected, address)` publishes a mutex-protected desired state and
 starts one normal-priority RTOS worker when an address first becomes available.
@@ -587,7 +621,7 @@ firmware control.
 ## 14. Configuration and Credentials
 
 Current application constants are centralized in
-`firmware/AZ3166/src/AppConfig.h`:
+`firmware/AZ3166/src/config/AppConfig.h`:
 
 | Setting | Value |
 | --- | --- |
@@ -605,10 +639,12 @@ Current application constants are centralized in
 
 The public HTTPS endpoint defaults to `telemetry.example.com`, and a clean
 checkout disables uploads by using a placeholder key. A deployment can override
-the endpoint through the ignored `firmware/AZ3166/cloud_deployment.h` and the
-device key through the ignored `firmware/AZ3166/cloud_secrets.h`; corresponding
+the endpoint through the ignored `firmware/AZ3166/src/config/cloud_deployment.h` and the
+device key through the ignored `firmware/AZ3166/src/config/cloud_secrets.h`; corresponding
 `.example.h` files are committed as templates. The root CA is compiled from
-`firmware/AZ3166/cloud_ca.h`. Credentials must not be printed, committed, or
+`firmware/AZ3166/src/config/cloud_ca.h`. The loader and its optional override
+headers share that directory, so sibling-header lookup is preserved. Credentials
+must not be printed, committed, or
 included in test fixtures.
 
 ## 15. Error and State Invariants
@@ -634,8 +670,14 @@ files from `firmware/AZ3166/src/`. Tests can be compiled independently or
 run on the target; target execution waits for a suite-specific marker and an
 explicit pass/fail result.
 
-The discovery suite opts into preserving a `src/` subtree so Arduino also
-compiles the nested vendored responder. Other suites retain their flat staging.
+All eleven suite runners use `StageSourcesUnderSrc`. Each entry in `SourceFiles`
+is relative to the production source root, and the harness preserves that path
+inside the staged sketch's `src/` tree instead of flattening individual files.
+Only selected dependencies are copied, including the whole `discovery/mdns/`
+subtree for discovery tests. Suites that need application constants select
+`config/AppConfig.h` individually; they do not copy private cloud overrides or
+the entire `config/` directory. This keeps cross-component includes identical in
+production and tests and allows Arduino to compile nested sources recursively.
 
 | Suite | Primary coverage |
 | --- | --- |

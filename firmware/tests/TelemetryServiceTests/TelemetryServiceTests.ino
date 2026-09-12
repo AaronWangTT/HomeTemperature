@@ -1,8 +1,8 @@
 #include <Arduino.h>
 #include <math.h>
 
-#include "AppConfig.h"
-#include "TelemetryService.h"
+#include "src/config/AppConfig.h"
+#include "src/telemetry/TelemetryService.h"
 
 int failureCount = 0;
 

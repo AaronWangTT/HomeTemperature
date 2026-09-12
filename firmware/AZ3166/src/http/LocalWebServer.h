@@ -2,6 +2,7 @@
 #define LOCAL_WEB_SERVER_H
 
 #include <stdint.h>
+#include "platform/Callback.h"
 #include "rtos.h"
 #include "LocalHttpHandler.h"
 
@@ -21,7 +22,7 @@ struct LocalWebServerState {
     int error;
 };
 
-typedef void (*LocalHttpServiceUpdate)(bool, uint32_t, void *);
+using LocalHttpServiceUpdate = mbed::Callback<void(bool, uint32_t)>;
 
 class LocalWebServer {
 public:
@@ -32,16 +33,14 @@ public:
         LocalHttpHandler &handler,
         uint16_t port,
         uint32_t startRetryIntervalMs,
-        LocalHttpServiceUpdate serviceUpdate = NULL,
-        void *serviceContext = NULL);
+        LocalHttpServiceUpdate serviceUpdate = LocalHttpServiceUpdate());
 
     LocalWebServer(
         LocalHttpHandler &handler,
         uint16_t port,
         uint32_t startRetryIntervalMs,
         const LocalWebServerOperations &operations,
-        LocalHttpServiceUpdate serviceUpdate = NULL,
-        void *serviceContext = NULL);
+        LocalHttpServiceUpdate serviceUpdate = LocalHttpServiceUpdate());
 
     ~LocalWebServer();
 
@@ -82,7 +81,6 @@ private:
     uint32_t startRetryIntervalMs_;
     LocalWebServerOperations operations_;
     LocalHttpServiceUpdate serviceUpdate_;
-    void *serviceContext_;
     mutable rtos::Mutex stateMutex_;
     rtos::Thread worker_;
     RequestedState requested_;

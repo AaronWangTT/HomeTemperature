@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
-#include "AppConfig.h"
-#include "UploadScheduler.h"
+#include "src/config/AppConfig.h"
+#include "src/cloud/UploadScheduler.h"
 
 int failureCount = 0;
 

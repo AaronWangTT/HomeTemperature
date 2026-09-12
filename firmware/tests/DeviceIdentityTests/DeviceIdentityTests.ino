@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
-#include "AppConfig.h"
-#include "DeviceIdentity.h"
+#include "src/config/AppConfig.h"
+#include "src/platform/DeviceIdentity.h"
 
 int failureCount = 0;
 

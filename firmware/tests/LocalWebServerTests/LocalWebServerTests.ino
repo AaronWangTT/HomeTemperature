@@ -1,10 +1,10 @@
 #include <Arduino.h>
 #include <string.h>
 
-#include "AppConfig.h"
-#include "LocalWebServer.h"
-#include "TelemetryHttpHandler.h"
-#include "TelemetryService.h"
+#include "src/config/AppConfig.h"
+#include "src/http/LocalWebServer.h"
+#include "src/telemetry/TelemetryHttpHandler.h"
+#include "src/telemetry/TelemetryService.h"
 
 struct FakeHttpPlatform;
 
@@ -153,6 +153,8 @@ struct FakeHttpPlatform {
     osThreadId handlerThread;
     char input[2300];
     char output[1024];
+
+    void updateService(bool available, uint32_t address);
 };
 
 FakeHttpPlatform fake = {};
@@ -277,19 +279,48 @@ void fakeCloseSocket(int descriptor) {
     progress.release();
 }
 
-void updateFakeService(bool available, uint32_t address, void *context) {
+void FakeHttpPlatform::updateService(bool available, uint32_t address) {
     fakeMutex.lock();
-    ++fake.serviceUpdates;
-    if (available && (!fake.listenerOpen || context != &fake)) {
-        ++fake.invalidAdvertisements;
+    ++serviceUpdates;
+    if (available && !listenerOpen) {
+        ++invalidAdvertisements;
     }
-    if (available && (!fake.advertised || fake.advertisedAddress != address)) {
-        ++fake.readyCount;
+    if (available && (!advertised || advertisedAddress != address)) {
+        ++readyCount;
     }
-    fake.advertised = available;
-    fake.advertisedAddress = address;
+    advertised = available;
+    advertisedAddress = address;
     fakeMutex.unlock();
     progress.release();
+}
+
+void testServiceCallbackBinding() {
+    resetHttpPlatform();
+    LocalHttpServiceUpdate empty;
+    expect(!empty, "service callbacks are optional and empty by default");
+
+    LocalHttpServiceUpdate original =
+        mbed::callback(&fake, &FakeHttpPlatform::updateService);
+    LocalHttpServiceUpdate copied = original;
+    original = LocalHttpServiceUpdate();
+    expect(!original && copied, "copying retains the bound member callback");
+
+    fakeMutex.lock();
+    fake.listenerOpen = true;
+    fakeMutex.unlock();
+    copied(true, 0xC0000201UL);
+    fakeMutex.lock();
+    bool announced = fake.advertised && fake.advertisedAddress == 0xC0000201UL &&
+        fake.serviceUpdates == 1 && fake.invalidAdvertisements == 0;
+    fakeMutex.unlock();
+    expect(announced, "member callback receives availability and address on its bound object");
+
+    copied(false, 0);
+    fakeMutex.lock();
+    bool withdrawn = !fake.advertised && fake.advertisedAddress == 0 &&
+        fake.serviceUpdates == 2;
+    fakeMutex.unlock();
+    expect(withdrawn, "copied callback also forwards the unavailable state");
 }
 
 LocalWebServerOperations httpOperations() {
@@ -346,7 +377,8 @@ void testWorkerLifecycle() {
     resetHttpPlatform();
     ExampleHandler handler;
     {
-        LocalWebServer server(handler, 8080, 5000, httpOperations(), updateFakeService, &fake);
+        LocalWebServer server(handler, 8080, 5000, httpOperations(),
+                              mbed::callback(&fake, &FakeHttpPlatform::updateService));
         server.update(true, 0);
         expect(!server.state().workerStarted, "worker waits for an assigned address");
         server.update(true, 0xC0000201UL);
@@ -388,7 +420,8 @@ void testListenerFailureAndRetry() {
     fake.openDuration = 100;
     fake.now = 0xFFFFFF00UL;
     ExampleHandler handler;
-    LocalWebServer server(handler, 8080, 5000, httpOperations(), updateFakeService, &fake);
+    LocalWebServer server(handler, 8080, 5000, httpOperations(),
+                          mbed::callback(&fake, &FakeHttpPlatform::updateService));
     server.update(true, 0xC0000201UL);
     expect(waitForCount(&FakeHttpPlatform::serviceUpdates, 2) &&
                !server.state().listening && fakeCount(&FakeHttpPlatform::readyCount) == 0,
@@ -418,7 +451,8 @@ void testAddressChangesDuringStartup() {
     resetHttpPlatform();
     fake.holdOpen = true;
     ExampleHandler handler;
-    LocalWebServer server(handler, 8080, 5000, httpOperations(), updateFakeService, &fake);
+    LocalWebServer server(handler, 8080, 5000, httpOperations(),
+                          mbed::callback(&fake, &FakeHttpPlatform::updateService));
     server.update(true, 0xC0000201UL);
     expect(waitForCount(&FakeHttpPlatform::openCount, 1), "worker starts the listener independently");
     server.update(true, 0xC0000202UL);
@@ -560,6 +594,7 @@ void setup() {
     testUnknownRoutes();
     testDisconnectedPolling();
     testTelemetryHandler();
+    testServiceCallbackBinding();
     testWorkerLifecycle();
     testListenerFailureAndRetry();
     testAddressChangesDuringStartup();

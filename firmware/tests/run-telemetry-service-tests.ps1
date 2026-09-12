@@ -18,10 +18,11 @@ Invoke-Az3166TestSuite `
     -SuiteName "TelemetryServiceTests" `
     -TestSource $testSource `
     -SourceFiles @(
-        "AppConfig.h",
-        "FloatFormatting.cpp",
-        "TelemetryService.h",
-        "TelemetryService.cpp"
+        "config/AppConfig.h",
+        "platform/FloatFormatting.cpp",
+        "telemetry/TelemetryService.h",
+        "telemetry/TelemetryService.cpp"
     ) `
+    -StageSourcesUnderSrc `
     -Action $Action `
     -Port $Port

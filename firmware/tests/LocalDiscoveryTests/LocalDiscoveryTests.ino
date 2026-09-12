@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include <string.h>
 
-#include "src/LocalDiscovery.h"
-#include "src/MdnsUdpTransport.h"
-#include "src/mdns/MDNS.h"
+#include "src/discovery/LocalDiscovery.h"
+#include "src/discovery/MdnsUdpTransport.h"
+#include "src/discovery/mdns/MDNS.h"
 
 uint32_t fakeNow = 0;
 uint32_t fakeStartDuration = 0;
