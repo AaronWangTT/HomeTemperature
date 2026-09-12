@@ -786,3 +786,96 @@ mocking framework:
   public formatter does not escape an arbitrary caller-supplied device ID.
 - Serial logging includes telemetry payloads and failed HTTP response bodies;
   deployments should treat serial access as operationally sensitive.
+
+## 18. Future Direction: Event-Driven Coordination
+
+Status: proposed, not implemented. The preceding sections describe the current
+firmware. Today, the main loop polls buttons and connectivity, handles the
+returned events directly, and performs cloud uploads synchronously. HTTP and
+mDNS already have independent workers; there is no application event queue.
+
+The proposed direction separates event producers from one application-level
+dispatcher. Producers publish typed messages to a bounded RTOS queue, and the
+main loop consumes them to apply application policy and coordinate services.
+
+### 18.1 Execution and Ownership
+
+```mermaid
+flowchart LR
+    Input[Input sampling worker] --> Queue[Bounded typed event queue]
+    Connectivity[Connectivity worker] --> Queue
+    Queue --> App[Main-loop application dispatcher]
+    App -->|submits upload| Cloud[Cloud transport worker]
+    Cloud -->|completion event| Queue
+    App -->|publishes desired state| HTTP[Existing HTTP worker]
+    HTTP -->|listener readiness callback| Discovery[Existing mDNS service]
+```
+
+| Component | Proposed responsibility |
+| --- | --- |
+| Input worker | Sample and debounce inputs, then report input facts without deciding which application action to perform. |
+| Connectivity worker | Remain the sole owner of Wi-Fi reconnect and NTP policy, and publish connectivity state changes. |
+| Main-loop dispatcher | Map events to application actions, maintain upload scheduling, and publish desired service state using short, bounded operations. |
+| Cloud transport worker | Own the HTTPS transaction for a submitted payload and return its result and completion time; allow at most one upload in flight. |
+| Existing HTTP and mDNS workers | Retain ownership of their sockets and execution, with advertisement still coordinated through listener readiness. |
+
+The dispatcher must not wait for a cloud transaction to finish. Moving input
+detection into a thread while leaving synchronous uploads in the consumer would
+capture button presses sooner but still delay their actions and connectivity
+handling. Cloud transport therefore needs an asynchronous submission/result
+boundary for queued dispatch to achieve its responsiveness goal.
+
+Input sampling must also remain independent of slow connectivity operations.
+The current `ConnectivityManager::update()` can invoke synchronous Wi-Fi and
+NTP calls. Running it in the same worker as button sampling could suspend input
+polling for the duration of those calls. A shared producer thread is suitable
+only if every operation it polls is bounded and quick.
+
+The queue does not make shared objects thread-safe. Workers continue to own
+their resources; cross-thread state needs copied messages or synchronized
+snapshots. Preserve sensor acquisition locking, avoid concurrent access to an
+active request object, and never hold a shared application lock across network
+I/O. A cloud payload must remain owned and valid until its upload completes.
+
+### 18.2 Event and Queue Contract
+
+- Use tagged, typed events with small payloads copied by value or stored in a
+  fixed, owned message pool. Do not enqueue pointers to temporary objects.
+- Prefer input facts such as `ButtonAPressed` over application commands such as
+  `uploadRequested`. The dispatcher decides that a button press requests an
+  upload, keeping the input component reusable.
+- Bound queue capacity, producer enqueue time, and dispatcher work per iteration.
+  Define queue-full behavior before implementation; do not grow memory without
+  limit or block input sampling indefinitely.
+- Distinguish discrete actions from replaceable state. Preserve button presses
+  where possible; coalesce repeated connectivity updates when only the newest
+  state matters. Make overflow observable and do not silently lose completion
+  messages needed to clear an in-flight operation.
+- Include relevant captured state and a connection generation in connectivity
+  events. Ignore superseded updates rather than restarting HTTP for an old
+  connection. Generation changes must survive coalescing, including a disconnect
+  and reconnect that return the same IP address.
+- Carry completion timestamps with upload outcomes so retry timing remains based
+  on transaction completion, not on when a delayed dispatcher reads the event.
+
+### 18.3 Incremental Migration
+
+Keep the current event-returning APIs until this architecture is needed. There
+is no need to add callbacks to every component or introduce an event bus solely
+to shorten the sketch. The current `handleButtonEvents` application policy and
+`handleConnectivityEvents` reporting naturally become dispatcher handlers; their
+responsibilities do not disappear when delivery moves through a queue.
+
+Introduce the asynchronous cloud boundary before relying on the main loop as a
+responsive queue consumer. Then adapt event producers and move application
+dispatch into its own module, retaining independent HTTP and mDNS services.
+Each step should remain separately reviewable and preserve existing behavior
+until an explicit contract changes.
+
+Before implementation, settle queue and stack budgets, event ordering and
+overflow policy, disconnect coordination, transport timeouts/cancellation, and
+worker health monitoring. A main loop that continues feeding the watchdog must
+not hide a stuck cloud worker. Focused validation should cover input delivery
+during network waits, queue saturation, stale generations, upload completion,
+and worker recovery rather than assuming that additional threads guarantee
+bounded latency.
