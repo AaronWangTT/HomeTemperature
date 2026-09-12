@@ -38,9 +38,12 @@ void TelemetryService::begin(const char *deviceId) {
 }
 
 bool TelemetryService::read(TelemetryReading &reading) {
-    return hts221_.getTemperature(&reading.temperature) == 0 &&
-           hts221_.getHumidity(&reading.humidity) == 0 &&
-           lps22hb_.getPressure(&reading.pressure) == 0;
+    sensorMutex_.lock();
+    bool success = hts221_.getTemperature(&reading.temperature) == 0 &&
+                   hts221_.getHumidity(&reading.humidity) == 0 &&
+                   lps22hb_.getPressure(&reading.pressure) == 0;
+    sensorMutex_.unlock();
+    return success;
 }
 
 int TelemetryService::formatPayload(

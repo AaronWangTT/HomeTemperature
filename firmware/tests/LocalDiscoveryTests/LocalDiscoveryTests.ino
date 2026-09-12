@@ -8,6 +8,7 @@
 uint32_t fakeNow = 0;
 uint32_t fakeStartDuration = 0;
 uint32_t lastStartedAddress = 0;
+LocalDiscoveryService lastStartedService = {};
 int startCount = 0;
 int stopCount = 0;
 int failureCount = 0;
@@ -16,9 +17,10 @@ bool fakeHealthy = false;
 
 uint32_t currentTime() { return fakeNow; }
 
-bool startDiscovery(uint32_t address) {
+bool startDiscovery(uint32_t address, const LocalDiscoveryService &service) {
     ++startCount;
     lastStartedAddress = address;
+    lastStartedService = service;
     fakeNow += fakeStartDuration;
     return fakeStartResult;
 }
@@ -30,11 +32,15 @@ LocalDiscovery createDiscovery() {
     LocalDiscoveryOperations operations = {
         currentTime, startDiscovery, stopDiscovery, isHealthy
     };
-    return LocalDiscovery(5000, operations);
+    LocalDiscoveryService service = {
+        "az3166", "az3166._http", 80, "\x13" "path=/api/telemetry"
+    };
+    return LocalDiscovery(5000, service, operations);
 }
 
 void resetPlatform() {
     fakeNow = fakeStartDuration = lastStartedAddress = 0;
+    lastStartedService = {};
     startCount = stopCount = 0;
     fakeStartResult = fakeHealthy = true;
 }
@@ -74,6 +80,23 @@ void testConnectionLifecycle() {
     discovery.update(true, 0);
     expect(stopCount == 3 && !discovery.isRunning(),
            "address loss stops discovery without Wi-Fi loss");
+}
+
+void testServiceConfiguration() {
+    resetPlatform();
+    LocalDiscoveryOperations operations = {
+        currentTime, startDiscovery, stopDiscovery, isHealthy
+    };
+    LocalDiscoveryService service = {
+        "example", "example._http", 8080, "\x0c" "path=/sample"
+    };
+    LocalDiscovery discovery(5000, service, operations);
+    discovery.update(true, 0xC0000201UL);
+    expect(lastStartedService.port == 8080 &&
+               strcmp(lastStartedService.hostname, "example") == 0 &&
+               strcmp(lastStartedService.serviceName, "example._http") == 0 &&
+               strcmp(lastStartedService.txtRecord, "\x0c" "path=/sample") == 0,
+           "discovery forwards caller-supplied hostname, port, and service metadata");
 }
 
 void testStartFailureBackoff() {
@@ -304,6 +327,7 @@ void setup() {
     delay(3000);
     Serial.println("TEST_SUITE: LocalDiscoveryTests");
     testConnectionLifecycle();
+    testServiceConfiguration();
     testStartFailureBackoff();
     testTransportFailure();
     testRetryAddressChangeAndWraparound();

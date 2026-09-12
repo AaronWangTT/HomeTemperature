@@ -6,6 +6,7 @@
 #include <HTS221Sensor.h>
 #include <LPS22HBSensor.h>
 #include <Sensor.h>
+#include "rtos.h"
 
 struct TelemetryReading {
     float temperature;
@@ -37,6 +38,7 @@ public:
 
 private:
     const char *deviceId_;
+    rtos::Mutex sensorMutex_;
     DevI2C devI2c_;
     HTS221Sensor hts221_;
     LPS22HBSensor lps22hb_;

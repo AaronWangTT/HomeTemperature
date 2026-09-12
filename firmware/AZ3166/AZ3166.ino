@@ -8,6 +8,7 @@
 #include "src/LocalDiscovery.h"
 #include "src/LocalWebServer.h"
 #include "src/TelemetryService.h"
+#include "src/TelemetryHttpHandler.h"
 #include "src/TelemetryUploader.h"
 #include "src/UploadScheduler.h"
 #include "src/WatchdogController.h"
@@ -18,11 +19,26 @@ DeviceIdentity deviceIdentity;
 TelemetryService telemetryService;
 
 // Telemetry delivery
-LocalWebServer localWebServer(
-    telemetryService,
+const LocalDiscoveryService localHttpService = {
+    AppConfig::LOCAL_HOSTNAME,
+    AppConfig::LOCAL_HTTP_SERVICE_NAME,
     AppConfig::LOCAL_TELEMETRY_PORT,
-    AppConfig::LOCAL_WEB_SERVER_RETRY_INTERVAL_MS);
-LocalDiscovery localDiscovery(AppConfig::LOCAL_DISCOVERY_RETRY_INTERVAL_MS);
+    AppConfig::LOCAL_HTTP_SERVICE_TXT
+};
+LocalDiscovery localDiscovery(
+    AppConfig::LOCAL_DISCOVERY_RETRY_INTERVAL_MS, localHttpService);
+
+void updateLocalHttpAdvertisement(bool available, uint32_t address, void *context) {
+    static_cast<LocalDiscovery *>(context)->update(available, address);
+}
+
+TelemetryHttpHandler telemetryHttpHandler(telemetryService);
+LocalWebServer localWebServer(
+    telemetryHttpHandler,
+    AppConfig::LOCAL_TELEMETRY_PORT,
+    AppConfig::LOCAL_WEB_SERVER_RETRY_INTERVAL_MS,
+    updateLocalHttpAdvertisement,
+    &localDiscovery);
 CloudTelemetry cloudTelemetry(
     AppConfig::CLOUD_TELEMETRY_URL,
     ISRG_ROOT_X1_CERTIFICATE,
@@ -94,8 +110,7 @@ void loop() {
     handleConnectivityEvents(connectivityEvents);
     watchdog.reset();
 
-    localWebServer.poll(connectivity.isWiFiConnected());
-    localDiscovery.update(
+    localWebServer.update(
         connectivity.isWiFiConnected(), connectivity.localIPv4Address());
 
     watchdog.reset();

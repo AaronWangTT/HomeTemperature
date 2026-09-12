@@ -53,15 +53,18 @@ this repository.
 
 ## Local Discovery
 
-After Wi-Fi and IPv4 acquisition, the firmware advertises this fixed local name:
+After Wi-Fi, IPv4 acquisition, and successful HTTP listener startup, the firmware
+advertises this local name:
 
 ```text
 http://az3166.local/api/telemetry
 ```
 
 It also publishes an `_http._tcp.local.` service on port 80 with the TXT entry
-`path=/api/telemetry`. The initial version assumes one `az3166` device per LAN;
-there is no configurable alias or automatic collision renaming. The cloud
+`path=/api/telemetry`. This application configures those names and records in
+`AppConfig`; the reusable discovery component receives them from its caller.
+The initial version assumes one `az3166` device per LAN, with no runtime alias
+setting or automatic collision renaming. The cloud
 device ID, telemetry JSON, and direct-IP HTTP endpoint are unchanged.
 
 Clients must support IPv4 mDNS, and the LAN must permit UDP multicast to
@@ -70,10 +73,73 @@ managed DNS policies can prevent `.local` resolution even when direct-IP access
 works. The feature does not require router DNS registration, Internet access,
 NTP synchronization, or cloud credentials.
 
-The responder follows the cached address on reconnect or DHCP changes. It runs
-in a small background worker so synchronous cloud calls do not prevent it from
-servicing queries. The vendored ArduinoMDNS 1.0.1 source and its local port are
-described in the repository's third-party notices.
+HTTP and mDNS run in separate workers and follow the cached address on reconnect
+or DHCP changes. The HTTP worker coordinates advertisement only after its
+listener is ready, and withdraws it when the listener stops. Cloud uploads stay
+in the main loop but no longer prevent HTTP polling. Shared sensor acquisition
+is protected by a short mutex; network operations never hold that sensor lock.
+The vendored ArduinoMDNS 1.0.1 source and its local port are described in the
+repository's third-party notices.
+
+## Reusing the HTTP Service
+
+Implement `LocalHttpHandler` to receive a complete request line and a bounded
+response buffer. Return the HTTP status, content type, and exact body byte count.
+For example, this handler serves a small plain-text response without any sensor
+or cloud dependencies:
+
+```cpp
+#include <string.h>
+#include "src/LocalWebServer.h"
+
+class ExampleHandler : public LocalHttpHandler {
+public:
+    LocalHttpResponse handle(const char *, char *body, size_t capacity) override {
+        if (capacity < 3) {
+            return {"500 Internal Server Error", "text/plain", 0};
+        }
+        memcpy(body, "ok\n", 3);
+        return {"200 OK", "text/plain", 3};
+    }
+};
+
+ExampleHandler handler;
+LocalWebServer http(handler, 8080, 5000);
+```
+
+After application initialization, publish your connectivity snapshot from the
+main loop with `http.update(wifiConnected, ipv4Address)`. The address is a
+high-octet-first `uint32_t` (`192.0.2.1` is `0xC0000201`), or zero when unavailable.
+`http.state()` returns a synchronized snapshot of worker startup, actual listener
+readiness, bound address, and the last lifecycle error. Calling
+`http.update(false, 0)` requests shutdown of the listener; the worker remains
+available for a later reconnect. Destroying the server joins its worker.
+
+For discovery, pass an optional `LocalHttpServiceUpdate` callback and context to
+the constructor. That callback runs on the HTTP worker and can call
+`LocalDiscovery::update(available, address)`. Supply a `LocalDiscoveryService`
+descriptor containing the hostname (without `.local`), instance/service name
+(such as `example._http`), matching listener port, and DNS-SD length-prefixed TXT
+data. The application sketch demonstrates the complete wiring.
+
+- Initialize handlers and sensors before the first connected update. The handler,
+  callback context, discovery instance, and borrowed metadata strings must outlive
+  the server's worker.
+- Handlers and lifecycle callbacks must be bounded and must not destroy the
+  server from its own worker. Synchronize any application state they share with
+  the main loop; the telemetry handler delegates sensor synchronization to
+  `TelemetryService`.
+- One HTTP worker owns one listener and handles one client at a time. It uses a
+  6144-byte RTOS stack allocated at startup, a 96-byte request-line buffer, a
+  2048-byte total header limit, and a 512-byte response-body buffer. Header reads
+  and response writes each have a two-second deadline. Status and content-type
+  strings must remain valid until the response is sent.
+- This is a small request-line handler API, not a full HTTP framework: request
+  bodies, persistent connections, and WebSockets are not supported. Discovery's
+  current platform backend supports one advertised service per device.
+- Cloud uploads, NTP, and Wi-Fi maintenance remain synchronous in the main loop.
+  The watchdog still monitors that loop; threads do not remove Wi-Fi bandwidth
+  limits or make an arbitrary blocking handler safe.
 
 ## Build and Test
 
@@ -92,12 +158,15 @@ checkpoint:
 & .\firmware\tests\run-all-tests.ps1 -Action Verify
 ```
 
-For a discovery change, run only its focused suite on the board. Close any
+For an HTTP-service change, run its focused suite on the board. Close any
 serial monitor first; the harness restores production after the suite:
 
 ```powershell
-& .\firmware\tests\run-local-discovery-tests.ps1 -Action Run -Port COM3
+& .\firmware\tests\run-local-web-server-tests.ps1 -Action Run -Port COM3
 ```
+
+The discovery adapter has its own focused suite in
+[tests/run-local-discovery-tests.ps1](tests/run-local-discovery-tests.ps1).
 
 Run all suites on a connected board and restore production firmware after each
 suite only when a full hardware regression is required:

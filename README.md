@@ -28,9 +28,9 @@ small interfaces, with retry and scheduling policy kept separate from transport.
 | Capability | Components | What They Encapsulate |
 | --- | --- | --- |
 | Wi-Fi and time | `ConnectivityManager` | Connection state, reconnect backoff, IPv4 address changes, and NTP synchronization retries. |
-| Local discovery | `LocalDiscovery`, `MdnsUdpTransport` | IPv4 mDNS and HTTP service advertisement through an adapted ArduinoMDNS responder, with address-aware restarts and background query handling. |
-| Sensor telemetry | `TelemetryService` | HTS221/LPS22HB sensor acquisition, range validation, and bounded JSON formatting shared by local HTTP and cloud uploads. |
-| Local HTTP | `LocalWebServer` | TCP listener lifecycle, bounded request reading, and telemetry responses at `/api/telemetry`. |
+| Local discovery | `LocalDiscovery`, `MdnsUdpTransport` | Caller-supplied mDNS service metadata, address-aware restarts, and background query handling, coordinated with HTTP listener readiness. |
+| Sensor telemetry | `TelemetryService` | Serialized HTS221/LPS22HB acquisition, range validation, and bounded JSON formatting shared by local HTTP and cloud uploads. |
+| Local HTTP | `LocalWebServer`, `LocalHttpHandler` | A dedicated HTTP worker, verified listener startup, bounded request/response I/O, and an injectable application handler. `TelemetryHttpHandler` supplies this application's telemetry route. |
 | HTTPS delivery | `CloudTelemetry`, `TelemetryUploader` | Authenticated HTTPS transport, payload delivery, and typed sensor, network, and HTTP outcomes. |
 | Upload control | `UploadScheduler`, `CloudUploadController` | Periodic uploads, retry timing, manual requests, and pause/resume behavior. |
 | Button input | `ButtonDebouncer`, `ButtonController` | Active-low button sampling, debounce state, and one-shot application events. |
@@ -45,6 +45,13 @@ tests exercise reconnects, retries, address changes, and failure handling
 deterministically. A replaceable mDNS transport lets protocol tests inspect
 datagrams without real Wi-Fi traffic. Focused test sketches share a build/upload
 harness that restores production firmware after an on-board run.
+
+The HTTP engine has no sensor, telemetry-schema, or mDNS dependency. Supply a
+`LocalHttpHandler` for your application and, optionally, a service-lifecycle
+callback to coordinate advertisement. Its worker serves local requests while
+the main loop waits for cloud uploads; mDNS runs in its own worker so a slow
+HTTP client cannot block discovery. See the embedding example in
+[firmware/README.md](firmware/README.md#reusing-the-http-service).
 
 Start with [firmware/AZ3166/AZ3166.ino](firmware/AZ3166/AZ3166.ino) to see the
 composition, then [docs/firmware-design.md](docs/firmware-design.md) for component

@@ -1,7 +1,6 @@
 #include "LocalDiscovery.h"
 
 #include <Arduino.h>
-#include "AppConfig.h"
 #include "MdnsUdpTransport.h"
 #include "mdns/MDNS.h"
 #include "rtos.h"
@@ -38,7 +37,12 @@ uint32_t platformCurrentTime() {
     return millis();
 }
 
-bool platformStart(uint32_t address) {
+bool platformStart(uint32_t address, const LocalDiscoveryService &service) {
+    if (service.hostname == NULL || service.hostname[0] == '\0' ||
+        service.serviceName == NULL || service.serviceName[0] == '\0' ||
+        service.port == 0) {
+        return false;
+    }
     responderMutex.lock();
     transport.setLocalIPv4Address(address);
     IPAddress localAddress(
@@ -46,10 +50,9 @@ bool platformStart(uint32_t address) {
         static_cast<uint8_t>(address >> 16),
         static_cast<uint8_t>(address >> 8),
         static_cast<uint8_t>(address));
-    bool started = responder.begin(localAddress, AppConfig::LOCAL_HOSTNAME) &&
+    bool started = responder.begin(localAddress, service.hostname) &&
         responder.addServiceRecord(
-            "az3166._http", AppConfig::LOCAL_TELEMETRY_PORT,
-            MDNSServiceTCP, "\x13" "path=/api/telemetry");
+            service.serviceName, service.port, MDNSServiceTCP, service.txtRecord);
     if (started && !workerStarted) {
         workerStarted = worker.start(mbed::callback(serviceDiscovery)) == osOK;
         started = workerStarted;
@@ -81,14 +84,18 @@ bool platformIsHealthy() {
 
 }
 
-LocalDiscovery::LocalDiscovery(uint32_t retryIntervalMs)
-    : LocalDiscovery(retryIntervalMs, defaultOperations()) {
+LocalDiscovery::LocalDiscovery(
+    uint32_t retryIntervalMs,
+    const LocalDiscoveryService &service)
+    : LocalDiscovery(retryIntervalMs, service, defaultOperations()) {
 }
 
 LocalDiscovery::LocalDiscovery(
     uint32_t retryIntervalMs,
+        const LocalDiscoveryService &service,
     const LocalDiscoveryOperations &operations)
     : retryIntervalMs_(retryIntervalMs),
+            service_(service),
       operations_(operations),
       requestedAddress_(0),
       lastAttempt_(0),
@@ -103,8 +110,8 @@ LocalDiscoveryOperations LocalDiscovery::defaultOperations() {
     return operations;
 }
 
-void LocalDiscovery::update(bool wifiConnected, uint32_t address) {
-    uint32_t requested = wifiConnected ? address : 0;
+void LocalDiscovery::update(bool serviceAvailable, uint32_t address) {
+    uint32_t requested = serviceAvailable ? address : 0;
     if (requested != requestedAddress_) {
         if (running_) {
             operations_.stop();
@@ -133,16 +140,17 @@ void LocalDiscovery::update(bool wifiConnected, uint32_t address) {
         return;
     }
 
-    running_ = operations_.start(requestedAddress_);
+    running_ = operations_.start(requestedAddress_, service_);
     attempted_ = true;
     lastAttempt_ = operations_.currentTime();
     if (!running_) {
         operations_.stop();
         Serial.println("mDNS start failed; retrying later");
     } else {
-        Serial.print("Local mDNS endpoint: http://");
-        Serial.print(AppConfig::LOCAL_HOSTNAME);
-        Serial.println(".local/api/telemetry");
+        Serial.print("Local mDNS service: ");
+        Serial.print(service_.hostname);
+        Serial.print(".local:");
+        Serial.println(service_.port);
     }
 }
 
