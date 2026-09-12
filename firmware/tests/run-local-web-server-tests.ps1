@@ -21,6 +21,9 @@ Invoke-Az3166TestSuite `
         "AppConfig.h",
         "LocalWebServer.h",
         "LocalWebServer.cpp",
+        "LocalHttpHandler.h",
+        "TelemetryHttpHandler.h",
+        "TelemetryHttpHandler.cpp",
         "FloatFormatting.cpp",
         "TelemetryService.h",
         "TelemetryService.cpp"

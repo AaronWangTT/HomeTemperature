@@ -1,6 +1,6 @@
 # AZ3166 Firmware Design
 
-Status: current implementation as of 2026-09-12.
+Status: current implementation as of 2026-09-13.
 
 ## 1. Scope
 
@@ -33,7 +33,8 @@ flowchart LR
         Main[AZ3166.ino<br/>composition and loop]
         Buttons[ButtonController]
         Connectivity[ConnectivityManager]
-        Local[LocalWebServer]
+        Local[LocalWebServer HTTP worker]
+        Handler[TelemetryHttpHandler]
         Discovery[LocalDiscovery]
         Mdns[ArduinoMDNS and MdnsUdpTransport]
         Controller[CloudUploadController]
@@ -47,8 +48,8 @@ flowchart LR
 
         Main -->|initializes and updates| Buttons
         Main -->|updates| Connectivity
-        Main -->|passes current Wi-Fi state| Local
-        Main -->|passes Wi-Fi and cached IPv4| Discovery
+        Main -->|publishes Wi-Fi and cached IPv4| Local
+        Local -->|listener readiness callback| Discovery
         Discovery -->|starts and stops worker| Mdns
         Main -->|passes readiness and commands| Controller
         Main -.->|reports startup configuration| Cloud
@@ -57,7 +58,8 @@ flowchart LR
         Main -->|starts and feeds| Watchdog
         Controller -->|queries and records outcomes| Scheduler
         Controller -->|invokes| Uploader
-        Local -->|builds payload| Telemetry
+        Local -->|dispatches LocalHttpHandler| Handler
+        Handler -->|builds payload| Telemetry
         Uploader -->|builds payload| Telemetry
         Uploader -->|uploads through| Cloud
         Telemetry -->|reads| Sensors
@@ -70,17 +72,21 @@ flowchart LR
 
 Arrows inside the firmware boundary represent direct calls or dependencies.
 `ConnectivityManager` and `LocalWebServer` do not reference each other:
-`AZ3166.ino` reads current connectivity state and passes it to
-`LocalWebServer::poll()`. For cloud upload, the composition root passes button
+`AZ3166.ino` publishes current Wi-Fi state and the cached IPv4 address to
+`LocalWebServer::update()`. A callback supplied by the sketch connects the HTTP
+worker's listener readiness to `LocalDiscovery::update()`. Neither the HTTP
+engine nor the discovery controller owns Wi-Fi policy. For cloud upload, the
+composition root passes button
 commands and the current Wi-Fi/time readiness state to `CloudUploadController`.
 The controller owns the due check, one upload attempt, result classification,
 and scheduler update. Constructor-only wiring is omitted from the diagram.
 
 The main firmware uses a cooperative loop. Modules expose small synchronous
 operations; `AZ3166.ino` owns their construction and decides when each operation
-runs. Local discovery additionally uses one bounded RTOS worker because Wi-Fi,
-NTP, HTTP, and HTTPS platform calls can block the main loop. Only that worker
-services mDNS queries; a mutex protects responder start, stop, and health checks.
+runs. Local HTTP and mDNS use separate bounded RTOS workers. HTTP dispatch does
+not wait for a cloud POST to finish, and a slow HTTP client cannot block mDNS
+queries. Short mutexes protect the HTTP connectivity snapshot, sensor acquisition,
+and mDNS responder lifecycle; no network request holds the sensor mutex.
 
 ## 4. Source Organization
 
@@ -97,7 +103,8 @@ Focused test sketches and staging scripts live separately under `firmware/tests/
 | Watchdog | `firmware/AZ3166/src/WatchdogController.h/.cpp` | Owns watchdog configuration, reset-cause reporting, enabled state, and timer feeds. |
 | Connectivity | `firmware/AZ3166/src/ConnectivityManager.h/.cpp` | Owns Wi-Fi reconnect policy, connection state, NTP retry, and connectivity events. |
 | Sensor and JSON | `firmware/AZ3166/src/TelemetryService.h/.cpp` | Stores an injected device ID pointer, owns and reads sensor objects, and formats the shared telemetry payload. |
-| Local HTTP | `firmware/AZ3166/src/LocalWebServer.h/.cpp` | Owns the AZ3166 TCP server and local HTTP protocol, using its injected `TelemetryService` for response payloads. |
+| Local HTTP | `firmware/AZ3166/src/LocalWebServer.h/.cpp`, `LocalHttpHandler.h` | Owns the nonblocking lwIP listener, dedicated worker, bounded HTTP protocol, synchronized status, and optional service-lifecycle callback. |
+| Telemetry HTTP adapter | `firmware/AZ3166/src/TelemetryHttpHandler.h/.cpp` | Implements the application route and JSON/status mapping using its injected payload builder. |
 | Local discovery | `LocalDiscovery`, `MdnsTransport`, `MdnsUdpTransport`, vendored ArduinoMDNS | Owns discovery lifecycle, bounded multicast transport, and the synchronized background responder. |
 | Upload workflow | `firmware/AZ3166/src/CloudUploadController.h/.cpp` | Gates attempts, translates upload outcomes into scheduling policy, and records completion-time results. |
 | Upload coordination | `firmware/AZ3166/src/TelemetryUploader.h/.cpp` | Builds one payload and forwards its exact bytes and length to cloud transport. |
@@ -140,8 +147,8 @@ Each `loop()` iteration performs work in this order:
 4. Update Wi-Fi, local IPv4 address, and time synchronization state.
 5. Report new connectivity and local address events.
 6. Reset the watchdog.
-7. Reconcile the local HTTP server with current Wi-Fi state and poll one client;
-  reconcile discovery with the current Wi-Fi state and cached IPv4 address.
+7. Publish Wi-Fi state and the cached IPv4 address to the HTTP worker. The worker
+  owns listener reconciliation, advertisement callbacks, and client handling.
 8. Reset the watchdog.
 9. Pass current Wi-Fi/time readiness to `CloudUploadController`.
 10. If configured and due, the controller performs one upload and records its
@@ -227,14 +234,17 @@ The fixed host label is `az3166`, advertised as `az3166.local`. The local URL is
 not change. The initial version assumes a single device using that name per LAN
 and does not implement custom collision resolution or automatic renaming.
 
-`LocalDiscovery::update(wifiConnected, address)` reconciles the responder with
-the connectivity snapshot. A nonzero IPv4 address and Wi-Fi are required, but
-NTP synchronization, cloud configuration, and upload state are not:
+`LocalDiscovery::update(serviceAvailable, address)` is called only by the HTTP
+worker's lifecycle callback. `serviceAvailable` means the listener successfully
+opened, bound, and started listening for the current connectivity generation.
+Wi-Fi alone does not trigger advertisement. NTP synchronization, cloud
+configuration, and upload state are not required:
 
-- Start once when a usable address becomes available.
+- Start once after a listener is ready on a usable address.
 - Leave the responder running while the address and Wi-Fi state are unchanged.
-- Stop and release the socket and service/name allocations on address loss or
-  disconnect; restart and announce on reconnection, even with the same address.
+- Stop and release the socket and service/name allocations when the listener
+  stops, including address loss, disconnect, or listener failure; restart and
+  announce on reconnection, even with the same address.
 - Replace the responder and multicast binding when a connected address changes.
 - Retry startup or detected transport failure after five seconds, measured from
   completion. A new address bypasses the previous address's retry delay.
@@ -245,8 +255,11 @@ The source is vendored with its LGPL notices and local compatibility fixes; the
 installed AZ3166 board package is not modified. Its native mDNS header
 declarations do not provide linkable responder implementations in Core 2.0.0.
 
-The responder publishes the current IPv4 A record and an `_http._tcp.local.`
-service with the configured local HTTP port and TXT `path=/api/telemetry`.
+`LocalDiscoveryService` supplies borrowed, process-lifetime hostname, service
+name, port, and TXT metadata; the controller no longer includes `AppConfig` or
+hard-codes telemetry. This application's descriptor publishes the current IPv4
+A record and an `_http._tcp.local.` service on the matching HTTP port with TXT
+`path=/api/telemetry`. The current platform backend has one responder per device.
 Address and unique service records carry cache-flush and a 120-second TTL.
 Registration announces immediately, a worker sends a follow-up after one second,
 and the library refreshes services every 90 seconds. Service goodbye records are
@@ -254,8 +267,8 @@ best effort; cached names can remain until their TTL expires after link loss.
 
 The worker is created once, uses a fixed 4096-byte stack, services at most one
 received datagram every 20 milliseconds, and does not access sensors or mutate
-connectivity state. The main loop and worker serialize responder access with a
-mutex. Multicast UDP uses port 5353 and `224.0.0.251` on the current IPv4 interface,
+connectivity state. The HTTP worker and mDNS worker serialize responder access
+with a mutex. Multicast UDP uses port 5353 and `224.0.0.251` on the current IPv4 interface,
 nonblocking sockets, a 1536-byte receive buffer, and a 512-byte send buffer.
 Oversized packets are discarded rather than passed partially to the parser.
 
@@ -305,6 +318,12 @@ The sensor read succeeds only when all three driver calls return zero:
 - HTS221 relative humidity
 - LPS22HB pressure
 
+HTTP and cloud callers may build payloads concurrently. `TelemetryService::read`
+serializes the three sensor driver calls with an instance-owned mutex, then
+releases it before formatting or network I/O. Each caller has its own reading
+and response/payload storage. `begin()` must complete before the HTTP worker
+starts; device identity and sensor initialization are not mutated afterward.
+
 The emitted JSON shape is:
 
 ```json
@@ -319,7 +338,8 @@ The emitted JSON shape is:
 All measurements are JSON numbers with exactly one decimal digit. Before
 formatting, readings are checked against the ingestion contract: temperature
 must be -50 to 100 degrees Celsius, humidity 0 to 100 percent, and pressure
-300 to 1200 hPa. The payload is built in a fixed 160-byte buffer.
+300 to 1200 hPa. Cloud upload uses a fixed 160-byte payload buffer; the generic
+HTTP engine supplies its own 512-byte response buffer. Both use the same formatter.
 `buildPayload()` returns the byte length on success and one of these negative
 errors on failure:
 
@@ -335,22 +355,46 @@ than the buffer capacity.
 
 ## 9. Local HTTP Interface
 
-`LocalWebServer` owns one `WiFiServer` on port 80. Its lifecycle is driven by
-the current Wi-Fi state passed to every `poll()` call:
+### 9.1 Worker and Listener Ownership
 
-- On a connected-to-disconnected transition, `poll()` closes the server once.
-- On a disconnected-to-connected transition, `poll()` immediately calls Core
-  `begin()` and applies non-blocking mode.
-- AZ3166 Core `begin()` returns no status. While Wi-Fi remains connected, the
-  firmware therefore retries it at a bounded 5-second interval. A successful
-  listener takes the Core's idempotent fast path; a silent open, bind, or listen
-  failure cannot create a tight allocation and socket retry loop.
+`LocalWebServer` is a reusable HTTP engine with an injected `LocalHttpHandler`
+and an optional `LocalHttpServiceUpdate` callback/context. It does not include
+`AppConfig`, know the telemetry schema, or depend on discovery. The application
+selects port 80 and supplies `TelemetryHttpHandler` plus its mDNS callback.
 
-No separate `running_` flag is maintained because the AZ3166 `WiFiServer` API
-does not expose the actual listener state. An application-owned flag would
-describe requested state, not whether the socket successfully started.
+`update(wifiConnected, address)` publishes a mutex-protected desired state and
+starts one normal-priority RTOS worker when an address first becomes available.
+It does not poll clients or perform network I/O in the main loop. The worker
+uses a 6144-byte stack allocated at startup and is reused across reconnects.
 
-The current routing contract recognizes only a request line beginning with:
+- Only the HTTP worker creates, accepts, reads, writes, and closes HTTP sockets.
+- Startup uses lwIP `socket`, `bind`, and `listen` results directly, avoiding the
+  Core `WiFiServer::begin()` wrapper's silent failures. A successful listener is
+  not reopened periodically. This reports socket readiness, not a guarantee of
+  network reachability.
+- Startup and accept failures retry at a bounded five-second interval, measured
+  from completion. A new requested address resets the retry delay.
+- A generation counter detects address changes and disconnect/reconnect pairs,
+  even if Wi-Fi returns to the same address before the next worker iteration.
+- An outdated startup result is closed without advertisement. Active I/O checks
+  the generation and aborts when connectivity changes; the main thread never
+  closes sockets that the worker owns.
+- `state()` returns worker startup, listener readiness, bound address, and the
+  last lifecycle error. A changed connectivity request immediately clears
+  published listener readiness while the worker performs cleanup.
+- The optional service callback runs on the worker, outside the state mutex,
+  after successful listener startup and while it remains ready. It receives an
+  unavailable state before listener shutdown or replacement. This permits mDNS
+  startup retries without depending on main-loop progress.
+- Destruction requests worker shutdown and joins it, closing remaining sockets.
+  Handler and callback dependencies must outlive the worker; neither may destroy
+  the server from its own thread. The handler must finish before shutdown can
+  complete.
+
+### 9.2 Protocol and Application Handler
+
+`TelemetryHttpHandler` owns the application's routing contract, recognizing only
+a request line beginning with:
 
 ```http
 GET /api/telemetry 
@@ -359,18 +403,25 @@ GET /api/telemetry
 The trailing space is part of the match and separates the path from the HTTP
 version. Other methods and paths are not routed to telemetry.
 
-The server handles one client at a time in `poll()`:
+The HTTP worker handles one client at a time, using nonblocking socket readiness
+checks and short RTOS waits when I/O cannot progress:
 
 - Request-line storage is fixed at 96 bytes.
-- Header reading ends at the first blank line.
-- A client may occupy request reading for at most 2 seconds.
-- Every response uses `Content-Type: application/json` and
-  `Connection: close`.
-- The telemetry route delegates payload construction and status selection to
-  `sendTelemetryResponse()`.
-- Every response branch calls `sendResponse()` before writing its serial log;
-  `sendResponse()` writes the common header and body through `sendHeader()` and
-  `sendBody()`.
+- Header reading ends at the first blank line, with a total limit of 2048 bytes.
+  Overlong request lines and embedded NUL bytes are rejected rather than truncated.
+- Header reading and response writing each have a two-second deadline, checked
+  with wraparound-safe elapsed-time arithmetic. A slow client does not hold a
+  sensor or shared state lock.
+- `LocalHttpHandler::handle()` receives the request line and a 512-byte response
+  buffer, and returns status, content type, and exact body byte count. Application
+  handlers can return text or binary data; returned metadata strings must remain
+  valid until the response is sent. Handler work itself must be bounded.
+- Telemetry uses `application/json`; custom handlers can choose other types.
+  Every response has an explicit `Content-Length` and `Connection: close`.
+- Partial writes are completed within the response deadline. Invalid body bounds
+  or null metadata produce a bounded `500` response.
+- Request bodies, persistent connections, and WebSockets are not implemented.
+- Responses are logged by status after transmission, without HTTP payload logging.
 - The client connection is closed after one response.
 
 | Condition | HTTP status | Body |
@@ -380,6 +431,7 @@ The server handles one client at a time in `poll()`:
 | Unknown route | `404 Not Found` | `{"error":"not found"}` |
 | Sensor read failure or invalid reading | `503 Service Unavailable` | `{"error":"sensor read failed"}` |
 | Payload formatting failure | `500 Internal Server Error` | `{"error":"payload formatting failed"}` |
+| Invalid handler metadata or body bounds | `500 Internal Server Error` | `{"error":"invalid response"}` |
 
 The local interface is plain HTTP and has no application authentication. Its
 security boundary is therefore the network to which the AZ3166 is connected.
@@ -591,8 +643,8 @@ compiles the nested vendored responder. Other suites retain their flat staging.
 | `ButtonControllerTests` | Button-to-event mapping, simultaneous events, and active-low behavior. |
 | `DeviceIdentityTests` | UID formatting, padding, invalid buffers, uninitialized fallback, internal storage, hardware initialization, and configured sizes. |
 | `TelemetryServiceTests` | Identity injection, JSON shape, rounding, ingestion-range validation, buffer errors, `dtostrf` regression, and onboard sensors. |
-| `LocalWebServerTests` | Route matching, unknown routes, retry configuration, and safe disconnected polling. |
-| `LocalDiscoveryTests` | Address lifecycle, retry timing, worker failure recovery, A/AAAA responses, service records, malformed queries, transport bounds, and repeated cleanup. |
+| `LocalWebServerTests` | Application response mapping, actual RTOS worker execution, listener readiness/retries, stale startup, reconnects, partial I/O, binary responses, bounds, deadlines, and cleanup. |
+| `LocalDiscoveryTests` | Caller-supplied metadata, address lifecycle, retry timing, worker failure recovery, A/AAAA responses, service records, malformed queries, transport bounds, and repeated cleanup. |
 | `UploadSchedulerTests` | Initial upload, typed outcomes, pause, manual upload, retry, non-retryable suppression, recovery, and wraparound. |
 | `CloudTelemetryTests` | API-key validation, request fields, typed network/HTTP outcomes, HTTP 201 success, and HTTP 422 retry. |
 | `CloudUploadControllerTests` | Readiness gates, pause/manual behavior, completion-time retry, HTTP 422 automatic recovery, non-retryable suppression, and manual recovery. |
@@ -603,6 +655,8 @@ The main test seams are function tables and function pointers rather than a
 general mocking framework:
 
 - `ConnectivityOperations` replaces clock, Wi-Fi, address reads, and NTP calls.
+- `LocalWebServerOperations` replaces clock and nonblocking socket operations while tests run the real worker; fake state is protected across threads.
+- `TelemetryHttpPayloadBuilder` replaces telemetry acquisition in HTTP response-contract tests.
 - `LocalDiscoveryOperations` replaces clock, responder startup/shutdown, and health checks.
 - `MdnsTransport` lets protocol tests capture datagrams without using real Wi-Fi.
 - `CloudTelemetryOperations` replaces HTTPS send behavior.
@@ -616,6 +670,10 @@ general mocking framework:
 - The firmware serves one local client at a time.
 - Local HTTP is unauthenticated and unencrypted.
 - Wi-Fi, NTP, and HTTPS platform calls are synchronous.
+- HTTP and mDNS are independent of cloud waits, but buttons and connectivity
+  maintenance still run in the main loop and can wait for a synchronous upload.
+  The watchdog is still fed by that loop; arbitrary blocking HTTP handlers are
+  not independently recovered by a worker watchdog.
 - Scheduling state is held only in RAM and resets on reboot.
 - A telemetry operation performs one sensor-read attempt; it has no internal
   sensor retry loop.
