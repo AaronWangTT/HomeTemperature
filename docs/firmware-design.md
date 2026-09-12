@@ -142,6 +142,40 @@ Focused test sketches and staging scripts live separately under `firmware/tests/
 | Core compatibility | `firmware/AZ3166/src/platform/FloatFormatting.cpp` | Replaces the defective AZ3166 Core `dtostrf` implementation. |
 | SDK behavior | `firmware/AZ3166/src/platform/disable_system_telemetry.cpp` | Replaces SDK system telemetry hooks with no-op definitions. |
 
+### 4.1 Injected Operations Interfaces
+
+The platform-operation types are abstract interfaces with pure virtual methods
+and virtual destructors. Their original names and operation signatures are
+retained:
+
+| Interface | Consumer | Default implementation |
+| --- | --- | --- |
+| `ConnectivityOperations` | `ConnectivityManager` | `Az3166ConnectivityOperations` |
+| `LocalDiscoveryOperations` | `LocalDiscovery` | `Az3166LocalDiscoveryOperations` |
+| `LocalWebServerOperations` | `LocalWebServer` | `Az3166LocalWebServerOperations` |
+| `CloudTelemetryOperations` | `CloudTelemetry` | `Az3166CloudTelemetryOperations` |
+
+Each consumer stores a non-owning, non-const reference to its injected backend.
+It does not copy, allocate, or delete that backend, and a temporary backend
+cannot be passed to the injected constructor. The caller must keep the backend
+and any state it borrows alive until the consumer is destroyed. For HTTP, that
+includes the worker shutdown and join performed by the server's destructor.
+
+The convenience constructors still select internal, process-lifetime AZ3166
+adapters. Selecting these implementations requires no heap allocation or RTTI.
+The adapters call the same platform APIs as before; the discovery default still
+uses one shared mDNS responder per device, not one responder per controller.
+
+Interfaces allow stateful implementations and independent test fixtures, but do
+not provide synchronization. HTTP's `currentTime()` may be called by both the
+main loop and HTTP worker; its socket methods run on the worker and must retain
+the nonblocking contract. Stateful injected backends must synchronize shared
+state as appropriate. Connectivity and cloud calls remain synchronous.
+
+Single-function hooks remain callbacks, including upload clocks, payload
+builders, cloud response handlers, and the typed HTTP service notification.
+`LocalHttpHandler` and `MdnsTransport` were already interfaces and are unchanged.
+
 ## 5. Startup and Main Loop
 
 ### 5.1 Startup
@@ -226,9 +260,23 @@ After Wi-Fi connects, the manager checks whether the platform already has
 synchronized time. If it does not, NTP synchronization is retried every 60
 seconds. Losing Wi-Fi also clears the cached synchronized state.
 
-`ConnectivityOperations` is a function table for current time, Wi-Fi, local IPv4
-address reads, and NTP operations. Production uses AZ3166 platform functions;
-tests inject deterministic operations without changing the state machine.
+`ConnectivityOperations` is an abstract interface for current time, Wi-Fi, local
+IPv4 address reads, and NTP operations. Its seven methods are pure virtual, with
+a virtual destructor; the original type and operation names are retained.
+
+The four-argument `ConnectivityManager` constructor uses an internal
+`Az3166ConnectivityOperations` implementation with process lifetime, forwarding
+to the same AZ3166 platform functions. The injected constructor accepts a
+non-const `ConnectivityOperations&` and stores a non-owning reference, not a
+copy. The supplied implementation must outlive the manager; the manager neither
+allocates nor deletes it. Implementations can own their state without global
+test variables, and selecting a backend requires no heap allocation or RTTI.
+
+Tests derive a stateful fake from the interface and construct it before each
+manager. Clocks, connection results, addresses, and call counters belong to each
+fake instance. The interface changes dependency injection only: Wi-Fi/NTP calls
+remain synchronous, the state machine is unchanged, and no thread safety is
+implied by virtual dispatch.
 
 ### 6.3 Local IPv4 State
 
@@ -540,8 +588,17 @@ validation response must not permanently suppress scheduled uploads. HTTP
 status codes are retained as result detail, and a non-success response body is
 written to serial output when present.
 
-`CloudTelemetryOperations` provides an injectable send function. This keeps
-HTTP status and request-contract tests independent of the real TLS transport.
+`CloudTelemetryOperations` provides an injectable `send()` method. The consumer
+borrows the backend by reference; a missing implementation is rejected by the
+abstract interface rather than represented by a null function pointer. A
+backend that cannot send must return a typed failure or disabled result.
+
+`send()` remains synchronous: request pointers are borrowed for the duration of
+the call, and any invocation of the supplied `CloudTelemetryResponseHandler`
+must occur while the response body is still valid. Request validation and
+response classification are unchanged. Tests inject stateful backends so each
+instance has its own captured request, response, and call count without using
+the real TLS transport.
 
 ## 11. Button Input
 
@@ -685,23 +742,29 @@ production and tests and allows Arduino to compile nested sources recursively.
 | `ButtonControllerTests` | Button-to-event mapping, simultaneous events, and active-low behavior. |
 | `DeviceIdentityTests` | UID formatting, padding, invalid buffers, uninitialized fallback, internal storage, hardware initialization, and configured sizes. |
 | `TelemetryServiceTests` | Identity injection, JSON shape, rounding, ingestion-range validation, buffer errors, `dtostrf` regression, and onboard sensors. |
-| `LocalWebServerTests` | Application response mapping, actual RTOS worker execution, listener readiness/retries, stale startup, reconnects, partial I/O, binary responses, bounds, deadlines, and cleanup. |
-| `LocalDiscoveryTests` | Caller-supplied metadata, address lifecycle, retry timing, worker failure recovery, A/AAAA responses, service records, malformed queries, transport bounds, and repeated cleanup. |
+| `LocalWebServerTests` | Interface contract and independent backends, application response mapping, actual RTOS worker execution, listener readiness/retries, stale startup, reconnects, partial I/O, binary responses, bounds, deadlines, and cleanup. |
+| `LocalDiscoveryTests` | Interface contract and independent backends, caller-supplied metadata, address lifecycle, retry timing, worker failure recovery, A/AAAA responses, service records, malformed queries, transport bounds, and repeated cleanup. |
 | `UploadSchedulerTests` | Initial upload, typed outcomes, pause, manual upload, retry, non-retryable suppression, recovery, and wraparound. |
-| `CloudTelemetryTests` | API-key validation, request fields, typed network/HTTP outcomes, HTTP 201 success, and HTTP 422 retry. |
+| `CloudTelemetryTests` | Interface contract and independent backends, API-key validation, request fields, typed network/HTTP outcomes, HTTP 201 success, and HTTP 422 retry. |
 | `CloudUploadControllerTests` | Readiness gates, pause/manual behavior, completion-time retry, HTTP 422 automatic recovery, non-retryable suppression, and manual recovery. |
-| `ConnectivityManagerTests` | Retry progression, blocking-attempt timing, IPv4 parsing and changes, disconnect/reconnect, NTP retry, and wraparound. |
+| `ConnectivityManagerTests` | Interface contract, independent injected instances, retry progression, blocking-attempt timing, IPv4 parsing and changes, disconnect/reconnect, NTP retry, and wraparound. |
 | `TelemetryUploaderTests` | Builder invocation, exact bytes and length, build failures, bounds, missing dependencies, and transport failure. |
 
-The main test seams are function tables and function pointers rather than a
-general mocking framework:
+Tests use small interfaces and single-function callbacks rather than a general
+mocking framework:
 
-- `ConnectivityOperations` replaces clock, Wi-Fi, address reads, and NTP calls.
-- `LocalWebServerOperations` replaces clock and nonblocking socket operations while tests run the real worker; fake state is protected across threads.
+- `ConnectivityOperations` is an injected interface replacing clock, Wi-Fi,
+  address reads, and NTP calls with instance-owned fake state.
+- `LocalWebServerOperations` injects clock and nonblocking socket behavior while
+  tests run the real worker. Each fake backend binds a fixture and its mutex and
+  semaphores; separate instances can drive separate workers. Large packet buffers
+  remain in static test storage rather than on the embedded test stack.
 - `TelemetryHttpPayloadBuilder` replaces telemetry acquisition in HTTP response-contract tests.
-- `LocalDiscoveryOperations` replaces clock, responder startup/shutdown, and health checks.
+- `LocalDiscoveryOperations` injects clock, responder startup/shutdown, and health
+  checks through a stateful fake implementation.
 - `MdnsTransport` lets protocol tests capture datagrams without using real Wi-Fi.
-- `CloudTelemetryOperations` replaces HTTPS send behavior.
+- `CloudTelemetryOperations` injects HTTPS send behavior into transport, uploader,
+  and upload-controller tests. Test backends are constructed before their consumers.
 - `CloudUploadClock` replaces the controller clock.
 - `TelemetryPayloadBuildFunction` replaces sensor and payload construction.
 - Pure or state-only entry points cover routing, scheduling, debouncing,

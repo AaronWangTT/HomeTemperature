@@ -7,35 +7,38 @@
 
 namespace {
 
-uint32_t platformCurrentTime() {
-    return millis();
-}
+class Az3166ConnectivityOperations : public ConnectivityOperations {
+public:
+    uint32_t currentTime() override {
+        return millis();
+    }
 
-bool platformIsWiFiConnected() {
-    return WiFi.status() == WL_CONNECTED;
-}
+    bool isWiFiConnected() override {
+        return WiFi.status() == WL_CONNECTED;
+    }
 
-void platformDisconnectWiFi() {
-    WiFi.disconnect();
-}
+    void disconnectWiFi() override {
+        WiFi.disconnect();
+    }
 
-bool platformConnectWiFi() {
-    return WiFi.begin() == WL_CONNECTED;
-}
+    bool connectWiFi() override {
+        return WiFi.begin() == WL_CONNECTED;
+    }
 
-bool platformIsTimeSynchronized() {
-    return IsTimeSynced() == 0;
-}
+    bool isTimeSynchronized() override {
+        return IsTimeSynced() == 0;
+    }
 
-void platformSynchronizeTime() {
-    SyncTime();
-}
+    void synchronizeTime() override {
+        SyncTime();
+    }
 
-uint32_t platformReadLocalIPv4Address() {
-    NetworkInterface *network = WiFiInterface();
-    return ConnectivityManager::parseLocalIPv4Address(
-        network == NULL ? NULL : network->get_ip_address());
-}
+    uint32_t readLocalIPv4Address() override {
+        NetworkInterface *network = WiFiInterface();
+        return ConnectivityManager::parseLocalIPv4Address(
+            network == NULL ? NULL : network->get_ip_address());
+    }
+};
 
 IPAddress toPlatformAddress(uint32_t address) {
     return IPAddress(
@@ -65,7 +68,7 @@ ConnectivityManager::ConnectivityManager(
     uint32_t wifiRetryInitialMs,
     uint32_t wifiRetryMaxMs,
     uint32_t ntpRetryIntervalMs,
-    const ConnectivityOperations &operations)
+    ConnectivityOperations &operations)
     : wifiStatusIntervalMs_(wifiStatusIntervalMs),
       wifiRetryInitialMs_(wifiRetryInitialMs),
       wifiRetryMaxMs_(wifiRetryMaxMs),
@@ -144,16 +147,8 @@ uint32_t ConnectivityManager::nextRetryDelay(
     return maximumDelay;
 }
 
-ConnectivityOperations ConnectivityManager::defaultOperations() {
-    ConnectivityOperations operations = {
-        platformCurrentTime,
-        platformIsWiFiConnected,
-        platformDisconnectWiFi,
-        platformConnectWiFi,
-        platformIsTimeSynchronized,
-        platformSynchronizeTime,
-        platformReadLocalIPv4Address
-    };
+ConnectivityOperations &ConnectivityManager::defaultOperations() {
+    static Az3166ConnectivityOperations operations;
     return operations;
 }
 

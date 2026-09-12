@@ -123,6 +123,14 @@ readiness, bound address, and the last lifecycle error. Calling
 `http.update(false, 0)` requests shutdown of the listener; the worker remains
 available for a later reconnect. Destroying the server joins its worker.
 
+To substitute the clock and socket implementation, derive from
+`LocalWebServerOperations` and pass the implementation by reference to the
+injected constructor. The server borrows this backend rather than copying or
+owning it, so it must outlive the server and its worker shutdown. Keep socket
+operations nonblocking and synchronize shared backend state: `currentTime()`
+can run on the main loop as well as the HTTP worker. The default constructor
+continues to use the internal process-lifetime AZ3166 backend.
+
 For discovery, pass an optional `LocalHttpServiceUpdate` to the constructor.
 This is a typed `mbed::Callback<void(bool, uint32_t)>`; bind discovery directly
 with `mbed::callback(&localDiscovery, &LocalDiscovery::update)`, without a wrapper

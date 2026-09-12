@@ -10,7 +10,14 @@ const char CONTENT_TYPE[] = "application/json";
 const char ACCEPT[] = "application/json";
 const char CONNECTION[] = "close";
 
-TelemetryUploadResult sendPlatformRequest(
+class Az3166CloudTelemetryOperations : public CloudTelemetryOperations {
+public:
+    TelemetryUploadResult send(
+        const CloudTelemetryRequest &request,
+        CloudTelemetryResponseHandler responseHandler) override;
+};
+
+TelemetryUploadResult Az3166CloudTelemetryOperations::send(
     const CloudTelemetryRequest &cloudRequest,
     CloudTelemetryResponseHandler responseHandler) {
     HTTPClient request(
@@ -48,11 +55,12 @@ TelemetryUploadResult sendPlatformRequest(
     return responseHandler(cloudResponse);
 }
 
-CloudTelemetryOperations platformOperations = {
-    sendPlatformRequest
-};
-
 }  // namespace
+
+CloudTelemetryOperations &CloudTelemetry::defaultOperations() {
+    static Az3166CloudTelemetryOperations operations;
+    return operations;
+}
 
 CloudTelemetry::CloudTelemetry(
     const char *endpoint,
@@ -64,7 +72,7 @@ CloudTelemetry::CloudTelemetry(
                     rootCertificate,
                     apiKey,
                     apiKeyPlaceholder,
-                    platformOperations) {
+                    defaultOperations()) {
 }
 
 CloudTelemetry::CloudTelemetry(
@@ -72,7 +80,7 @@ CloudTelemetry::CloudTelemetry(
         const char *rootCertificate,
         const char *apiKey,
         const char *apiKeyPlaceholder,
-        const CloudTelemetryOperations &operations)
+        CloudTelemetryOperations &operations)
     : endpoint_(endpoint),
       rootCertificate_(rootCertificate),
       apiKey_(apiKey),
@@ -104,11 +112,6 @@ TelemetryUploadResult CloudTelemetry::upload(
     if (payload == NULL || payloadLength == 0) {
         Serial.println("Cloud upload skipped: payload is empty");
         return {TELEMETRY_UPLOAD_PAYLOAD_INVALID, 0};
-    }
-
-    if (operations_.send == NULL) {
-        Serial.println("Cloud upload skipped: HTTPS transport is unavailable");
-        return {TELEMETRY_UPLOAD_DISABLED, 0};
     }
 
     Serial.print("Cloud telemetry JSON: ");

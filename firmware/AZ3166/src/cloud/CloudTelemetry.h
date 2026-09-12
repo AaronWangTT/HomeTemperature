@@ -28,10 +28,13 @@ struct CloudTelemetryResponse {
 typedef TelemetryUploadResult (*CloudTelemetryResponseHandler)(
     const CloudTelemetryResponse &response);
 
-struct CloudTelemetryOperations {
-    TelemetryUploadResult (*send)(
+class CloudTelemetryOperations {
+public:
+    virtual ~CloudTelemetryOperations() = default;
+
+    virtual TelemetryUploadResult send(
         const CloudTelemetryRequest &request,
-        CloudTelemetryResponseHandler responseHandler);
+        CloudTelemetryResponseHandler responseHandler) = 0;
 };
 
 class CloudTelemetry {
@@ -47,7 +50,7 @@ public:
         const char *rootCertificate,
         const char *apiKey,
         const char *apiKeyPlaceholder,
-        const CloudTelemetryOperations &operations);
+        CloudTelemetryOperations &operations);
 
     void begin() const;
     bool isConfigured() const;
@@ -63,6 +66,7 @@ public:
     static bool isRetryableStatus(int statusCode);
 
 private:
+    static CloudTelemetryOperations &defaultOperations();
     static TelemetryUploadResult handleResponse(
         const CloudTelemetryResponse &response);
 
@@ -70,7 +74,7 @@ private:
     const char *rootCertificate_;
     const char *apiKey_;
     const char *apiKeyPlaceholder_;
-    CloudTelemetryOperations operations_;
+    CloudTelemetryOperations &operations_;
 };
 
 #endif

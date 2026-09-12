@@ -10,11 +10,14 @@ struct LocalDiscoveryService {
     const char *txtRecord;
 };
 
-struct LocalDiscoveryOperations {
-    uint32_t (*currentTime)();
-    bool (*start)(uint32_t address, const LocalDiscoveryService &service);
-    void (*stop)();
-    bool (*isHealthy)();
+class LocalDiscoveryOperations {
+public:
+    virtual ~LocalDiscoveryOperations() = default;
+
+    virtual uint32_t currentTime() = 0;
+    virtual bool start(uint32_t address, const LocalDiscoveryService &service) = 0;
+    virtual void stop() = 0;
+    virtual bool isHealthy() = 0;
 };
 
 class LocalDiscovery {
@@ -23,16 +26,16 @@ public:
                    const LocalDiscoveryService &service);
     LocalDiscovery(uint32_t retryIntervalMs,
                    const LocalDiscoveryService &service,
-                   const LocalDiscoveryOperations &operations);
+                   LocalDiscoveryOperations &operations);
     void update(bool serviceAvailable, uint32_t address);
     bool isRunning() const;
 
 private:
-    static LocalDiscoveryOperations defaultOperations();
+    static LocalDiscoveryOperations &defaultOperations();
 
     uint32_t retryIntervalMs_;
     LocalDiscoveryService service_;
-    LocalDiscoveryOperations operations_;
+    LocalDiscoveryOperations &operations_;
     uint32_t requestedAddress_;
     uint32_t lastAttempt_;
     bool attempted_;

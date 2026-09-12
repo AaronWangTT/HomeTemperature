@@ -14,13 +14,29 @@ const char EXPECTED_PAYLOAD[] =
 
 int failureCount = 0;
 int builderCallCount = 0;
-int sendCallCount = 0;
 size_t capturedPayloadSize = 0;
-size_t capturedRequestLength = 0;
-char capturedRequestPayload[AppConfig::TELEMETRY_PAYLOAD_SIZE];
-TelemetryUploadResult fakeSendResult = {
-    TELEMETRY_UPLOAD_SUCCESS,
-    201
+
+class FakeCloudTelemetryOperations : public CloudTelemetryOperations {
+public:
+    int sendCallCount = 0;
+    size_t capturedRequestLength = 0;
+    char capturedRequestPayload[AppConfig::TELEMETRY_PAYLOAD_SIZE] = {};
+    TelemetryUploadResult fakeSendResult = {TELEMETRY_UPLOAD_SUCCESS, 201};
+
+    TelemetryUploadResult send(
+        const CloudTelemetryRequest &request,
+        CloudTelemetryResponseHandler) override {
+        ++sendCallCount;
+        capturedRequestLength = request.payloadLength;
+
+        size_t copyLength = request.payloadLength;
+        if (copyLength >= sizeof(capturedRequestPayload)) {
+            copyLength = sizeof(capturedRequestPayload) - 1;
+        }
+        memcpy(capturedRequestPayload, request.payload, copyLength);
+        capturedRequestPayload[copyLength] = '\0';
+        return fakeSendResult;
+    }
 };
 
 void expect(bool condition, const char *name) {
@@ -74,25 +90,7 @@ int buildOversizedPayload(
     return static_cast<int>(payloadSize);
 }
 
-TelemetryUploadResult sendFakeRequest(
-    const CloudTelemetryRequest &request,
-    CloudTelemetryResponseHandler) {
-    ++sendCallCount;
-    capturedRequestLength = request.payloadLength;
-
-    size_t copyLength = request.payloadLength;
-    if (copyLength >= sizeof(capturedRequestPayload)) {
-        copyLength = sizeof(capturedRequestPayload) - 1;
-    }
-    memcpy(capturedRequestPayload, request.payload, copyLength);
-    capturedRequestPayload[copyLength] = '\0';
-    return fakeSendResult;
-}
-
-CloudTelemetry createCloudTelemetry() {
-    CloudTelemetryOperations operations = {
-        sendFakeRequest
-    };
+CloudTelemetry createCloudTelemetry(CloudTelemetryOperations &operations) {
     return CloudTelemetry(
         "https://example.test/api/telemetry",
         "test-certificate",
@@ -103,17 +101,13 @@ CloudTelemetry createCloudTelemetry() {
 
 void resetFakes() {
     builderCallCount = 0;
-    sendCallCount = 0;
     capturedPayloadSize = 0;
-    capturedRequestLength = 0;
-    capturedRequestPayload[0] = '\0';
-    fakeSendResult.status = TELEMETRY_UPLOAD_SUCCESS;
-    fakeSendResult.detailCode = 201;
 }
 
 void testSuccessfulUpload() {
     resetFakes();
-    CloudTelemetry cloudTelemetry = createCloudTelemetry();
+    FakeCloudTelemetryOperations operations;
+    CloudTelemetry cloudTelemetry = createCloudTelemetry(operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildSuccessfulPayload);
@@ -125,17 +119,18 @@ void testSuccessfulUpload() {
            "upload builds one telemetry payload");
     expect(capturedPayloadSize == AppConfig::TELEMETRY_PAYLOAD_SIZE,
            "upload provides the configured payload capacity");
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "valid payload performs one cloud request");
-    expect(capturedRequestLength == strlen(EXPECTED_PAYLOAD),
+    expect(operations.capturedRequestLength == strlen(EXPECTED_PAYLOAD),
            "upload preserves the generated payload length");
-    expect(strcmp(capturedRequestPayload, EXPECTED_PAYLOAD) == 0,
+    expect(strcmp(operations.capturedRequestPayload, EXPECTED_PAYLOAD) == 0,
            "upload preserves the generated payload bytes");
 }
 
 void testPayloadFailures() {
     resetFakes();
-    CloudTelemetry cloudTelemetry = createCloudTelemetry();
+    FakeCloudTelemetryOperations operations;
+    CloudTelemetry cloudTelemetry = createCloudTelemetry(operations);
 
     TelemetryUploader sensorFailure(
         cloudTelemetry,
@@ -143,7 +138,7 @@ void testPayloadFailures() {
     expect(sensorFailure.upload().status ==
                TELEMETRY_UPLOAD_SENSOR_UNAVAILABLE,
            "sensor error fails before cloud transport");
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "sensor error performs no cloud request");
 
     TelemetryUploader formatFailure(
@@ -152,7 +147,7 @@ void testPayloadFailures() {
     expect(formatFailure.upload().status ==
                TELEMETRY_UPLOAD_PAYLOAD_INVALID,
            "format error fails before cloud transport");
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "format error performs no cloud request");
 
     TelemetryUploader emptyPayload(
@@ -161,7 +156,7 @@ void testPayloadFailures() {
     expect(emptyPayload.upload().status ==
                TELEMETRY_UPLOAD_PAYLOAD_INVALID,
            "zero-length payload fails before cloud transport");
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "zero-length payload performs no cloud request");
 
     TelemetryUploader oversizedPayload(
@@ -170,26 +165,28 @@ void testPayloadFailures() {
     expect(oversizedPayload.upload().status ==
                TELEMETRY_UPLOAD_PAYLOAD_INVALID,
            "oversized payload fails before cloud transport");
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "oversized payload performs no cloud request");
 }
 
 void testMissingBuilder() {
     resetFakes();
-    CloudTelemetry cloudTelemetry = createCloudTelemetry();
+    FakeCloudTelemetryOperations operations;
+    CloudTelemetry cloudTelemetry = createCloudTelemetry(operations);
     TelemetryUploader uploader(cloudTelemetry, NULL);
 
     expect(uploader.upload().status == TELEMETRY_UPLOAD_DISABLED,
            "missing payload builder fails safely");
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "missing builder performs no cloud request");
 }
 
 void testCloudFailure() {
     resetFakes();
-    fakeSendResult.status = TELEMETRY_UPLOAD_NETWORK_ERROR;
-    fakeSendResult.detailCode = -3001;
-    CloudTelemetry cloudTelemetry = createCloudTelemetry();
+    FakeCloudTelemetryOperations operations;
+    operations.fakeSendResult.status = TELEMETRY_UPLOAD_NETWORK_ERROR;
+    operations.fakeSendResult.detailCode = -3001;
+    CloudTelemetry cloudTelemetry = createCloudTelemetry(operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildSuccessfulPayload);
@@ -201,7 +198,7 @@ void testCloudFailure() {
            "cloud transport detail code is preserved");
     expect(builderCallCount == 1,
            "cloud failure occurs after payload construction");
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "cloud failure follows one request attempt");
 }
 

@@ -7,6 +7,14 @@
 
 namespace {
 
+class Az3166LocalDiscoveryOperations : public LocalDiscoveryOperations {
+public:
+    uint32_t currentTime() override;
+    bool start(uint32_t address, const LocalDiscoveryService &service) override;
+    void stop() override;
+    bool isHealthy() override;
+};
+
 MdnsUdpTransport transport;
 MDNS responder(transport);
 rtos::Mutex responderMutex;
@@ -33,11 +41,12 @@ void serviceDiscovery() {
     }
 }
 
-uint32_t platformCurrentTime() {
+uint32_t Az3166LocalDiscoveryOperations::currentTime() {
     return millis();
 }
 
-bool platformStart(uint32_t address, const LocalDiscoveryService &service) {
+bool Az3166LocalDiscoveryOperations::start(
+    uint32_t address, const LocalDiscoveryService &service) {
     if (service.hostname == NULL || service.hostname[0] == '\0' ||
         service.serviceName == NULL || service.serviceName[0] == '\0' ||
         service.port == 0) {
@@ -67,7 +76,7 @@ bool platformStart(uint32_t address, const LocalDiscoveryService &service) {
     return started;
 }
 
-void platformStop() {
+void Az3166LocalDiscoveryOperations::stop() {
     responderMutex.lock();
     responderRunning = false;
     followupPending = false;
@@ -75,7 +84,7 @@ void platformStop() {
     responderMutex.unlock();
 }
 
-bool platformIsHealthy() {
+bool Az3166LocalDiscoveryOperations::isHealthy() {
     responderMutex.lock();
     bool healthy = responderRunning;
     responderMutex.unlock();
@@ -93,7 +102,7 @@ LocalDiscovery::LocalDiscovery(
 LocalDiscovery::LocalDiscovery(
     uint32_t retryIntervalMs,
         const LocalDiscoveryService &service,
-    const LocalDiscoveryOperations &operations)
+    LocalDiscoveryOperations &operations)
     : retryIntervalMs_(retryIntervalMs),
             service_(service),
       operations_(operations),
@@ -103,10 +112,8 @@ LocalDiscovery::LocalDiscovery(
       running_(false) {
 }
 
-LocalDiscoveryOperations LocalDiscovery::defaultOperations() {
-    LocalDiscoveryOperations operations = {
-        platformCurrentTime, platformStart, platformStop, platformIsHealthy
-    };
+LocalDiscoveryOperations &LocalDiscovery::defaultOperations() {
+    static Az3166LocalDiscoveryOperations operations;
     return operations;
 }
 
