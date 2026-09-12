@@ -64,6 +64,8 @@ ConnectivityManager connectivity(
 // Reliability
 WatchdogController watchdog(AppConfig::WATCHDOG_TIMEOUT_MS);
 
+// Event handlers for button and connectivity events
+// Event driven as next step
 void handleButtonEvents(const ButtonEvents &events) {
     if (events.uploadRequested) {
         cloudUploads.requestManualUpload();
@@ -84,6 +86,7 @@ void handleConnectivityEvents(const ConnectivityEvents &events) {
     }
 }
 
+// Setup and main loop functions
 void setup() {
     Serial.begin(115200);
     while (!Serial);

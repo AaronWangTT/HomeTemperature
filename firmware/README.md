@@ -1,5 +1,10 @@
 # AZ3166 Firmware
 
+Component design and reuse guides live alongside the sources. Start with the
+[component directory](../README.md#reusable-firmware-components) for capabilities,
+embedding examples, dependency and lifetime contracts, and test entry points.
+The instructions below cover the shared toolchain and application setup.
+
 ## Supported Toolchain
 
 The checked configuration is:

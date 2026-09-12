@@ -32,15 +32,21 @@ responder is isolated in `discovery/mdns/`.
 
 | Capability | Components | What They Encapsulate |
 | --- | --- | --- |
-| Wi-Fi and time | `ConnectivityManager` | Connection state, reconnect backoff, IPv4 address changes, and NTP synchronization retries. |
-| Local discovery | `LocalDiscovery`, `MdnsUdpTransport` | Caller-supplied mDNS service metadata, address-aware restarts, and background query handling, coordinated with HTTP listener readiness. |
-| Sensor telemetry | `TelemetryService` | Serialized HTS221/LPS22HB acquisition, range validation, and bounded JSON formatting shared by local HTTP and cloud uploads. |
-| Local HTTP | `LocalWebServer`, `LocalHttpHandler` | A dedicated HTTP worker, verified listener startup, bounded request/response I/O, and an injectable application handler. `TelemetryHttpHandler` supplies this application's telemetry route. |
-| HTTPS delivery | `CloudTelemetry`, `TelemetryUploader` | Authenticated HTTPS transport, payload delivery, and typed sensor, network, and HTTP outcomes. |
-| Upload control | `UploadScheduler`, `CloudUploadController` | Periodic uploads, retry timing, manual requests, and pause/resume behavior. |
-| Button input | `ButtonDebouncer`, `ButtonController` | Active-low button sampling, debounce state, and one-shot application events. |
-| Device identity | `DeviceIdentity` | A stable identifier derived from the STM32 hardware UID. |
-| Watchdog recovery | `WatchdogController` | Watchdog setup, feeding, and reset-cause reporting. |
+| [Wi-Fi and time](firmware/AZ3166/src/connectivity/README.md) | `ConnectivityManager` | Connection state, reconnect backoff, IPv4 address changes, and NTP synchronization retries. |
+| [Local discovery](firmware/AZ3166/src/discovery/README.md) | `LocalDiscovery`, `MdnsUdpTransport` | Caller-supplied mDNS service metadata, address-aware restarts, and background query handling, coordinated with HTTP listener readiness. |
+| [Sensor telemetry](firmware/AZ3166/src/telemetry/README.md) | `TelemetryService` | Serialized HTS221/LPS22HB acquisition, range validation, and bounded JSON formatting shared by local HTTP and cloud uploads. |
+| [Local HTTP](firmware/AZ3166/src/http/README.md) | `LocalWebServer`, `LocalHttpHandler` | A dedicated HTTP worker, verified listener startup, bounded request/response I/O, and an injectable application handler. `TelemetryHttpHandler` supplies this application's telemetry route. |
+| [HTTPS delivery](firmware/AZ3166/src/cloud/README.md#cloudtelemetry) | `CloudTelemetry`, `TelemetryUploader` | Authenticated HTTPS transport, payload delivery, and typed sensor, network, and HTTP outcomes. |
+| [Upload control](firmware/AZ3166/src/cloud/README.md#uploadscheduler) | `UploadScheduler`, `CloudUploadController` | Periodic uploads, retry timing, manual requests, and pause/resume behavior. |
+| [Button input](firmware/AZ3166/src/input/README.md) | `ButtonDebouncer`, `ButtonController` | Active-low button sampling, debounce state, and one-shot application events. |
+| [Device identity](firmware/AZ3166/src/platform/README.md#deviceidentity) | `DeviceIdentity` | A stable identifier derived from the STM32 hardware UID. |
+| [Watchdog recovery](firmware/AZ3166/src/platform/README.md#watchdogcontroller) | `WatchdogController` | Watchdog setup, feeding, and reset-cause reporting. |
+
+Each guide covers capabilities, design, embedding examples, ownership, limits,
+and focused verification. The [configuration guide](firmware/AZ3166/src/config/README.md)
+describes application constants and safe deployment setup; the
+[platform guide](firmware/AZ3166/src/platform/README.md) also explains the SDK
+compatibility overrides.
 
 ### Built for Adaptation and Testing
 
