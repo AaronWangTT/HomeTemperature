@@ -15,6 +15,8 @@ static const char TELEMETRY_REQUEST[] = "GET /api/telemetry ";
 static const size_t TELEMETRY_PAYLOAD_SIZE = 160;
 static const uint16_t LOCAL_TELEMETRY_PORT = 80;
 static const unsigned long LOCAL_WEB_SERVER_RETRY_INTERVAL_MS = 5000UL;
+static const char LOCAL_HOSTNAME[] = "az3166";
+static const unsigned long LOCAL_DISCOVERY_RETRY_INTERVAL_MS = 5000UL;
 
 static const float TELEMETRY_MIN_TEMPERATURE_C = -50.0f;
 static const float TELEMETRY_MAX_TEMPERATURE_C = 100.0f;

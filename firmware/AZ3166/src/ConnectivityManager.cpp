@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <AZ3166WiFi.h>
 #include "SystemTime.h"
+#include "SystemWiFi.h"
 
 namespace {
 
@@ -28,6 +29,20 @@ bool platformIsTimeSynchronized() {
 
 void platformSynchronizeTime() {
     SyncTime();
+}
+
+uint32_t platformReadLocalIPv4Address() {
+    NetworkInterface *network = WiFiInterface();
+    return ConnectivityManager::parseLocalIPv4Address(
+        network == NULL ? NULL : network->get_ip_address());
+}
+
+IPAddress toPlatformAddress(uint32_t address) {
+    return IPAddress(
+        static_cast<uint8_t>(address >> 24),
+        static_cast<uint8_t>(address >> 16),
+        static_cast<uint8_t>(address >> 8),
+        static_cast<uint8_t>(address));
 }
 
 }  // namespace
@@ -58,6 +73,7 @@ ConnectivityManager::ConnectivityManager(
       operations_(operations),
       wifiConnected_(false),
       timeSynchronized_(false),
+    localIPv4Address_(0),
       lastWiFiStatusCheck_(0),
       lastWiFiAttempt_(0),
       wifiRetryDelay_(0),
@@ -65,7 +81,7 @@ ConnectivityManager::ConnectivityManager(
 }
 
 ConnectivityEvents ConnectivityManager::update() {
-    ConnectivityEvents events = {false, false, false};
+    ConnectivityEvents events = {};
     maintainWiFi(events);
     maintainTimeSynchronization(events);
     return events;
@@ -79,14 +95,31 @@ bool ConnectivityManager::isTimeSynchronized() const {
     return timeSynchronized_;
 }
 
+uint32_t ConnectivityManager::localIPv4Address() const {
+    return localIPv4Address_;
+}
+
+uint32_t ConnectivityManager::parseLocalIPv4Address(
+    const char *addressText) {
+    IPAddress address;
+    if (addressText == NULL || !address.fromString(addressText)) {
+        return 0;
+    }
+
+    return (static_cast<uint32_t>(address[0]) << 24) |
+        (static_cast<uint32_t>(address[1]) << 16) |
+        (static_cast<uint32_t>(address[2]) << 8) |
+        static_cast<uint32_t>(address[3]);
+}
+
 void ConnectivityManager::printLocalHttpEndpoint(
     const char *path) const {
-    if (!wifiConnected_ || path == NULL) {
+    if (!wifiConnected_ || localIPv4Address_ == 0 || path == NULL) {
         return;
     }
 
     Serial.print("Telemetry endpoint: http://");
-    Serial.print(WiFi.localIP());
+    Serial.print(toPlatformAddress(localIPv4Address_));
     Serial.println(path);
 }
 
@@ -118,7 +151,8 @@ ConnectivityOperations ConnectivityManager::defaultOperations() {
         platformDisconnectWiFi,
         platformConnectWiFi,
         platformIsTimeSynchronized,
-        platformSynchronizeTime
+        platformSynchronizeTime,
+        platformReadLocalIPv4Address
     };
     return operations;
 }
@@ -133,6 +167,7 @@ void ConnectivityManager::maintainWiFi(ConnectivityEvents &events) {
 
         lastWiFiStatusCheck_ = now;
         if (operations_.isWiFiConnected()) {
+            setLocalIPv4Address(operations_.readLocalIPv4Address(), events);
             return;
         }
 
@@ -140,6 +175,7 @@ void ConnectivityManager::maintainWiFi(ConnectivityEvents &events) {
         wifiConnected_ = false;
         timeSynchronized_ = false;
         wifiRetryDelay_ = 0;
+        setLocalIPv4Address(0, events);
         events.wifiDisconnected = true;
         return;
     }
@@ -165,6 +201,7 @@ void ConnectivityManager::attemptWiFiConnection(
 
     wifiConnected_ = false;
     timeSynchronized_ = false;
+    setLocalIPv4Address(0, events);
     lastWiFiAttempt_ = operations_.currentTime();
     scheduleWiFiRetry();
 }
@@ -178,17 +215,27 @@ void ConnectivityManager::handleWiFiConnected(
     lastWiFiStatusCheck_ = now;
     lastNtpAttempt_ = now;
     timeSynchronized_ = operations_.isTimeSynchronized();
+    setLocalIPv4Address(operations_.readLocalIPv4Address(), events);
 
     printConnectionDetails();
     events.wifiConnected = true;
     events.timeSynchronized = timeSynchronized_;
 }
 
+void ConnectivityManager::setLocalIPv4Address(
+    uint32_t address,
+    ConnectivityEvents &events) {
+    if (address != localIPv4Address_) {
+        localIPv4Address_ = address;
+        events.localAddressChanged = true;
+    }
+}
+
 void ConnectivityManager::printConnectionDetails() const {
     Serial.print("Connected to Wi-Fi: ");
     Serial.print(WiFi.SSID());
     Serial.print(". IP address: ");
-    Serial.println(WiFi.localIP());
+    Serial.println(toPlatformAddress(localIPv4Address_));
 }
 
 void ConnectivityManager::scheduleWiFiRetry() {

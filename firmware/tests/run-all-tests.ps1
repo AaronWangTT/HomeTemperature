@@ -21,6 +21,7 @@ $runners = @(
     "run-device-identity-tests.ps1",
     "run-telemetry-service-tests.ps1",
     "run-local-web-server-tests.ps1",
+    "run-local-discovery-tests.ps1",
     "run-upload-scheduler-tests.ps1",
     "run-cloud-telemetry-tests.ps1",
     "run-cloud-upload-controller-tests.ps1",
