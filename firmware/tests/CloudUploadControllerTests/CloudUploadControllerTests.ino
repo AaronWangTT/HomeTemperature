@@ -14,10 +14,27 @@ const char PLACEHOLDER_API_KEY[] =
 
 int failureCount;
 int builderCallCount;
-int sendCallCount;
 uint32_t fakeNow;
-uint32_t fakeCompletionTime;
-TelemetryUploadResult fakeUploadResult;
+
+class FakeCloudTelemetryOperations : public CloudTelemetryOperations {
+public:
+    explicit FakeCloudTelemetryOperations(uint32_t &clock) : clock_(clock) {}
+
+    int sendCallCount = 0;
+    uint32_t fakeCompletionTime = 0;
+    TelemetryUploadResult fakeUploadResult = {TELEMETRY_UPLOAD_SUCCESS, 201};
+
+    TelemetryUploadResult send(
+        const CloudTelemetryRequest &,
+        CloudTelemetryResponseHandler) override {
+        ++sendCallCount;
+        clock_ = fakeCompletionTime;
+        return fakeUploadResult;
+    }
+
+private:
+    uint32_t &clock_;
+};
 
 void expect(bool condition, const char *name) {
     Serial.print(condition ? "PASS: " : "FAIL: ");
@@ -43,18 +60,7 @@ int buildFakePayload(char *payload, size_t payloadSize) {
     return 2;
 }
 
-TelemetryUploadResult sendFakeRequest(
-    const CloudTelemetryRequest &,
-    CloudTelemetryResponseHandler) {
-    ++sendCallCount;
-    fakeNow = fakeCompletionTime;
-    return fakeUploadResult;
-}
-
-CloudTelemetry createCloudTelemetry(const char *apiKey) {
-    CloudTelemetryOperations operations = {
-        sendFakeRequest
-    };
+CloudTelemetry createCloudTelemetry(const char *apiKey, CloudTelemetryOperations &operations) {
     return CloudTelemetry(
         "https://example.test/api/telemetry",
         "test-certificate",
@@ -71,18 +77,15 @@ UploadScheduler createScheduler() {
 
 void resetFakes() {
     builderCallCount = 0;
-    sendCallCount = 0;
     fakeNow = 0;
-    fakeCompletionTime = 0;
-    fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
-    fakeUploadResult.detailCode = 201;
 }
 
 void testPrerequisitesGateStartupUpload() {
     resetFakes();
+    FakeCloudTelemetryOperations operations(fakeNow);
     UploadScheduler scheduler = createScheduler();
     CloudTelemetry cloudTelemetry =
-        createCloudTelemetry(VALID_API_KEY);
+        createCloudTelemetry(VALID_API_KEY, operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildFakePayload);
@@ -92,25 +95,26 @@ void testPrerequisitesGateStartupUpload() {
         readFakeClock);
 
     fakeNow = 1000;
-    fakeCompletionTime = 2000;
+    operations.fakeCompletionTime = 2000;
     controller.update(false);
     expect(builderCallCount == 0,
            "offline state does not build a payload");
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "offline state does not call cloud transport");
 
     controller.update(true);
     expect(builderCallCount == 1,
            "ready state builds the startup payload");
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "ready state performs the startup upload");
 }
 
 void testManualUploadWaitsForPrerequisites() {
     resetFakes();
+    FakeCloudTelemetryOperations operations(fakeNow);
     UploadScheduler scheduler = createScheduler();
     CloudTelemetry cloudTelemetry =
-        createCloudTelemetry(VALID_API_KEY);
+        createCloudTelemetry(VALID_API_KEY, operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildFakePayload);
@@ -125,27 +129,28 @@ void testManualUploadWaitsForPrerequisites() {
            "configured controller queues a manual upload");
 
     fakeNow = 5000;
-    fakeCompletionTime = 6000;
+    operations.fakeCompletionTime = 6000;
     controller.update(false);
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "offline manual request remains pending");
 
     controller.update(true);
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "pending manual request runs when ready");
 
     fakeNow =
-        fakeCompletionTime + AppConfig::CLOUD_UPLOAD_INTERVAL_MS;
+        operations.fakeCompletionTime + AppConfig::CLOUD_UPLOAD_INTERVAL_MS;
     controller.update(true);
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "pause still suppresses scheduled uploads after manual success");
 }
 
 void testUnconfiguredUploadIsRejected() {
     resetFakes();
+    FakeCloudTelemetryOperations operations(fakeNow);
     UploadScheduler scheduler = createScheduler();
     CloudTelemetry cloudTelemetry =
-        createCloudTelemetry("short-key");
+        createCloudTelemetry("short-key", operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildFakePayload);
@@ -159,15 +164,16 @@ void testUnconfiguredUploadIsRejected() {
     controller.update(true);
     expect(builderCallCount == 0,
            "unconfigured controller does not build a payload");
-    expect(sendCallCount == 0,
+    expect(operations.sendCallCount == 0,
            "unconfigured controller does not call transport");
 }
 
 void testRetryDelayStartsAtCompletion() {
     resetFakes();
+    FakeCloudTelemetryOperations operations(fakeNow);
     UploadScheduler scheduler = createScheduler();
     CloudTelemetry cloudTelemetry =
-        createCloudTelemetry(VALID_API_KEY);
+        createCloudTelemetry(VALID_API_KEY, operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildFakePayload);
@@ -177,36 +183,37 @@ void testRetryDelayStartsAtCompletion() {
         readFakeClock);
 
     fakeNow = 1000;
-    fakeCompletionTime = 21000;
-    fakeUploadResult.status = TELEMETRY_UPLOAD_NETWORK_ERROR;
-    fakeUploadResult.detailCode = -3001;
+    operations.fakeCompletionTime = 21000;
+    operations.fakeUploadResult.status = TELEMETRY_UPLOAD_NETWORK_ERROR;
+    operations.fakeUploadResult.detailCode = -3001;
     controller.update(true);
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "retryable failure performs one upload attempt");
     expect(fakeNow == 21000,
            "fake upload advances time to completion");
 
-    fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
-    fakeUploadResult.detailCode = 201;
+    operations.fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
+    operations.fakeUploadResult.detailCode = 201;
     fakeNow =
-        fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS - 1;
+        operations.fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS - 1;
     controller.update(true);
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "retry does not use the upload start time");
 
     fakeNow =
-        fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS;
-    fakeCompletionTime = fakeNow + 500;
+        operations.fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS;
+    operations.fakeCompletionTime = fakeNow + 500;
     controller.update(true);
-    expect(sendCallCount == 2,
+    expect(operations.sendCallCount == 2,
            "retry becomes due from the upload completion time");
 }
 
 void testHttp422RetriesAutomatically() {
     resetFakes();
+    FakeCloudTelemetryOperations operations(fakeNow);
     UploadScheduler scheduler = createScheduler();
     CloudTelemetry cloudTelemetry =
-        createCloudTelemetry(VALID_API_KEY);
+        createCloudTelemetry(VALID_API_KEY, operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildFakePayload);
@@ -216,41 +223,42 @@ void testHttp422RetriesAutomatically() {
         readFakeClock);
 
     fakeNow = 1000;
-    fakeCompletionTime = 2000;
+    operations.fakeCompletionTime = 2000;
     controller.update(true);
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "initial telemetry upload succeeds");
 
     fakeNow =
-        fakeCompletionTime + AppConfig::CLOUD_UPLOAD_INTERVAL_MS;
-    fakeCompletionTime = fakeNow + 1000;
-    fakeUploadResult.status = TELEMETRY_UPLOAD_HTTP_RETRYABLE;
-    fakeUploadResult.detailCode = 422;
+        operations.fakeCompletionTime + AppConfig::CLOUD_UPLOAD_INTERVAL_MS;
+    operations.fakeCompletionTime = fakeNow + 1000;
+    operations.fakeUploadResult.status = TELEMETRY_UPLOAD_HTTP_RETRYABLE;
+    operations.fakeUploadResult.detailCode = 422;
     controller.update(true);
-    expect(sendCallCount == 2,
+    expect(operations.sendCallCount == 2,
            "HTTP 422 records a retryable upload failure");
 
     fakeNow =
-        fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS - 1;
+        operations.fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS - 1;
     controller.update(true);
-    expect(sendCallCount == 2,
+    expect(operations.sendCallCount == 2,
            "HTTP 422 waits for the retry interval");
 
     fakeNow =
-        fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS;
-    fakeCompletionTime = fakeNow + 1000;
-    fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
-    fakeUploadResult.detailCode = 201;
+        operations.fakeCompletionTime + AppConfig::CLOUD_RETRY_INTERVAL_MS;
+    operations.fakeCompletionTime = fakeNow + 1000;
+    operations.fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
+    operations.fakeUploadResult.detailCode = 201;
     controller.update(true);
-    expect(sendCallCount == 3,
+    expect(operations.sendCallCount == 3,
            "HTTP 422 retries without requiring Button A");
 }
 
 void testNonRetryableFailureRequiresManualRecovery() {
     resetFakes();
+    FakeCloudTelemetryOperations operations(fakeNow);
     UploadScheduler scheduler = createScheduler();
     CloudTelemetry cloudTelemetry =
-        createCloudTelemetry(VALID_API_KEY);
+        createCloudTelemetry(VALID_API_KEY, operations);
     TelemetryUploader uploader(
         cloudTelemetry,
         buildFakePayload);
@@ -260,34 +268,34 @@ void testNonRetryableFailureRequiresManualRecovery() {
         readFakeClock);
 
     fakeNow = 1000;
-    fakeCompletionTime = 2000;
-    fakeUploadResult.status = TELEMETRY_UPLOAD_HTTP_REJECTED;
-    fakeUploadResult.detailCode = 401;
+    operations.fakeCompletionTime = 2000;
+    operations.fakeUploadResult.status = TELEMETRY_UPLOAD_HTTP_REJECTED;
+    operations.fakeUploadResult.detailCode = 401;
     controller.update(true);
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "HTTP rejection performs one upload attempt");
 
     fakeNow =
-        fakeCompletionTime +
+        operations.fakeCompletionTime +
         (2 * AppConfig::CLOUD_UPLOAD_INTERVAL_MS);
     controller.update(true);
-    expect(sendCallCount == 1,
+    expect(operations.sendCallCount == 1,
            "HTTP rejection suppresses scheduled retries");
 
     expect(controller.requestManualUpload(),
            "manual request can probe recovery after rejection");
-    fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
-    fakeUploadResult.detailCode = 201;
-    fakeCompletionTime = fakeNow + 1000;
+    operations.fakeUploadResult.status = TELEMETRY_UPLOAD_SUCCESS;
+    operations.fakeUploadResult.detailCode = 201;
+    operations.fakeCompletionTime = fakeNow + 1000;
     controller.update(true);
-    expect(sendCallCount == 2,
+    expect(operations.sendCallCount == 2,
            "manual recovery request performs a new upload");
 
     fakeNow =
-        fakeCompletionTime + AppConfig::CLOUD_UPLOAD_INTERVAL_MS;
-    fakeCompletionTime = fakeNow + 1000;
+        operations.fakeCompletionTime + AppConfig::CLOUD_UPLOAD_INTERVAL_MS;
+    operations.fakeCompletionTime = fakeNow + 1000;
     controller.update(true);
-    expect(sendCallCount == 3,
+    expect(operations.sendCallCount == 3,
            "manual success restores scheduled uploads");
 }
 

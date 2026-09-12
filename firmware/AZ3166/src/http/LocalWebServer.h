@@ -6,13 +6,16 @@
 #include "rtos.h"
 #include "LocalHttpHandler.h"
 
-struct LocalWebServerOperations {
-    uint32_t (*currentTime)();
-    int (*openListener)(uint32_t address, uint16_t port);
-    int (*acceptClient)(int listener);
-    int (*receiveBytes)(int client, char *buffer, size_t size);
-    int (*sendBytes)(int client, const char *buffer, size_t size);
-    void (*closeSocket)(int descriptor);
+class LocalWebServerOperations {
+public:
+    virtual ~LocalWebServerOperations() = default;
+
+    virtual uint32_t currentTime() = 0;
+    virtual int openListener(uint32_t address, uint16_t port) = 0;
+    virtual int acceptClient(int listener) = 0;
+    virtual int receiveBytes(int client, char *buffer, size_t size) = 0;
+    virtual int sendBytes(int client, const char *buffer, size_t size) = 0;
+    virtual void closeSocket(int descriptor) = 0;
 };
 
 struct LocalWebServerState {
@@ -39,7 +42,7 @@ public:
         LocalHttpHandler &handler,
         uint16_t port,
         uint32_t startRetryIntervalMs,
-        const LocalWebServerOperations &operations,
+        LocalWebServerOperations &operations,
         LocalHttpServiceUpdate serviceUpdate = LocalHttpServiceUpdate());
 
     ~LocalWebServer();
@@ -56,7 +59,7 @@ private:
 
     LocalWebServer(const LocalWebServer &) = delete;
     LocalWebServer &operator=(const LocalWebServer &) = delete;
-    static LocalWebServerOperations defaultOperations();
+    static LocalWebServerOperations &defaultOperations();
     RequestedState requestedState() const;
     bool isCurrent(uint32_t generation) const;
     bool publishState(uint32_t generation, uint32_t address, int error);
@@ -79,7 +82,7 @@ private:
     LocalHttpHandler &handler_;
     uint16_t port_;
     uint32_t startRetryIntervalMs_;
-    LocalWebServerOperations operations_;
+    LocalWebServerOperations &operations_;
     LocalHttpServiceUpdate serviceUpdate_;
     mutable rtos::Mutex stateMutex_;
     rtos::Thread worker_;

@@ -13,11 +13,21 @@ const size_t REQUEST_LINE_SIZE = 96;
 const size_t RESPONSE_BODY_SIZE = 512;
 const size_t MAX_HEADER_BYTES = 2048;
 
-uint32_t platformCurrentTime() {
+class Az3166LocalWebServerOperations : public LocalWebServerOperations {
+public:
+    uint32_t currentTime() override;
+    int openListener(uint32_t address, uint16_t port) override;
+    int acceptClient(int listener) override;
+    int receiveBytes(int client, char *buffer, size_t size) override;
+    int sendBytes(int client, const char *buffer, size_t size) override;
+    void closeSocket(int descriptor) override;
+};
+
+uint32_t Az3166LocalWebServerOperations::currentTime() {
     return millis();
 }
 
-void platformCloseSocket(int descriptor) {
+void Az3166LocalWebServerOperations::closeSocket(int descriptor) {
     lwip_close(descriptor);
 }
 
@@ -39,7 +49,7 @@ int socketReady(int descriptor, bool writing) {
                        writing ? &descriptors : NULL, NULL, &timeout);
 }
 
-int platformOpenListener(uint32_t address, uint16_t port) {
+int Az3166LocalWebServerOperations::openListener(uint32_t address, uint16_t port) {
     int descriptor = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (descriptor < 0) {
         return -1;
@@ -56,13 +66,13 @@ int platformOpenListener(uint32_t address, uint16_t port) {
         lwip_bind(descriptor, reinterpret_cast<sockaddr *>(&local),
                   sizeof(local)) != 0 ||
         lwip_listen(descriptor, 2) != 0) {
-        platformCloseSocket(descriptor);
+        closeSocket(descriptor);
         return -1;
     }
     return descriptor;
 }
 
-int platformAcceptClient(int listener) {
+int Az3166LocalWebServerOperations::acceptClient(int listener) {
     int ready = socketReady(listener, false);
     if (ready == 0) {
         return LocalWebServer::ACCEPT_IDLE;
@@ -78,13 +88,13 @@ int platformAcceptClient(int listener) {
     if (!setNonblocking(client) ||
         lwip_setsockopt(client, IPPROTO_TCP, TCP_NODELAY,
                        &noDelay, sizeof(noDelay)) != 0) {
-        platformCloseSocket(client);
+        closeSocket(client);
         return LocalWebServer::ACCEPT_IDLE;
     }
     return client;
 }
 
-int platformReceiveBytes(int client, char *buffer, size_t size) {
+int Az3166LocalWebServerOperations::receiveBytes(int client, char *buffer, size_t size) {
     int ready = socketReady(client, false);
     if (ready <= 0) {
         return ready;
@@ -93,7 +103,7 @@ int platformReceiveBytes(int client, char *buffer, size_t size) {
     return received > 0 ? received : -1;
 }
 
-int platformSendBytes(int client, const char *buffer, size_t size) {
+int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, size_t size) {
     int ready = socketReady(client, true);
     if (ready <= 0) {
         return ready;
@@ -116,7 +126,7 @@ LocalWebServer::LocalWebServer(
     LocalHttpHandler &handler,
     uint16_t port,
     uint32_t startRetryIntervalMs,
-    const LocalWebServerOperations &operations,
+    LocalWebServerOperations &operations,
     LocalHttpServiceUpdate serviceUpdate)
     : handler_(handler),
       port_(port),
@@ -140,11 +150,8 @@ LocalWebServer::~LocalWebServer() {
     }
 }
 
-LocalWebServerOperations LocalWebServer::defaultOperations() {
-    LocalWebServerOperations operations = {
-        platformCurrentTime, platformOpenListener, platformAcceptClient,
-        platformReceiveBytes, platformSendBytes, platformCloseSocket
-    };
+LocalWebServerOperations &LocalWebServer::defaultOperations() {
+    static Az3166LocalWebServerOperations operations;
     return operations;
 }
 

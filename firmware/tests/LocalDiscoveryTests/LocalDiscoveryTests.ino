@@ -1,48 +1,48 @@
 #include <Arduino.h>
 #include <string.h>
+#include <type_traits>
 
 #include "src/discovery/LocalDiscovery.h"
 #include "src/discovery/MdnsUdpTransport.h"
 #include "src/discovery/mdns/MDNS.h"
 
-uint32_t fakeNow = 0;
-uint32_t fakeStartDuration = 0;
-uint32_t lastStartedAddress = 0;
-LocalDiscoveryService lastStartedService = {};
-int startCount = 0;
-int stopCount = 0;
+static_assert(std::is_abstract<LocalDiscoveryOperations>::value,
+              "LocalDiscoveryOperations must remain an interface");
+static_assert(std::has_virtual_destructor<LocalDiscoveryOperations>::value,
+              "LocalDiscoveryOperations must have a virtual destructor");
+
+class FakeLocalDiscoveryOperations : public LocalDiscoveryOperations {
+public:
+    uint32_t fakeNow = 0;
+    uint32_t fakeStartDuration = 0;
+    uint32_t lastStartedAddress = 0;
+    LocalDiscoveryService lastStartedService = {};
+    int startCount = 0;
+    int stopCount = 0;
+    bool fakeStartResult = true;
+    bool fakeHealthy = true;
+
+    uint32_t currentTime() override { return fakeNow; }
+
+    bool start(uint32_t address, const LocalDiscoveryService &service) override {
+        ++startCount;
+        lastStartedAddress = address;
+        lastStartedService = service;
+        fakeNow += fakeStartDuration;
+        return fakeStartResult;
+    }
+
+    void stop() override { ++stopCount; }
+    bool isHealthy() override { return fakeHealthy; }
+};
+
 int failureCount = 0;
-bool fakeStartResult = false;
-bool fakeHealthy = false;
 
-uint32_t currentTime() { return fakeNow; }
-
-bool startDiscovery(uint32_t address, const LocalDiscoveryService &service) {
-    ++startCount;
-    lastStartedAddress = address;
-    lastStartedService = service;
-    fakeNow += fakeStartDuration;
-    return fakeStartResult;
-}
-
-void stopDiscovery() { ++stopCount; }
-bool isHealthy() { return fakeHealthy; }
-
-LocalDiscovery createDiscovery() {
-    LocalDiscoveryOperations operations = {
-        currentTime, startDiscovery, stopDiscovery, isHealthy
-    };
+LocalDiscovery createDiscovery(LocalDiscoveryOperations &operations) {
     LocalDiscoveryService service = {
         "az3166", "az3166._http", 80, "\x13" "path=/api/telemetry"
     };
     return LocalDiscovery(5000, service, operations);
-}
-
-void resetPlatform() {
-    fakeNow = fakeStartDuration = lastStartedAddress = 0;
-    lastStartedService = {};
-    startCount = stopCount = 0;
-    fakeStartResult = fakeHealthy = true;
 }
 
 void expect(bool condition, const char *name) {
@@ -54,105 +54,130 @@ void expect(bool condition, const char *name) {
 }
 
 void testConnectionLifecycle() {
-    resetPlatform();
-    LocalDiscovery discovery = createDiscovery();
+    FakeLocalDiscoveryOperations operations;
+    LocalDiscovery discovery = createDiscovery(operations);
     discovery.update(false, 0xC0000201UL);
     discovery.update(true, 0);
-    expect(startCount == 0 && !discovery.isRunning(),
+    expect(operations.startCount == 0 && !discovery.isRunning(),
            "discovery waits for Wi-Fi and an assigned address");
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 1 && discovery.isRunning(),
+    expect(operations.startCount == 1 && discovery.isRunning(),
            "delayed address acquisition starts discovery");
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 1 && stopCount == 0,
+    expect(operations.startCount == 1 && operations.stopCount == 0,
            "unchanged connectivity does not restart discovery");
     discovery.update(true, 0xC0000202UL);
-    expect(startCount == 2 && stopCount == 1 &&
-               lastStartedAddress == 0xC0000202UL,
+    expect(operations.startCount == 2 && operations.stopCount == 1 &&
+               operations.lastStartedAddress == 0xC0000202UL,
            "address changes replace the advertised address");
     discovery.update(false, 0xC0000202UL);
     discovery.update(false, 0xC0000202UL);
-    expect(stopCount == 2 && !discovery.isRunning(),
+    expect(operations.stopCount == 2 && !discovery.isRunning(),
            "disconnect stops discovery exactly once");
     discovery.update(true, 0xC0000202UL);
-    expect(startCount == 3 && discovery.isRunning(),
+    expect(operations.startCount == 3 && discovery.isRunning(),
            "same-address reconnect starts fresh discovery");
     discovery.update(true, 0);
-    expect(stopCount == 3 && !discovery.isRunning(),
+    expect(operations.stopCount == 3 && !discovery.isRunning(),
            "address loss stops discovery without Wi-Fi loss");
 }
 
 void testServiceConfiguration() {
-    resetPlatform();
-    LocalDiscoveryOperations operations = {
-        currentTime, startDiscovery, stopDiscovery, isHealthy
-    };
+    FakeLocalDiscoveryOperations operations;
     LocalDiscoveryService service = {
         "example", "example._http", 8080, "\x0c" "path=/sample"
     };
     LocalDiscovery discovery(5000, service, operations);
     discovery.update(true, 0xC0000201UL);
-    expect(lastStartedService.port == 8080 &&
-               strcmp(lastStartedService.hostname, "example") == 0 &&
-               strcmp(lastStartedService.serviceName, "example._http") == 0 &&
-               strcmp(lastStartedService.txtRecord, "\x0c" "path=/sample") == 0,
+    expect(operations.lastStartedService.port == 8080 &&
+               strcmp(operations.lastStartedService.hostname, "example") == 0 &&
+               strcmp(operations.lastStartedService.serviceName, "example._http") == 0 &&
+               strcmp(operations.lastStartedService.txtRecord, "\x0c" "path=/sample") == 0,
            "discovery forwards caller-supplied hostname, port, and service metadata");
 }
 
 void testStartFailureBackoff() {
-    resetPlatform();
-    fakeStartResult = false;
-    fakeStartDuration = 100;
-    LocalDiscovery discovery = createDiscovery();
+    FakeLocalDiscoveryOperations operations;
+    operations.fakeStartResult = false;
+    operations.fakeStartDuration = 100;
+    LocalDiscovery discovery = createDiscovery(operations);
     discovery.update(true, 0xC0000201UL);
-    expect(!discovery.isRunning() && stopCount == 1,
+    expect(!discovery.isRunning() && operations.stopCount == 1,
            "failed startup releases partial responder state");
-    fakeNow = 5099;
+    operations.fakeNow = 5099;
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 1, "retry waits from startup completion");
-    fakeNow = 5100;
-    fakeStartResult = true;
+    expect(operations.startCount == 1, "retry waits from startup completion");
+    operations.fakeNow = 5100;
+    operations.fakeStartResult = true;
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 2 && discovery.isRunning(),
+    expect(operations.startCount == 2 && discovery.isRunning(),
            "startup retry succeeds at the configured interval");
 }
 
 void testTransportFailure() {
-    resetPlatform();
-    LocalDiscovery discovery = createDiscovery();
+    FakeLocalDiscoveryOperations operations;
+    LocalDiscovery discovery = createDiscovery(operations);
     discovery.update(true, 0xC0000201UL);
-    fakeHealthy = false;
-    fakeNow = 100;
+    operations.fakeHealthy = false;
+    operations.fakeNow = 100;
     discovery.update(true, 0xC0000201UL);
-    expect(!discovery.isRunning() && stopCount == 1,
+    expect(!discovery.isRunning() && operations.stopCount == 1,
            "worker transport failure stops discovery");
-    fakeNow = 5099;
+    operations.fakeNow = 5099;
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 1 && stopCount == 1,
+    expect(operations.startCount == 1 && operations.stopCount == 1,
            "transport failure does not create a retry loop");
-    fakeHealthy = true;
-    fakeNow = 5100;
+    operations.fakeHealthy = true;
+    operations.fakeNow = 5100;
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 2 && discovery.isRunning(),
+    expect(operations.startCount == 2 && discovery.isRunning(),
            "transport failure recovers after the retry interval");
 }
 
 void testRetryAddressChangeAndWraparound() {
-    resetPlatform();
-    fakeStartResult = false;
-    fakeNow = 0xFFFFFF00UL;
-    LocalDiscovery discovery = createDiscovery();
+    FakeLocalDiscoveryOperations operations;
+    operations.fakeStartResult = false;
+    operations.fakeNow = 0xFFFFFF00UL;
+    LocalDiscovery discovery = createDiscovery(operations);
     discovery.update(true, 0xC0000201UL);
-    fakeNow = 0xFFFFFF00UL + 4999UL;
+    operations.fakeNow = 0xFFFFFF00UL + 4999UL;
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 1, "retry interval is wraparound safe");
-    fakeNow = 0xFFFFFF00UL + 5000UL;
+    expect(operations.startCount == 1, "retry interval is wraparound safe");
+    operations.fakeNow = 0xFFFFFF00UL + 5000UL;
     discovery.update(true, 0xC0000201UL);
-    expect(startCount == 2, "wrapped retry occurs on time");
-    fakeStartResult = true;
+    expect(operations.startCount == 2, "wrapped retry occurs on time");
+    operations.fakeStartResult = true;
     discovery.update(true, 0xC0000202UL);
-    expect(startCount == 3 && lastStartedAddress == 0xC0000202UL,
+    expect(operations.startCount == 3 && operations.lastStartedAddress == 0xC0000202UL,
            "a new address bypasses the old address retry delay");
+}
+
+void testIndependentOperations() {
+    FakeLocalDiscoveryOperations firstOperations;
+    FakeLocalDiscoveryOperations secondOperations;
+    secondOperations.fakeStartResult = false;
+    LocalDiscovery firstDiscovery = createDiscovery(firstOperations);
+    LocalDiscovery secondDiscovery = createDiscovery(secondOperations);
+
+    firstDiscovery.update(true, 0xC0000201UL);
+    secondDiscovery.update(true, 0xC0000202UL);
+    expect(firstDiscovery.isRunning() && !secondDiscovery.isRunning() &&
+               firstOperations.stopCount == 0 && secondOperations.stopCount == 1,
+           "discovery instances keep backend results and cleanup separate");
+
+    secondOperations.fakeNow = 5000;
+    secondOperations.fakeStartResult = true;
+    secondDiscovery.update(true, 0xC0000202UL);
+    expect(secondDiscovery.isRunning() && firstOperations.fakeNow == 0 &&
+               firstOperations.startCount == 1 && secondOperations.startCount == 2,
+           "one backend's retry clock does not affect another instance");
+
+    firstOperations.fakeHealthy = false;
+    firstDiscovery.update(true, 0xC0000201UL);
+    expect(!firstDiscovery.isRunning() && secondDiscovery.isRunning() &&
+               firstOperations.lastStartedAddress == 0xC0000201UL &&
+               secondOperations.lastStartedAddress == 0xC0000202UL,
+           "health and advertised addresses belong to the injected backend");
 }
 
 class CaptureTransport : public MdnsTransport {
@@ -326,6 +351,7 @@ void setup() {
     while (!Serial);
     delay(3000);
     Serial.println("TEST_SUITE: LocalDiscoveryTests");
+    testIndependentOperations();
     testConnectionLifecycle();
     testServiceConfiguration();
     testStartFailureBackoff();

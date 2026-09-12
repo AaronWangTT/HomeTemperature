@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <string.h>
+#include <type_traits>
 
 #include "src/config/AppConfig.h"
 #include "src/http/LocalWebServer.h"
@@ -7,6 +8,12 @@
 #include "src/telemetry/TelemetryService.h"
 
 struct FakeHttpPlatform;
+class FakeLocalWebServerOperations;
+
+static_assert(std::is_abstract<LocalWebServerOperations>::value,
+              "LocalWebServerOperations must remain an interface");
+static_assert(std::has_virtual_destructor<LocalWebServerOperations>::value,
+              "LocalWebServerOperations must have a virtual destructor");
 
 int failureCount = 0;
 
@@ -153,14 +160,38 @@ struct FakeHttpPlatform {
     osThreadId handlerThread;
     char input[2300];
     char output[1024];
-
-    void updateService(bool available, uint32_t address);
 };
 
 FakeHttpPlatform fake = {};
 rtos::Mutex fakeMutex;
 rtos::Semaphore progress(0);
 rtos::Semaphore openGate(0);
+
+class FakeLocalWebServerOperations : public LocalWebServerOperations {
+public:
+    FakeLocalWebServerOperations(
+        FakeHttpPlatform &state,
+        rtos::Mutex &mutex,
+        rtos::Semaphore &progressSignal,
+        rtos::Semaphore &startupGate)
+        : fake(state), fakeMutex(mutex), progress(progressSignal),
+          openGate(startupGate) {
+    }
+
+    uint32_t currentTime() override;
+    int openListener(uint32_t address, uint16_t port) override;
+    int acceptClient(int listener) override;
+    int receiveBytes(int client, char *buffer, size_t size) override;
+    int sendBytes(int client, const char *buffer, size_t size) override;
+    void closeSocket(int descriptor) override;
+    void updateService(bool available, uint32_t address);
+
+private:
+    FakeHttpPlatform &fake;
+    rtos::Mutex &fakeMutex;
+    rtos::Semaphore &progress;
+    rtos::Semaphore &openGate;
+};
 
 void resetHttpPlatform() {
     fakeMutex.lock();
@@ -189,14 +220,14 @@ bool waitForCount(int FakeHttpPlatform::*counter, int expected) {
     return fakeCount(counter) >= expected;
 }
 
-uint32_t fakeCurrentTime() {
+uint32_t FakeLocalWebServerOperations::currentTime() {
     fakeMutex.lock();
     uint32_t now = fake.now;
     fakeMutex.unlock();
     return now;
 }
 
-int fakeOpenListener(uint32_t address, uint16_t port) {
+int FakeLocalWebServerOperations::openListener(uint32_t address, uint16_t port) {
     fakeMutex.lock();
     ++fake.openCount;
     fake.lastAddress = address;
@@ -216,7 +247,7 @@ int fakeOpenListener(uint32_t address, uint16_t port) {
     return result;
 }
 
-int fakeAcceptClient(int) {
+int FakeLocalWebServerOperations::acceptClient(int) {
     fakeMutex.lock();
     int result = LocalWebServer::ACCEPT_IDLE;
     if (fake.acceptError) {
@@ -232,7 +263,7 @@ int fakeAcceptClient(int) {
     return result;
 }
 
-int fakeReceiveBytes(int, char *buffer, size_t size) {
+int FakeLocalWebServerOperations::receiveBytes(int, char *buffer, size_t size) {
     fakeMutex.lock();
     size_t remaining = fake.inputLength - fake.inputOffset;
     size_t received = remaining < size ? remaining : size;
@@ -248,7 +279,7 @@ int fakeReceiveBytes(int, char *buffer, size_t size) {
     return static_cast<int>(received);
 }
 
-int fakeSendBytes(int, const char *buffer, size_t size) {
+int FakeLocalWebServerOperations::sendBytes(int, const char *buffer, size_t size) {
     fakeMutex.lock();
     if (fake.blockSend) {
         fake.now += fake.sendStep;
@@ -267,7 +298,7 @@ int fakeSendBytes(int, const char *buffer, size_t size) {
     return static_cast<int>(sent);
 }
 
-void fakeCloseSocket(int descriptor) {
+void FakeLocalWebServerOperations::closeSocket(int descriptor) {
     fakeMutex.lock();
     if (descriptor == 20) {
         ++fake.closeClientCount;
@@ -279,17 +310,17 @@ void fakeCloseSocket(int descriptor) {
     progress.release();
 }
 
-void FakeHttpPlatform::updateService(bool available, uint32_t address) {
+void FakeLocalWebServerOperations::updateService(bool available, uint32_t address) {
     fakeMutex.lock();
-    ++serviceUpdates;
-    if (available && !listenerOpen) {
-        ++invalidAdvertisements;
+    ++fake.serviceUpdates;
+    if (available && !fake.listenerOpen) {
+        ++fake.invalidAdvertisements;
     }
-    if (available && (!advertised || advertisedAddress != address)) {
-        ++readyCount;
+    if (available && (!fake.advertised || fake.advertisedAddress != address)) {
+        ++fake.readyCount;
     }
-    advertised = available;
-    advertisedAddress = address;
+    fake.advertised = available;
+    fake.advertisedAddress = address;
     fakeMutex.unlock();
     progress.release();
 }
@@ -300,7 +331,7 @@ void testServiceCallbackBinding() {
     expect(!empty, "service callbacks are optional and empty by default");
 
     LocalHttpServiceUpdate original =
-        mbed::callback(&fake, &FakeHttpPlatform::updateService);
+        mbed::callback(&httpOperations(), &FakeLocalWebServerOperations::updateService);
     LocalHttpServiceUpdate copied = original;
     original = LocalHttpServiceUpdate();
     expect(!original && copied, "copying retains the bound member callback");
@@ -323,11 +354,8 @@ void testServiceCallbackBinding() {
     expect(withdrawn, "copied callback also forwards the unavailable state");
 }
 
-LocalWebServerOperations httpOperations() {
-    LocalWebServerOperations operations = {
-        fakeCurrentTime, fakeOpenListener, fakeAcceptClient,
-        fakeReceiveBytes, fakeSendBytes, fakeCloseSocket
-    };
+FakeLocalWebServerOperations &httpOperations() {
+    static FakeLocalWebServerOperations operations(fake, fakeMutex, progress, openGate);
     return operations;
 }
 
@@ -378,7 +406,7 @@ void testWorkerLifecycle() {
     ExampleHandler handler;
     {
         LocalWebServer server(handler, 8080, 5000, httpOperations(),
-                              mbed::callback(&fake, &FakeHttpPlatform::updateService));
+                              mbed::callback(&httpOperations(), &FakeLocalWebServerOperations::updateService));
         server.update(true, 0);
         expect(!server.state().workerStarted, "worker waits for an assigned address");
         server.update(true, 0xC0000201UL);
@@ -421,7 +449,7 @@ void testListenerFailureAndRetry() {
     fake.now = 0xFFFFFF00UL;
     ExampleHandler handler;
     LocalWebServer server(handler, 8080, 5000, httpOperations(),
-                          mbed::callback(&fake, &FakeHttpPlatform::updateService));
+                          mbed::callback(&httpOperations(), &FakeLocalWebServerOperations::updateService));
     server.update(true, 0xC0000201UL);
     expect(waitForCount(&FakeHttpPlatform::serviceUpdates, 2) &&
                !server.state().listening && fakeCount(&FakeHttpPlatform::readyCount) == 0,
@@ -452,7 +480,7 @@ void testAddressChangesDuringStartup() {
     fake.holdOpen = true;
     ExampleHandler handler;
     LocalWebServer server(handler, 8080, 5000, httpOperations(),
-                          mbed::callback(&fake, &FakeHttpPlatform::updateService));
+                          mbed::callback(&httpOperations(), &FakeLocalWebServerOperations::updateService));
     server.update(true, 0xC0000201UL);
     expect(waitForCount(&FakeHttpPlatform::openCount, 1), "worker starts the listener independently");
     server.update(true, 0xC0000202UL);
@@ -578,6 +606,55 @@ void testResponseDeadline() {
            "a non-reading client cannot block the HTTP worker indefinitely");
 }
 
+void testIndependentOperations() {
+    resetHttpPlatform();
+    static FakeHttpPlatform secondFake;
+    memset(&secondFake, 0, sizeof(secondFake));
+    secondFake.openResult = 10;
+    secondFake.now = 200;
+    rtos::Mutex secondMutex;
+    rtos::Semaphore secondProgress(0);
+    rtos::Semaphore secondOpenGate(0);
+    FakeLocalWebServerOperations secondOperations(
+        secondFake, secondMutex, secondProgress, secondOpenGate);
+    ExampleHandler handler;
+    LocalWebServer firstServer(handler, 8080, 5000, httpOperations(),
+        mbed::callback(&httpOperations(), &FakeLocalWebServerOperations::updateService));
+    LocalWebServer secondServer(handler, 8081, 5000, secondOperations,
+        mbed::callback(&secondOperations, &FakeLocalWebServerOperations::updateService));
+    firstServer.update(true, 0xC0000201UL);
+    secondServer.update(true, 0xC0000202UL);
+    expect(waitForCount(&FakeHttpPlatform::readyCount, 1),
+           "first HTTP worker starts through its injected interface");
+
+    uint32_t started = millis();
+    bool secondReady = false;
+    do {
+        secondMutex.lock();
+        secondReady = secondFake.advertised;
+        secondMutex.unlock();
+        if (secondReady) {
+            break;
+        }
+        secondProgress.wait(20);
+    } while (millis() - started < 1000UL);
+    expect(secondReady && firstServer.state().address == 0xC0000201UL &&
+               secondServer.state().address == 0xC0000202UL,
+           "independent backend instances keep worker addresses separate");
+    expect(httpOperations().currentTime() == 0 && secondOperations.currentTime() == 200,
+           "HTTP backends have independent clocks");
+
+    firstServer.update(false, 0);
+    expect(waitForCount(&FakeHttpPlatform::closeListenerCount, 1),
+           "first worker shuts down its own listener");
+    secondMutex.lock();
+    bool isolated = secondFake.listenerOpen && secondFake.advertised &&
+        secondFake.lastPort == 8081 && secondFake.openCount == 1 &&
+        secondFake.closeListenerCount == 0 && secondFake.invalidAdvertisements == 0;
+    secondMutex.unlock();
+    expect(isolated, "stopping one HTTP backend leaves the other listener unchanged");
+}
+
 void setup() {
     Serial.begin(115200);
     while (!Serial);
@@ -594,6 +671,7 @@ void setup() {
     testUnknownRoutes();
     testDisconnectedPolling();
     testTelemetryHandler();
+    testIndependentOperations();
     testServiceCallbackBinding();
     testWorkerLifecycle();
     testListenerFailureAndRetry();

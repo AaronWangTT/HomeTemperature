@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <type_traits>
 
 #include "src/cloud/CloudTelemetry.h"
 
@@ -8,37 +9,43 @@ const char PLACEHOLDER_API_KEY[] =
     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 int failureCount = 0;
-int sendCallCount = 0;
-CloudTelemetryRequest capturedRequest;
-CloudTelemetryResponse fakeResponse;
 
-TelemetryUploadResult sendFakeRequest(
-    const CloudTelemetryRequest &request,
-    CloudTelemetryResponseHandler responseHandler) {
-    ++sendCallCount;
-    capturedRequest = request;
-    return responseHandler(fakeResponse);
-}
+static_assert(std::is_abstract<CloudTelemetryOperations>::value,
+              "CloudTelemetryOperations must require a send implementation");
+static_assert(std::has_virtual_destructor<CloudTelemetryOperations>::value,
+              "CloudTelemetryOperations must have a virtual destructor");
 
-CloudTelemetry createFakeCloudTelemetry() {
-    CloudTelemetryOperations operations = {
-        sendFakeRequest
-    };
+class FakeCloudTelemetryOperations : public CloudTelemetryOperations {
+public:
+    int sendCallCount = 0;
+    CloudTelemetryRequest capturedRequest = {};
+    CloudTelemetryResponse fakeResponse = {true, 201, 0, NULL, 0};
+
+    TelemetryUploadResult send(
+        const CloudTelemetryRequest &request,
+        CloudTelemetryResponseHandler responseHandler) override {
+        ++sendCallCount;
+        capturedRequest = request;
+        return responseHandler(fakeResponse);
+    }
+};
+
+class UnavailableCloudTelemetryOperations : public CloudTelemetryOperations {
+public:
+    TelemetryUploadResult send(
+        const CloudTelemetryRequest &,
+        CloudTelemetryResponseHandler) override {
+        return {TELEMETRY_UPLOAD_DISABLED, 0};
+    }
+};
+
+CloudTelemetry createFakeCloudTelemetry(CloudTelemetryOperations &operations) {
     return CloudTelemetry(
         "https://example.test/api/telemetry",
         "test-certificate",
         VALID_API_KEY,
         PLACEHOLDER_API_KEY,
         operations);
-}
-
-void resetFakeTransport() {
-    sendCallCount = 0;
-    fakeResponse.received = true;
-    fakeResponse.statusCode = 201;
-    fakeResponse.networkError = 0;
-    fakeResponse.body = NULL;
-    fakeResponse.bodyLength = 0;
 }
 
 void expect(bool condition, const char *name) {
@@ -103,8 +110,8 @@ void testObjectConfiguration() {
 }
 
 void testPayloadValidation() {
-    resetFakeTransport();
-    CloudTelemetry telemetry = createFakeCloudTelemetry();
+    FakeCloudTelemetryOperations operations;
+    CloudTelemetry telemetry = createFakeCloudTelemetry(operations);
 
     TelemetryUploadResult nullPayload = telemetry.upload(NULL, 2);
     expect(
@@ -114,10 +121,10 @@ void testPayloadValidation() {
     expect(
         emptyPayload.status == TELEMETRY_UPLOAD_PAYLOAD_INVALID,
         "empty payload is rejected");
-    expect(sendCallCount == 0,
+        expect(operations.sendCallCount == 0,
            "invalid payload never reaches HTTPS transport");
 
-    CloudTelemetryOperations unavailableOperations = {NULL};
+        UnavailableCloudTelemetryOperations unavailableOperations;
     CloudTelemetry unavailable(
         "https://example.test/api/telemetry",
         "test-certificate",
@@ -128,12 +135,12 @@ void testPayloadValidation() {
         unavailable.upload("{}", 2);
     expect(
         unavailableResult.status == TELEMETRY_UPLOAD_DISABLED,
-        "missing HTTPS transport is rejected");
+        "an explicit unavailable HTTPS backend returns a disabled upload");
 }
 
 void testRequestContract() {
-    resetFakeTransport();
-    CloudTelemetry telemetry = createFakeCloudTelemetry();
+    FakeCloudTelemetryOperations operations;
+    CloudTelemetry telemetry = createFakeCloudTelemetry(operations);
     const char payload[] = "{\"temperature\":23.5}";
 
     TelemetryUploadResult result = telemetry.upload(
@@ -141,41 +148,41 @@ void testRequestContract() {
         sizeof(payload) - 1);
     expect(result.status == TELEMETRY_UPLOAD_SUCCESS,
            "HTTP 201 completes a cloud upload");
-    expect(sendCallCount == 1,
+        expect(operations.sendCallCount == 1,
            "valid payload performs one HTTPS request");
-    expect(strcmp(capturedRequest.endpoint,
+        expect(strcmp(operations.capturedRequest.endpoint,
                   "https://example.test/api/telemetry") == 0,
            "request carries the configured endpoint");
-    expect(strcmp(capturedRequest.rootCertificate,
+    expect(strcmp(operations.capturedRequest.rootCertificate,
                   "test-certificate") == 0,
            "request carries the configured root certificate");
-    expect(strcmp(capturedRequest.apiKeyHeader,
+    expect(strcmp(operations.capturedRequest.apiKeyHeader,
                   "X-Device-Key") == 0,
            "request uses the device key header");
-    expect(strcmp(capturedRequest.apiKey, VALID_API_KEY) == 0,
+    expect(strcmp(operations.capturedRequest.apiKey, VALID_API_KEY) == 0,
            "request carries the configured API key");
-    expect(strcmp(capturedRequest.contentType,
+    expect(strcmp(operations.capturedRequest.contentType,
                   "application/json") == 0,
            "request uses JSON content type");
-    expect(strcmp(capturedRequest.accept,
+    expect(strcmp(operations.capturedRequest.accept,
                   "application/json") == 0,
            "request accepts JSON responses");
-    expect(strcmp(capturedRequest.connection, "close") == 0,
+    expect(strcmp(operations.capturedRequest.connection, "close") == 0,
            "request closes the HTTPS connection");
-    expect(capturedRequest.payloadLength == sizeof(payload) - 1,
+    expect(operations.capturedRequest.payloadLength == sizeof(payload) - 1,
            "request preserves payload length");
-    expect(memcmp(capturedRequest.payload,
+    expect(memcmp(operations.capturedRequest.payload,
                   payload,
                   sizeof(payload) - 1) == 0,
            "request preserves payload bytes");
 }
 
 void testResponseHandling() {
-    resetFakeTransport();
-    CloudTelemetry telemetry = createFakeCloudTelemetry();
+    FakeCloudTelemetryOperations operations;
+    CloudTelemetry telemetry = createFakeCloudTelemetry(operations);
 
-    fakeResponse.received = false;
-    fakeResponse.networkError = -3001;
+    operations.fakeResponse.received = false;
+    operations.fakeResponse.networkError = -3001;
     TelemetryUploadResult networkError = telemetry.upload("{}", 2);
     expect(
         networkError.status == TELEMETRY_UPLOAD_NETWORK_ERROR,
@@ -183,10 +190,10 @@ void testResponseHandling() {
     expect(networkError.detailCode == -3001,
            "network error code is preserved");
 
-    fakeResponse.received = true;
-    fakeResponse.statusCode = 401;
-    fakeResponse.body = "{\"error\":\"unauthorized\"}";
-    fakeResponse.bodyLength = strlen(fakeResponse.body);
+    operations.fakeResponse.received = true;
+    operations.fakeResponse.statusCode = 401;
+    operations.fakeResponse.body = "{\"error\":\"unauthorized\"}";
+    operations.fakeResponse.bodyLength = strlen(operations.fakeResponse.body);
     TelemetryUploadResult rejected = telemetry.upload("{}", 2);
     expect(
         rejected.status == TELEMETRY_UPLOAD_HTTP_REJECTED,
@@ -194,9 +201,9 @@ void testResponseHandling() {
     expect(rejected.detailCode == 401,
            "rejected HTTP status is preserved");
 
-    fakeResponse.statusCode = 422;
-    fakeResponse.body = "{\"detail\":\"invalid telemetry\"}";
-    fakeResponse.bodyLength = strlen(fakeResponse.body);
+    operations.fakeResponse.statusCode = 422;
+    operations.fakeResponse.body = "{\"detail\":\"invalid telemetry\"}";
+    operations.fakeResponse.bodyLength = strlen(operations.fakeResponse.body);
     TelemetryUploadResult invalidReading = telemetry.upload("{}", 2);
     expect(
         invalidReading.status == TELEMETRY_UPLOAD_HTTP_RETRYABLE,
@@ -204,24 +211,52 @@ void testResponseHandling() {
     expect(invalidReading.detailCode == 422,
            "HTTP 422 status is preserved");
 
-    fakeResponse.statusCode = 429;
+    operations.fakeResponse.statusCode = 429;
     TelemetryUploadResult throttled = telemetry.upload("{}", 2);
     expect(
         throttled.status == TELEMETRY_UPLOAD_HTTP_RETRYABLE,
         "HTTP 429 is classified as retryable");
 
-    fakeResponse.statusCode = 500;
+    operations.fakeResponse.statusCode = 500;
     TelemetryUploadResult serverError = telemetry.upload("{}", 2);
     expect(
         serverError.status == TELEMETRY_UPLOAD_HTTP_RETRYABLE,
         "HTTP 500 is classified as retryable");
 
-    fakeResponse.statusCode = 201;
-    fakeResponse.body = NULL;
-    fakeResponse.bodyLength = 0;
+    operations.fakeResponse.statusCode = 201;
+    operations.fakeResponse.body = NULL;
+    operations.fakeResponse.bodyLength = 0;
     TelemetryUploadResult success = telemetry.upload("{}", 2);
     expect(success.status == TELEMETRY_UPLOAD_SUCCESS,
            "HTTP 201 succeeds after earlier failures");
+}
+
+void testIndependentOperations() {
+    FakeCloudTelemetryOperations firstOperations;
+    FakeCloudTelemetryOperations secondOperations;
+    secondOperations.fakeResponse.statusCode = 401;
+    CloudTelemetry first = createFakeCloudTelemetry(firstOperations);
+    CloudTelemetry second = createFakeCloudTelemetry(secondOperations);
+    const char firstPayload[] = "{}";
+    const char secondPayload[] = "{\"sample\":2}";
+
+    expect(first.upload(firstPayload, sizeof(firstPayload) - 1).status ==
+               TELEMETRY_UPLOAD_SUCCESS,
+           "first cloud object uses its own backend result");
+    expect(second.upload(secondPayload, sizeof(secondPayload) - 1).status ==
+               TELEMETRY_UPLOAD_HTTP_REJECTED,
+           "second cloud object uses its independent backend result");
+    expect(firstOperations.sendCallCount == 1 && secondOperations.sendCallCount == 1 &&
+               firstOperations.capturedRequest.payload == firstPayload &&
+               secondOperations.capturedRequest.payload == secondPayload,
+           "cloud backends retain separate call counters and captured requests");
+
+    firstOperations.fakeResponse.statusCode = 503;
+    expect(first.upload(firstPayload, sizeof(firstPayload) - 1).status ==
+               TELEMETRY_UPLOAD_HTTP_RETRYABLE &&
+               secondOperations.fakeResponse.statusCode == 401 &&
+               secondOperations.sendCallCount == 1,
+           "mutating a referenced backend does not change another backend");
 }
 
 void testHttpStatusContract() {
@@ -260,6 +295,7 @@ void setup() {
     testPayloadValidation();
     testRequestContract();
     testResponseHandling();
+    testIndependentOperations();
     testHttpStatusContract();
 }
 

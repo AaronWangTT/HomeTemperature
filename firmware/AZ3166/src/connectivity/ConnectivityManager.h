@@ -10,14 +10,17 @@ struct ConnectivityEvents {
     bool localAddressChanged;
 };
 
-struct ConnectivityOperations {
-    uint32_t (*currentTime)();
-    bool (*isWiFiConnected)();
-    void (*disconnectWiFi)();
-    bool (*connectWiFi)();
-    bool (*isTimeSynchronized)();
-    void (*synchronizeTime)();
-    uint32_t (*readLocalIPv4Address)();
+class ConnectivityOperations {
+public:
+    virtual ~ConnectivityOperations() = default;
+
+    virtual uint32_t currentTime() = 0;
+    virtual bool isWiFiConnected() = 0;
+    virtual void disconnectWiFi() = 0;
+    virtual bool connectWiFi() = 0;
+    virtual bool isTimeSynchronized() = 0;
+    virtual void synchronizeTime() = 0;
+    virtual uint32_t readLocalIPv4Address() = 0;
 };
 
 class ConnectivityManager {
@@ -33,7 +36,7 @@ public:
         uint32_t wifiRetryInitialMs,
         uint32_t wifiRetryMaxMs,
         uint32_t ntpRetryIntervalMs,
-        const ConnectivityOperations &operations);
+        ConnectivityOperations &operations);
 
     ConnectivityEvents update();
     bool isWiFiConnected() const;
@@ -49,7 +52,7 @@ public:
         uint32_t maximumDelay);
 
 private:
-    static ConnectivityOperations defaultOperations();
+    static ConnectivityOperations &defaultOperations();
 
     void maintainWiFi(ConnectivityEvents &events);
     void attemptWiFiConnection(ConnectivityEvents &events);
@@ -63,7 +66,7 @@ private:
     uint32_t wifiRetryInitialMs_;
     uint32_t wifiRetryMaxMs_;
     uint32_t ntpRetryIntervalMs_;
-    ConnectivityOperations operations_;
+    ConnectivityOperations &operations_;
     bool wifiConnected_;
     bool timeSynchronized_;
     uint32_t localIPv4Address_;
