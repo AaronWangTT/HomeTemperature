@@ -5,6 +5,7 @@
 #include "src/CloudUploadController.h"
 #include "src/ConnectivityManager.h"
 #include "src/DeviceIdentity.h"
+#include "src/LocalDiscovery.h"
 #include "src/LocalWebServer.h"
 #include "src/TelemetryService.h"
 #include "src/TelemetryUploader.h"
@@ -21,6 +22,7 @@ LocalWebServer localWebServer(
     telemetryService,
     AppConfig::LOCAL_TELEMETRY_PORT,
     AppConfig::LOCAL_WEB_SERVER_RETRY_INTERVAL_MS);
+LocalDiscovery localDiscovery(AppConfig::LOCAL_DISCOVERY_RETRY_INTERVAL_MS);
 CloudTelemetry cloudTelemetry(
     AppConfig::CLOUD_TELEMETRY_URL,
     ISRG_ROOT_X1_CERTIFICATE,
@@ -61,12 +63,13 @@ void handleButtonEvents(const ButtonEvents &events) {
 }
 
 void handleConnectivityEvents(const ConnectivityEvents &events) {
-    if (!events.wifiConnected) {
-        return;
+    if (events.wifiConnected || events.localAddressChanged) {
+        connectivity.printLocalHttpEndpoint("/api/telemetry");
     }
 
-    connectivity.printLocalHttpEndpoint("/api/telemetry");
-    connectivity.printTimeSynchronizationStatus();
+    if (events.wifiConnected) {
+        connectivity.printTimeSynchronizationStatus();
+    }
 }
 
 void setup() {
@@ -92,6 +95,8 @@ void loop() {
     watchdog.reset();
 
     localWebServer.poll(connectivity.isWiFiConnected());
+    localDiscovery.update(
+        connectivity.isWiFiConnected(), connectivity.localIPv4Address());
 
     watchdog.reset();
     cloudUploads.update(

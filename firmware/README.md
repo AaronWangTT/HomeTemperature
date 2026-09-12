@@ -51,6 +51,30 @@ example, test fixture, command line, build log, or issue report.
 Wi-Fi provisioning is owned by the AZ3166 board package and is not stored in
 this repository.
 
+## Local Discovery
+
+After Wi-Fi and IPv4 acquisition, the firmware advertises this fixed local name:
+
+```text
+http://az3166.local/api/telemetry
+```
+
+It also publishes an `_http._tcp.local.` service on port 80 with the TXT entry
+`path=/api/telemetry`. The initial version assumes one `az3166` device per LAN;
+there is no configurable alias or automatic collision renaming. The cloud
+device ID, telemetry JSON, and direct-IP HTTP endpoint are unchanged.
+
+Clients must support IPv4 mDNS, and the LAN must permit UDP multicast to
+`224.0.0.251:5353`. DNS-only resolvers, multicast isolation, and some VPN or
+managed DNS policies can prevent `.local` resolution even when direct-IP access
+works. The feature does not require router DNS registration, Internet access,
+NTP synchronization, or cloud credentials.
+
+The responder follows the cached address on reconnect or DHCP changes. It runs
+in a small background worker so synchronous cloud calls do not prevent it from
+servicing queries. The vendored ArduinoMDNS 1.0.1 source and its local port are
+described in the repository's third-party notices.
+
 ## Build and Test
 
 Compile the production sketch without touching the board:
@@ -61,14 +85,22 @@ Compile the production sketch without touching the board:
   -Sketch .\firmware\AZ3166\AZ3166.ino
 ```
 
-Compile the production sketch and all ten test sketches:
+Compile the production sketch and all eleven test sketches at an integration
+checkpoint:
 
 ```powershell
 & .\firmware\tests\run-all-tests.ps1 -Action Verify
 ```
 
+For a discovery change, run only its focused suite on the board. Close any
+serial monitor first; the harness restores production after the suite:
+
+```powershell
+& .\firmware\tests\run-local-discovery-tests.ps1 -Action Run -Port COM3
+```
+
 Run all suites on a connected board and restore production firmware after each
-suite:
+suite only when a full hardware regression is required:
 
 ```powershell
 & .\firmware\tests\run-all-tests.ps1 -Action Run -Port COM3

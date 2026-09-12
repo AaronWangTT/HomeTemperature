@@ -6,6 +6,10 @@ pressure sensors, serves the latest sample on the local network, and can upload
 authenticated telemetry over HTTPS. A small FastAPI, SQLite, and Caddy service
 stores the readings and serves an authenticated dashboard.
 
+The firmware is also a starting point for other AZ3166 applications, with
+reusable C++ components for connectivity, sensing, local discovery, uploads,
+buttons, and watchdog recovery.
+
 ## Project Preview
 
 | MXChip AZ3166 | Telemetry dashboard |
@@ -14,6 +18,47 @@ stores the readings and serves an authenticated dashboard.
 | On-device sensing, identity, connectivity, and upload control | Authenticated latest readings, history, and service state |
 
 Hardware labels and deployment identifiers are redacted in the public images.
+
+## Reusable Firmware Components
+
+Use the complete application as a working example, or adapt the components you
+need for another AZ3166 project. Hardware and network APIs are wrapped behind
+small interfaces, with retry and scheduling policy kept separate from transport.
+
+| Capability | Components | What They Encapsulate |
+| --- | --- | --- |
+| Wi-Fi and time | `ConnectivityManager` | Connection state, reconnect backoff, IPv4 address changes, and NTP synchronization retries. |
+| Local discovery | `LocalDiscovery`, `MdnsUdpTransport` | IPv4 mDNS and HTTP service advertisement through an adapted ArduinoMDNS responder, with address-aware restarts and background query handling. |
+| Sensor telemetry | `TelemetryService` | HTS221/LPS22HB sensor acquisition, range validation, and bounded JSON formatting shared by local HTTP and cloud uploads. |
+| Local HTTP | `LocalWebServer` | TCP listener lifecycle, bounded request reading, and telemetry responses at `/api/telemetry`. |
+| HTTPS delivery | `CloudTelemetry`, `TelemetryUploader` | Authenticated HTTPS transport, payload delivery, and typed sensor, network, and HTTP outcomes. |
+| Upload control | `UploadScheduler`, `CloudUploadController` | Periodic uploads, retry timing, manual requests, and pause/resume behavior. |
+| Button input | `ButtonDebouncer`, `ButtonController` | Active-low button sampling, debounce state, and one-shot application events. |
+| Device identity | `DeviceIdentity` | A stable identifier derived from the STM32 hardware UID. |
+| Watchdog recovery | `WatchdogController` | Watchdog setup, feeding, and reset-cause reporting. |
+
+### Built for Adaptation and Testing
+
+The sketch owns component wiring and loop order; components receive the state
+or collaborators they need. Injectable clock and platform operations let the
+tests exercise reconnects, retries, address changes, and failure handling
+deterministically. A replaceable mDNS transport lets protocol tests inspect
+datagrams without real Wi-Fi traffic. Focused test sketches share a build/upload
+harness that restores production firmware after an on-board run.
+
+Start with [firmware/AZ3166/AZ3166.ino](firmware/AZ3166/AZ3166.ino) to see the
+composition, then [docs/firmware-design.md](docs/firmware-design.md) for component
+boundaries and test coverage. Local sensing, HTTP, and discovery can be used
+without deploying the hosted server or configuring cloud credentials. On an
+mDNS-capable LAN client, the running device is accessible at
+`http://az3166.local/api/telemetry`.
+
+These are reusable source components, not a separately packaged or
+board-independent SDK. Hardware adapters target AZ3166 Core 2.0.0, and the
+telemetry schema, routes, and fixed hostname reflect this application. Adapt
+those choices for your project and review
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including the vendored mDNS
+library's LGPL terms.
 
 ## Architecture
 

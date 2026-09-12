@@ -1,11 +1,11 @@
 # AZ3166 Firmware Design
 
-Status: current implementation as of 2026-09-01.
+Status: current implementation as of 2026-09-12.
 
 ## 1. Scope
 
 This document describes only the firmware that runs on the MXCHIP AZ3166. It
-covers sensor acquisition, local HTTP telemetry, cloud upload, connectivity,
+covers sensor acquisition, local HTTP telemetry, mDNS discovery, cloud upload, connectivity,
 buttons, scheduling, watchdog behavior, platform compatibility fixes, and
 firmware tests.
 
@@ -16,6 +16,7 @@ The remote service appears here only as an HTTPS boundary used by the device.
 ## 2. Design Goals
 
 - Expose current sensor readings over the local network.
+- Keep a stable local hostname despite Wi-Fi reconnects and IPv4 address changes.
 - Upload the same telemetry shape to a configured HTTPS endpoint.
 - Recover from Wi-Fi loss and delayed time synchronization without rebooting.
 - Keep scheduling policy separate from transport and sensor code.
@@ -33,6 +34,8 @@ flowchart LR
         Buttons[ButtonController]
         Connectivity[ConnectivityManager]
         Local[LocalWebServer]
+        Discovery[LocalDiscovery]
+        Mdns[ArduinoMDNS and MdnsUdpTransport]
         Controller[CloudUploadController]
         Scheduler[UploadScheduler]
         Uploader[TelemetryUploader]
@@ -45,6 +48,8 @@ flowchart LR
         Main -->|initializes and updates| Buttons
         Main -->|updates| Connectivity
         Main -->|passes current Wi-Fi state| Local
+        Main -->|passes Wi-Fi and cached IPv4| Discovery
+        Discovery -->|starts and stops worker| Mdns
         Main -->|passes readiness and commands| Controller
         Main -.->|reports startup configuration| Cloud
         Main -->|initializes| Telemetry
@@ -59,6 +64,7 @@ flowchart LR
     end
 
     LocalClient[Local HTTP client] <-->|HTTP| Local
+    LocalClient <-->|IPv4 mDNS and DNS-SD| Mdns
     CloudEndpoint[Remote HTTPS endpoint] <-->|TLS and HTTP POST| Cloud
 ```
 
@@ -70,16 +76,17 @@ commands and the current Wi-Fi/time readiness state to `CloudUploadController`.
 The controller owns the due check, one upload attempt, result classification,
 and scheduler update. Constructor-only wiring is omitted from the diagram.
 
-The firmware uses a cooperative, single-loop execution model. Modules expose
-small synchronous operations; `AZ3166.ino` owns their construction and
-decides when each operation runs. The application does not create its own
-threads or RTOS tasks.
+The main firmware uses a cooperative loop. Modules expose small synchronous
+operations; `AZ3166.ino` owns their construction and decides when each operation
+runs. Local discovery additionally uses one bounded RTOS worker because Wi-Fi,
+NTP, HTTP, and HTTPS platform calls can block the main loop. Only that worker
+services mDNS queries; a mutex protects responder start, stop, and health checks.
 
 ## 4. Source Organization
 
 The production Arduino sketch root is `firmware/AZ3166/`. Arduino-recursive
-production sources live in its flat `src/` directory, while focused test
-sketches and staging scripts live separately under `firmware/tests/`.
+production sources live in `src/`, with the vendored responder in `src/mdns/`.
+Focused test sketches and staging scripts live separately under `firmware/tests/`.
 
 | Area | Files | Responsibility |
 | --- | --- | --- |
@@ -91,6 +98,7 @@ sketches and staging scripts live separately under `firmware/tests/`.
 | Connectivity | `firmware/AZ3166/src/ConnectivityManager.h/.cpp` | Owns Wi-Fi reconnect policy, connection state, NTP retry, and connectivity events. |
 | Sensor and JSON | `firmware/AZ3166/src/TelemetryService.h/.cpp` | Stores an injected device ID pointer, owns and reads sensor objects, and formats the shared telemetry payload. |
 | Local HTTP | `firmware/AZ3166/src/LocalWebServer.h/.cpp` | Owns the AZ3166 TCP server and local HTTP protocol, using its injected `TelemetryService` for response payloads. |
+| Local discovery | `LocalDiscovery`, `MdnsTransport`, `MdnsUdpTransport`, vendored ArduinoMDNS | Owns discovery lifecycle, bounded multicast transport, and the synchronized background responder. |
 | Upload workflow | `firmware/AZ3166/src/CloudUploadController.h/.cpp` | Gates attempts, translates upload outcomes into scheduling policy, and records completion-time results. |
 | Upload coordination | `firmware/AZ3166/src/TelemetryUploader.h/.cpp` | Builds one payload and forwards its exact bytes and length to cloud transport. |
 | Upload policy | `firmware/AZ3166/src/UploadScheduler.h/.cpp` | Decides when scheduled, retry, and manual uploads are due. |
@@ -129,10 +137,11 @@ Each `loop()` iteration performs work in this order:
 1. Reset the watchdog.
 2. Update button state and apply upload or pause events.
 3. Reset the watchdog.
-4. Update Wi-Fi and time synchronization state.
-5. Report new connectivity events.
+4. Update Wi-Fi, local IPv4 address, and time synchronization state.
+5. Report new connectivity and local address events.
 6. Reset the watchdog.
-7. Reconcile the local HTTP server with current Wi-Fi state and poll one client.
+7. Reconcile the local HTTP server with current Wi-Fi state and poll one client;
+  reconcile discovery with the current Wi-Fi state and cached IPv4 address.
 8. Reset the watchdog.
 9. Pass current Wi-Fi/time readiness to `CloudUploadController`.
 10. If configured and due, the controller performs one upload and records its
@@ -155,7 +164,8 @@ require synchronized time or cloud configuration.
 ## 6. Connectivity Design
 
 `ConnectivityManager` is the only application module that calls `WiFi.begin`,
-`WiFi.disconnect`, `WiFi.status`, `SyncTime`, and `IsTimeSynced`.
+`WiFi.disconnect`, `WiFi.status`, `SyncTime`, and `IsTimeSynced`. It also owns
+local IPv4 reads through `WiFiInterface()->get_ip_address()`.
 
 ### 6.1 Wi-Fi State and Retry
 
@@ -181,9 +191,79 @@ After Wi-Fi connects, the manager checks whether the platform already has
 synchronized time. If it does not, NTP synchronization is retried every 60
 seconds. Losing Wi-Fi also clears the cached synchronized state.
 
-`ConnectivityOperations` is a function table for current time, Wi-Fi, and NTP
-operations. Production uses AZ3166 platform functions; tests inject deterministic
-operations without changing the state machine.
+`ConnectivityOperations` is a function table for current time, Wi-Fi, local IPv4
+address reads, and NTP operations. Production uses AZ3166 platform functions;
+tests inject deterministic operations without changing the state machine.
+
+### 6.3 Local IPv4 State
+
+`localIPv4Address()` returns a cached `uint32_t`, with the first address octet in
+the most significant byte: `192.0.2.1` is represented as `0xC0000201`. Zero means
+no address is currently recorded. The getter does not access the network stack.
+
+The platform adapter treats a null interface or null/invalid address text as
+unavailable. It guards the SDK parser rather than using `WiFi.localIP()`, whose
+Core 2.0.0 implementation can pass a null interface address to that parser.
+
+- Read the address after each successful Wi-Fi connection and during the
+  existing one-second status checks while Wi-Fi remains connected.
+- Emit `localAddressChanged` for one update whenever the cached value changes,
+  including initial acquisition, replacement, and loss of an address.
+- Clear the address on disconnection. Do not read a potentially stale platform
+  address during failed connection attempts or retry backoff.
+- Allow Wi-Fi to be connected before an address is assigned. Later acquisition
+  or loss of an address does not itself change Wi-Fi or NTP readiness.
+- A reconnection reads the address again, even when DHCP returns the same value
+  used before disconnection.
+
+The sketch reports the current HTTP endpoint after a connection or address
+change, but only when Wi-Fi is connected and the cached address is nonzero.
+Address tracking does not change cloud upload gating or local HTTP handling.
+
+### 6.4 Local mDNS Discovery
+
+The fixed host label is `az3166`, advertised as `az3166.local`. The local URL is
+`http://az3166.local/api/telemetry`; the existing HTTP API and cloud identity do
+not change. The initial version assumes a single device using that name per LAN
+and does not implement custom collision resolution or automatic renaming.
+
+`LocalDiscovery::update(wifiConnected, address)` reconciles the responder with
+the connectivity snapshot. A nonzero IPv4 address and Wi-Fi are required, but
+NTP synchronization, cloud configuration, and upload state are not:
+
+- Start once when a usable address becomes available.
+- Leave the responder running while the address and Wi-Fi state are unchanged.
+- Stop and release the socket and service/name allocations on address loss or
+  disconnect; restart and announce on reconnection, even with the same address.
+- Replace the responder and multicast binding when a connected address changes.
+- Retry startup or detected transport failure after five seconds, measured from
+  completion. A new address bypasses the previous address's retry delay.
+- Discovery failures do not reset Wi-Fi or disable direct-IP HTTP or cloud work.
+
+ArduinoMDNS 1.0.1 supplies DNS encoding, query handling, and service registration.
+The source is vendored with its LGPL notices and local compatibility fixes; the
+installed AZ3166 board package is not modified. Its native mDNS header
+declarations do not provide linkable responder implementations in Core 2.0.0.
+
+The responder publishes the current IPv4 A record and an `_http._tcp.local.`
+service with the configured local HTTP port and TXT `path=/api/telemetry`.
+Address and unique service records carry cache-flush and a 120-second TTL.
+Registration announces immediately, a worker sends a follow-up after one second,
+and the library refreshes services every 90 seconds. Service goodbye records are
+best effort; cached names can remain until their TTL expires after link loss.
+
+The worker is created once, uses a fixed 4096-byte stack, services at most one
+received datagram every 20 milliseconds, and does not access sensors or mutate
+connectivity state. The main loop and worker serialize responder access with a
+mutex. Multicast UDP uses port 5353 and `224.0.0.251` on the current IPv4 interface,
+nonblocking sockets, a 1536-byte receive buffer, and a 512-byte send buffer.
+Oversized packets are discarded rather than passed partially to the parser.
+
+This is an IPv4 LAN responder, not router DNS registration or a `.local` client
+resolver. Clients must support IPv4 mDNS and multicast must reach the device.
+VLAN boundaries, AP isolation, VPN policy, or a DNS-only resolver can prevent
+name-based access even when direct-IP HTTP works. Discovery adds no encryption
+or authentication to local HTTP.
 
 ## 7. Device Identity
 
@@ -502,6 +582,9 @@ files from `firmware/AZ3166/src/`. Tests can be compiled independently or
 run on the target; target execution waits for a suite-specific marker and an
 explicit pass/fail result.
 
+The discovery suite opts into preserving a `src/` subtree so Arduino also
+compiles the nested vendored responder. Other suites retain their flat staging.
+
 | Suite | Primary coverage |
 | --- | --- |
 | `ButtonDebouncerTests` | Stable transitions, bounce, holds, startup state, and `millis()` wraparound. |
@@ -509,16 +592,19 @@ explicit pass/fail result.
 | `DeviceIdentityTests` | UID formatting, padding, invalid buffers, uninitialized fallback, internal storage, hardware initialization, and configured sizes. |
 | `TelemetryServiceTests` | Identity injection, JSON shape, rounding, ingestion-range validation, buffer errors, `dtostrf` regression, and onboard sensors. |
 | `LocalWebServerTests` | Route matching, unknown routes, retry configuration, and safe disconnected polling. |
+| `LocalDiscoveryTests` | Address lifecycle, retry timing, worker failure recovery, A/AAAA responses, service records, malformed queries, transport bounds, and repeated cleanup. |
 | `UploadSchedulerTests` | Initial upload, typed outcomes, pause, manual upload, retry, non-retryable suppression, recovery, and wraparound. |
 | `CloudTelemetryTests` | API-key validation, request fields, typed network/HTTP outcomes, HTTP 201 success, and HTTP 422 retry. |
 | `CloudUploadControllerTests` | Readiness gates, pause/manual behavior, completion-time retry, HTTP 422 automatic recovery, non-retryable suppression, and manual recovery. |
-| `ConnectivityManagerTests` | Retry progression, blocking-attempt timing, disconnect/reconnect, NTP retry, and wraparound. |
+| `ConnectivityManagerTests` | Retry progression, blocking-attempt timing, IPv4 parsing and changes, disconnect/reconnect, NTP retry, and wraparound. |
 | `TelemetryUploaderTests` | Builder invocation, exact bytes and length, build failures, bounds, missing dependencies, and transport failure. |
 
 The main test seams are function tables and function pointers rather than a
 general mocking framework:
 
-- `ConnectivityOperations` replaces clock, Wi-Fi, and NTP calls.
+- `ConnectivityOperations` replaces clock, Wi-Fi, address reads, and NTP calls.
+- `LocalDiscoveryOperations` replaces clock, responder startup/shutdown, and health checks.
+- `MdnsTransport` lets protocol tests capture datagrams without using real Wi-Fi.
 - `CloudTelemetryOperations` replaces HTTPS send behavior.
 - `CloudUploadClock` replaces the controller clock.
 - `TelemetryPayloadBuildFunction` replaces sensor and payload construction.

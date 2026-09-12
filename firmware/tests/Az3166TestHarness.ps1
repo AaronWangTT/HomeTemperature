@@ -15,6 +15,8 @@ function Invoke-Az3166TestSuite {
         [Parameter(Mandatory = $true)]
         [string[]]$SourceFiles,
 
+        [switch]$StageSourcesUnderSrc,
+
         [ValidateSet("Verify", "Run")]
         [string]$Action = "Verify",
 
@@ -107,8 +109,13 @@ function Invoke-Az3166TestSuite {
 
     try {
         Copy-Item $TestSource $stagingSketch
+        $stagingSource = $stagingSketch
+        if ($StageSourcesUnderSrc) {
+            $stagingSource = Join-Path $stagingSketch "src"
+            New-Item $stagingSource -ItemType Directory -Force | Out-Null
+        }
         foreach ($sourceFile in $SourceFiles) {
-            Copy-Item (Join-Path $SourceRoot $sourceFile) $stagingSketch
+            Copy-Item (Join-Path $SourceRoot $sourceFile) $stagingSource -Recurse
         }
 
         $testSketch = Join-Path $stagingSketch "$SuiteName.ino"
