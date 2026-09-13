@@ -20,6 +20,7 @@ $ErrorActionPreference = "Stop"
 
 $coreVersion = "2.0.1"
 $libraryVersion = "1.1.0"
+$libraryArchiveSha256 = "f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47"
 $compilerVersion = "5_4-2016q3"
 $openOcdVersion = "0.10.0"
 $arduinoDataRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Arduino15"
@@ -28,6 +29,7 @@ $installedCompiler = Join-Path $arduinoDataRoot "packages\AZ3166\tools\arm-none-
 $installedOpenOcd = Join-Path $arduinoDataRoot "packages\AZ3166\tools\openocd\$openOcdVersion\bin\openocd.exe"
 $arduinoSketchbook = Join-Path $ArduinoInstallRoot "sketchbook"
 $installedLibraryRoot = Join-Path $arduinoSketchbook "libraries\ArduinoMDNS"
+$libraryStamp = Join-Path $installedLibraryRoot ".hometemperature-source.sha256"
 
 function Find-ArduinoExecutable {
     param([string]$RequestedExecutable)
@@ -80,9 +82,11 @@ if (
 $libraryProperties = Join-Path $installedLibraryRoot "library.properties"
 if (
     -not (Test-Path -LiteralPath $libraryProperties -PathType Leaf) -or
-    (Get-Content -Raw -LiteralPath $libraryProperties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$"
+    (Get-Content -Raw -LiteralPath $libraryProperties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$" -or
+    -not (Test-Path -LiteralPath $libraryStamp -PathType Leaf) -or
+    (Get-Content -Raw -LiteralPath $libraryStamp).Trim() -ne $libraryArchiveSha256
 ) {
-    throw "ArduinoMDNS $libraryVersion is not installed in $arduinoSketchbook. Run firmware/tools/Install-Az3166Toolchain.ps1."
+    throw "The checksum-pinned ArduinoMDNS $libraryVersion is not installed in $arduinoSketchbook. Run firmware/tools/Install-Az3166Toolchain.ps1."
 }
 
 if ($Action -eq "Upload") {

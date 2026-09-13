@@ -345,7 +345,7 @@ bool containsBytes(const uint8_t *buffer, size_t size, const char *text) {
 
 void testHostnameAnswers() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     expect(responder.begin(IPAddress(192, 0, 2, 1), "az3166") == 1,
            "responder joins the standard mDNS group");
     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
@@ -374,7 +374,7 @@ void testHostnameAnswers() {
 
 void testMalformedQueries() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     responder.begin(IPAddress(192, 0, 2, 1), "az3166");
     transport.queue(ADDRESS_QUERY, 5);
     responder.run();
@@ -400,7 +400,7 @@ void testMalformedQueries() {
 
 void testServiceAndCleanup() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     bool restarted = true;
     for (int attempt = 0; attempt < 20; ++attempt) {
         restarted &= responder.begin(IPAddress(192, 0, 2, 1), "az3166") == 1;

@@ -1,3 +1,5 @@
+#include <ArduinoMDNS.h>
+
 #include "src/config/cloud_config.h"
 #include "src/config/AppConfig.h"
 #include "src/input/ButtonController.h"
