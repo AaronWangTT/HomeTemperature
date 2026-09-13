@@ -1,9 +1,11 @@
 #include <Arduino.h>
 #include <string.h>
 #include <type_traits>
+#include "mbed_stats.h"
 
 #include <ArduinoMDNS.h>
 #include "src/discovery/LocalDiscovery.h"
+#include "src/discovery/Az3166LocalDiscoveryOperations.h"
 #include "src/discovery/MdnsUdpTransport.h"
 
 static_assert(std::is_abstract<LocalDiscoveryOperations>::value,
@@ -54,6 +56,103 @@ void expect(bool condition, const char *name) {
     if (!condition) {
         ++failureCount;
     }
+}
+
+class NativeStartupFailureOperations : public Az3166LocalDiscoveryOperations {
+public:
+    NativeStartupFailureOperations()
+        : probe_(osPriorityAboveNormal, 2048), completed_(0), probeStarted_(false) {
+    }
+
+    ~NativeStartupFailureOperations() override {
+        finishProbe();
+    }
+
+    bool configureAllowed = false;
+    bool resourcesConfigured = false;
+    bool setupCompleteAtStart = false;
+    bool startupWindowAccessible = false;
+    bool earlyIterationGated = false;
+    int configureCount = 0;
+    int startCount = 0;
+    int cleanupCount = 0;
+    int serviceCount = 0;
+
+    bool finishProbe() {
+        if (!probeStarted_) {
+            return false;
+        }
+        osStatus result = probe_.join();
+        probeStarted_ = false;
+        return result == osOK;
+    }
+
+    bool pollOnce() {
+        return serviceOnce();
+    }
+
+protected:
+    bool configureResponder(uint32_t, const LocalDiscoveryService &) override {
+        ++configureCount;
+        resourcesConfigured = true;
+        return configureAllowed;
+    }
+
+    void endResponder() override {
+        ++cleanupCount;
+        resourcesConfigured = false;
+        Az3166LocalDiscoveryOperations::endResponder();
+    }
+
+    bool serviceResponder() override {
+        ++serviceCount;
+        return true;
+    }
+
+    osStatus startWorker() override {
+        ++startCount;
+        setupCompleteAtStart = resourcesConfigured;
+        probeStarted_ = probe_.start(mbed::callback(
+            this, &NativeStartupFailureOperations::probeOnce)) == osOK;
+        if (probeStarted_) {
+            startupWindowAccessible = completed_.wait(1000) > 0;
+        }
+        return osErrorResource;
+    }
+
+private:
+    void probeOnce() {
+        bool keepRunning = serviceOnce();
+        earlyIterationGated = keepRunning && !isHealthy() && serviceCount == 0;
+        completed_.release();
+    }
+
+    rtos::Thread probe_;
+    rtos::Semaphore completed_;
+    bool probeStarted_;
+};
+
+void testNativeStartupFailure() {
+    static NativeStartupFailureOperations operations;
+    expect(!operations.start(0xC0000201UL, TEST_SERVICE) &&
+               operations.configureCount == 1 && operations.startCount == 0 &&
+               operations.cleanupCount == 1 && !operations.resourcesConfigured &&
+               !operations.isHealthy(),
+           "native setup failure cleans partial state without starting a worker");
+
+    operations.configureAllowed = true;
+    bool started = operations.start(0xC0000201UL, TEST_SERVICE);
+    bool joined = operations.finishProbe();
+    expect(joined && operations.startupWindowAccessible && operations.setupCompleteAtStart,
+           "native worker startup releases the responder mutex after setup");
+    expect(operations.earlyIterationGated && operations.serviceCount == 0,
+           "an early native worker iteration cannot use the responder before readiness");
+    expect(!started && operations.configureCount == 2 && operations.startCount == 1 &&
+               operations.cleanupCount == 2 && !operations.resourcesConfigured &&
+               !operations.isHealthy(),
+           "native thread-start failure releases responder state and remains unhealthy");
+    expect(operations.pollOnce() && operations.serviceCount == 0,
+           "native worker iterations remain gated after thread-start failure");
 }
 
 void testScopeCleanup() {
@@ -282,9 +381,11 @@ public:
     bool sendAllowed;
     uint8_t input[128];
     size_t inputLength;
+    bool shortRead;
 
     CaptureTransport()
-        : outputLength(0), sentCount(0), sendAllowed(true), inputLength(0) {}
+        : outputLength(0), sentCount(0), sendAllowed(true), inputLength(0),
+          shortRead(false) {}
 
     uint8_t beginMulticast(IPAddress address, uint16_t port) {
         return address == IPAddress(224, 0, 0, 251) && port == 5353;
@@ -310,6 +411,9 @@ public:
     int read(uint8_t *buffer, size_t size) {
         if (size > inputLength) {
             size = inputLength;
+        }
+        if (shortRead && size > 0) {
+            --size;
         }
         memcpy(buffer, input, size);
         inputLength = 0;
@@ -398,6 +502,62 @@ void testMalformedQueries() {
            "long unrelated names do not overrun hostname comparisons");
 }
 
+void testMalformedQueryHeapCleanup() {
+    CaptureTransport transport;
+    MDNS responder(transport);
+    if (responder.begin(IPAddress(192, 0, 2, 1), "az3166") != 1) {
+     expect(false, "heap regression initializes the responder");
+     return;
+    }
+
+    mbed_stats_heap_t before = {};
+    mbed_stats_heap_t after = {};
+    mbed_stats_heap_get(&before);
+    bool packetsIgnored = true;
+    for (int attempt = 0; attempt < 32; ++attempt) {
+     transport.queue(ADDRESS_QUERY, 5);
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, 12);
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY) - 1);
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, 13);
+     transport.input[12] = 0xc0;
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
+     transport.input[12] = 63;
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
+     transport.shortRead = true;
+     responder.run();
+     transport.shortRead = false;
+     packetsIgnored &= transport.sentCount == 0;
+    }
+    mbed_stats_heap_get(&after);
+
+    expect(after.total_size > before.total_size,
+        "heap statistics observe the packet buffer allocations");
+    expect(after.current_size == before.current_size && after.alloc_cnt == before.alloc_cnt,
+        "repeated malformed and short-read packets retain no heap allocations");
+    expect(after.alloc_fail_cnt == before.alloc_fail_cnt && packetsIgnored,
+        "malformed packet bursts are rejected without allocation failures");
+
+    transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
+    responder.run();
+    expect(transport.sentCount == 1 && transport.outputLength == 40,
+        "valid queries still receive an answer after malformed packet bursts");
+}
+
 void testServiceAndCleanup() {
     CaptureTransport transport;
     MDNS responder(transport, false);
@@ -445,6 +605,7 @@ void setup() {
     while (!Serial);
     delay(3000);
     Serial.println("TEST_SUITE: LocalDiscoveryTests");
+    testNativeStartupFailure();
     testScopeCleanup();
     testSharedBackendOwnership();
     testFailedStartupReleasesOwnership();
@@ -456,6 +617,7 @@ void setup() {
     testRetryAddressChangeAndWraparound();
     testHostnameAnswers();
     testMalformedQueries();
+    testMalformedQueryHeapCleanup();
     testServiceAndCleanup();
     testTransportBounds();
 }

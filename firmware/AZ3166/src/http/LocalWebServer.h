@@ -52,6 +52,8 @@ public:
     static const int ACCEPT_IDLE = -1;
     static const int ACCEPT_ERROR = -2;
 
+    static int classifyAcceptError(int socketError);
+
     LocalWebServer(
         LocalHttpHandler &handler,
         uint16_t port,
@@ -110,6 +112,7 @@ private:
     LocalWebServerState state_;
     uint32_t lastWorkerAttempt_;
     bool workerAttempted_;
+    bool workerStarting_;
 };
 
 #endif
