@@ -504,7 +504,7 @@ void testMalformedQueries() {
 
 void testMalformedQueryHeapCleanup() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     if (responder.begin(IPAddress(192, 0, 2, 1), "az3166") != 1) {
      expect(false, "heap regression initializes the responder");
      return;

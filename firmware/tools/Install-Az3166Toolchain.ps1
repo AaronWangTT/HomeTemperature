@@ -104,6 +104,9 @@ function Test-ArduinoMdnsInstallation {
     ) {
         return $false
     }
+    if ((Get-Content -Raw -LiteralPath $properties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$") {
+        return $false
+    }
 
     $installedHash = (Get-Content -Raw -LiteralPath $libraryStamp).Trim()
     return $installedHash -eq $libraryArchiveSha256
