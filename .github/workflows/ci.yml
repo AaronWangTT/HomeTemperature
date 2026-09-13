@@ -104,7 +104,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/AppData/Local/Arduino15
-          key: az3166-core-2.0.1-index-d3fcd963-windows
+          key: az3166-core-2.0.2-index-ac5055e-windows
 
       - name: Install pinned AZ3166 toolchain
         shell: pwsh

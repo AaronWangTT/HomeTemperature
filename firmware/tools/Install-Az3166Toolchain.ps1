@@ -8,10 +8,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d3fcd963e8e6bb0b196462c894f9b5c4816d405f/package_azureboard_index.json"
-$coreVersion = "2.0.1"
+$boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/ac5055ec3a8fddd3135b1c367a9f630d33f65ef8/package_azureboard_index.json"
+$coreVersion = "2.0.2"
 $core = "AZ3166:stm32f4:$coreVersion"
-$coreArchiveSha256 = "9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462"
+$coreArchiveSha256 = "5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677"
 $compilerVersion = "5_4-2016q3"
 $openOcdVersion = "0.10.0"
 $arduinoVersion = "1.8.19"
@@ -174,8 +174,6 @@ if (Test-Az3166CoreInstallation) {
         Write-Host "Removing unverified $core installation before repair..."
         Remove-Item -LiteralPath $installedCoreRoot -Recurse -Force
     }
-    Remove-Item -LiteralPath $installedCompilerRoot -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $installedOpenOcdRoot -Recurse -Force -ErrorAction SilentlyContinue
 
     Write-Host "Installing $core from the pinned board package index..."
     & $resolvedArduino `

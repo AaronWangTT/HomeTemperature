@@ -732,9 +732,9 @@ internally.
 
 The AZ3166 C library does not reliably support `%f` in the `printf` family, so
 Arduino uses `dtostrf` for float-to-text conversion. The maintained AZ3166 Core
-2.0.1 corrects the fractional-digit defect in Core 2.0.0, which could format
-`45.0` at precision 1 as `45.00`. The Core implementation preserves expected
-Arduino behavior for:
+2.0.2 carries forward the correction introduced in Core 2.0.1 for the
+fractional-digit defect in Core 2.0.0, which could format `45.0` at precision 1
+as `45.00`. The Core implementation preserves expected Arduino behavior for:
 
 - `nan`, `inf`, and `ovf` markers;
 - positive and negative values;
@@ -743,12 +743,13 @@ Arduino behavior for:
 - left alignment for negative width.
 
 Core code such as `String(float)` also uses the corrected implementation,
-although the telemetry path avoids `String`. No project-local symbol override
+although the telemetry path avoids `String`. Core 2.0.2 also reports the
+maintained version from `getDevkitVersion()`. No project-local symbol override
 is linked.
 
 ### 13.2 SDK System Telemetry
 
-AZ3166 Core 2.0.1 disables the bundled SDK system telemetry hooks by default.
+AZ3166 Core 2.0.2 keeps the bundled SDK system telemetry hooks disabled by default.
 Defining `ENABLETRACE=1` in the platform build flags opts back into the vendor
 behavior. This Core-level default leaves the application's cloud uploader under
 explicit firmware control and removes the need for project-local no-op symbols.

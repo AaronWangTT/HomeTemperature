@@ -74,7 +74,7 @@ mDNS-capable LAN client, the running device is accessible at
 `http://az3166.local/api/telemetry`.
 
 These are reusable source components, not a separately packaged or
-board-independent SDK. Hardware adapters target AZ3166 Core 2.0.1 and
+board-independent SDK. Hardware adapters target AZ3166 Core 2.0.2 and
 ArduinoMDNS 1.1.0, and the telemetry schema, routes, and fixed hostname reflect
 this application. Adapt those choices for your project and review
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including ArduinoMDNS's LGPL
@@ -168,7 +168,7 @@ Key design boundaries:
 
 ## Firmware Quick Start
 
-The verified Windows toolchain is Arduino IDE 1.8.19 with AZ3166 Core 2.0.1,
+The verified Windows toolchain is Arduino IDE 1.8.19 with AZ3166 Core 2.0.2,
 ArduinoMDNS 1.1.0, and board `AZ3166:stm32f4:MXCHIP_AZ3166`.
 
 ```powershell
