@@ -19,12 +19,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $coreVersion = "2.0.1"
+$coreArchiveSha256 = "9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462"
 $libraryVersion = "1.1.0"
 $libraryArchiveSha256 = "f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47"
 $compilerVersion = "5_4-2016q3"
 $openOcdVersion = "0.10.0"
 $arduinoDataRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Arduino15"
 $installedCoreRoot = Join-Path $arduinoDataRoot "packages\AZ3166\hardware\stm32f4\$coreVersion"
+$coreStamp = Join-Path $installedCoreRoot ".hometemperature-source.sha256"
 $installedCompiler = Join-Path $arduinoDataRoot "packages\AZ3166\tools\arm-none-eabi-gcc\$compilerVersion\bin\arm-none-eabi-g++.exe"
 $installedOpenOcd = Join-Path $arduinoDataRoot "packages\AZ3166\tools\openocd\$openOcdVersion\bin\openocd.exe"
 $arduinoSketchbook = Join-Path $ArduinoInstallRoot "sketchbook"
@@ -74,9 +76,11 @@ if (
     -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt") -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "boards.txt") -PathType Leaf) -or
     -not (Test-Path -LiteralPath $installedCompiler -PathType Leaf) -or
-    -not (Test-Path -LiteralPath $installedOpenOcd -PathType Leaf)
+    -not (Test-Path -LiteralPath $installedOpenOcd -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $coreStamp -PathType Leaf) -or
+    (Get-Content -Raw -LiteralPath $coreStamp).Trim() -ne $coreArchiveSha256
 ) {
-    throw "AZ3166 Core $coreVersion and its pinned tools are not installed. Run firmware/tools/Install-Az3166Toolchain.ps1."
+    throw "The checksum-pinned AZ3166 Core $coreVersion and its pinned tools are not installed. Run firmware/tools/Install-Az3166Toolchain.ps1."
 }
 
 $libraryProperties = Join-Path $installedLibraryRoot "library.properties"
