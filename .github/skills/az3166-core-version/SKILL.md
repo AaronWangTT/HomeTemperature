@@ -75,9 +75,11 @@ The helper still resolves the live `maintenance` tip through GitHub and proves
 that both the selected revision and HomeTemperature's pinned revision are
 reachable from it before accepting either index.
 
-For `current`, run the helper with `-Action Current`. Report inconsistencies
-between the installer, build helper, CI cache, editor path, and documentation;
-do not choose one silently.
+For `current`, run the helper with `-Action Current`. It audits the canonical
+index URL pinned by the installer by default, while `list` and `resolve` default
+to the live `maintenance` tip. Report inconsistencies between the installer,
+build helper, CI cache, editor path, and documentation; do not choose one
+silently.
 
 ## Resolve A Target
 

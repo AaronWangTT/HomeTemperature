@@ -93,7 +93,7 @@ $currentArchiveSha256 = Get-RequiredMatchValue `
     -SourcePath $installerPath
 $currentIndexRevision = Get-RequiredMatchValue `
     -Text $installer `
-    -Pattern 'azureiotdevkit_tools/(?<value>[0-9a-f]{40})/package_azureboard_index\.json' `
+    -Pattern '^\$boardManagerUrl\s*=\s*"https://raw\.githubusercontent\.com/AaronWangTT/azureiotdevkit_tools/(?<value>[0-9a-f]{40})/package_azureboard_index\.json"\s*$' `
     -Description "the current package-index revision" `
     -SourcePath $installerPath
 $installerCompilerVersion = Get-RequiredMatchValue `
@@ -122,7 +122,11 @@ if ($maintenanceRevision -notmatch '^[0-9a-f]{40}$') {
 }
 
 if ([string]::IsNullOrWhiteSpace($IndexRevision)) {
-    $IndexRevision = $maintenanceRevision
+    $IndexRevision = if ($Action -eq "Current") {
+        $currentIndexRevision
+    } else {
+        $maintenanceRevision
+    }
 }
 $IndexRevision = $IndexRevision.ToLowerInvariant()
 Assert-MaintenanceRevision `
