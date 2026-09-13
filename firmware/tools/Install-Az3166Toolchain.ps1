@@ -11,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d3fcd963e8e6bb0b196462c894f9b5c4816d405f/package_azureboard_index.json"
 $coreVersion = "2.0.1"
 $core = "AZ3166:stm32f4:$coreVersion"
+$coreArchiveSha256 = "9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462"
 $compilerVersion = "5_4-2016q3"
 $openOcdVersion = "0.10.0"
 $arduinoVersion = "1.8.19"
@@ -20,8 +21,11 @@ $arduinoArchive = Join-Path $ArduinoInstallRoot "arduino-$arduinoVersion-windows
 $bundledArduinoExecutable = Join-Path $arduinoInstallDir "arduino_debug.exe"
 $arduinoDataRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Arduino15"
 $installedCoreRoot = Join-Path $arduinoDataRoot "packages\AZ3166\hardware\stm32f4\$coreVersion"
-$installedCompiler = Join-Path $arduinoDataRoot "packages\AZ3166\tools\arm-none-eabi-gcc\$compilerVersion\bin\arm-none-eabi-g++.exe"
-$installedOpenOcd = Join-Path $arduinoDataRoot "packages\AZ3166\tools\openocd\$openOcdVersion\bin\openocd.exe"
+$coreStamp = Join-Path $installedCoreRoot ".hometemperature-source.sha256"
+$installedCompilerRoot = Join-Path $arduinoDataRoot "packages\AZ3166\tools\arm-none-eabi-gcc\$compilerVersion"
+$installedCompiler = Join-Path $installedCompilerRoot "bin\arm-none-eabi-g++.exe"
+$installedOpenOcdRoot = Join-Path $arduinoDataRoot "packages\AZ3166\tools\openocd\$openOcdVersion"
+$installedOpenOcd = Join-Path $installedOpenOcdRoot "bin\openocd.exe"
 $arduinoSketchbook = Join-Path $ArduinoInstallRoot "sketchbook"
 $libraryVersion = "1.1.0"
 $libraryArchiveUrl = "https://github.com/AaronWangTT/ArduinoMDNS/releases/download/1.1.0/ArduinoMDNS-1.1.0.zip"
@@ -73,6 +77,21 @@ function Install-ArduinoIde {
     if (-not (Test-Path -LiteralPath $bundledArduinoExecutable -PathType Leaf)) {
         throw "Arduino IDE $arduinoVersion was downloaded, but arduino_debug.exe was not found at $bundledArduinoExecutable."
     }
+}
+
+function Test-Az3166CoreInstallation {
+    if (
+        -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "boards.txt") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $installedCompiler -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $installedOpenOcd -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $coreStamp -PathType Leaf)
+    ) {
+        return $false
+    }
+
+    $installedHash = (Get-Content -Raw -LiteralPath $coreStamp).Trim()
+    return $installedHash -eq $coreArchiveSha256
 }
 
 function Test-ArduinoMdnsInstallation {
@@ -141,18 +160,15 @@ if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($arduinoVer
     throw "Arduino IDE $arduinoVersion is required. Detected: $($versionOutput.Trim())"
 }
 
-if (
-    (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt")) -and
-    (Test-Path -LiteralPath (Join-Path $installedCoreRoot "boards.txt")) -and
-    (Test-Path -LiteralPath $installedCompiler -PathType Leaf) -and
-    (Test-Path -LiteralPath $installedOpenOcd -PathType Leaf)
-) {
+if (Test-Az3166CoreInstallation) {
     Write-Host "$core is already installed."
 } else {
     if (Test-Path -LiteralPath $installedCoreRoot -PathType Container) {
-        Write-Host "Removing incomplete $core installation before repair..."
+        Write-Host "Removing unverified $core installation before repair..."
         Remove-Item -LiteralPath $installedCoreRoot -Recurse -Force
     }
+    Remove-Item -LiteralPath $installedCompilerRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $installedOpenOcdRoot -Recurse -Force -ErrorAction SilentlyContinue
 
     Write-Host "Installing $core from the pinned board package index..."
     & $resolvedArduino `
@@ -170,6 +186,7 @@ if (
     ) {
         throw "$core installation completed without all required board and tool files."
     }
+    Set-Content -LiteralPath $coreStamp -Value $coreArchiveSha256 -NoNewline
 }
 
 if (Test-ArduinoMdnsInstallation) {
