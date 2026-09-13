@@ -82,7 +82,14 @@ int Az3166LocalWebServerOperations::acceptClient(int listener) {
     }
     LocalHttpSocket client(*this, lwip_accept(listener, NULL, NULL));
     if (!client) {
-        return LocalWebServer::ACCEPT_ERROR;
+        int socketError = 0;
+        socklen_t errorSize = sizeof(socketError);
+        if (lwip_getsockopt(listener, SOL_SOCKET, SO_ERROR,
+                            &socketError, &errorSize) != 0 ||
+            errorSize != sizeof(socketError)) {
+            return LocalWebServer::ACCEPT_ERROR;
+        }
+        return LocalWebServer::classifyAcceptError(socketError);
     }
     int noDelay = 1;
     if (!setNonblocking(client.get()) ||
@@ -111,6 +118,13 @@ int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, si
 }
 
 }  // namespace
+
+int LocalWebServer::classifyAcceptError(int socketError) {
+    bool transient = socketError == LWIP_EWOULDBLOCK ||
+        socketError == LWIP_EINTR || socketError == LWIP_ECONNABORTED ||
+        socketError == LWIP_ECONNRESET;
+    return transient ? ACCEPT_IDLE : ACCEPT_ERROR;
+}
 
 LocalHttpSocket::LocalHttpSocket(LocalWebServerOperations &operations, int descriptor)
     : operations_(&operations), descriptor_(descriptor) {
@@ -182,7 +196,8 @@ LocalWebServer::LocalWebServer(
       requested_({0, 0, false}),
       state_({false, false, 0, 0}),
       lastWorkerAttempt_(0),
-      workerAttempted_(false) {
+    workerAttempted_(false),
+    workerStarting_(false) {
 }
 
 LocalWebServer::~LocalWebServer() {
@@ -203,27 +218,44 @@ LocalWebServerOperations &LocalWebServer::defaultOperations() {
 }
 
 void LocalWebServer::update(bool wifiConnected, uint32_t address) {
-    std::lock_guard<rtos::Mutex> lock(stateMutex_);
-    uint32_t requestedAddress = wifiConnected ? address : 0;
-    if (requested_.address != requestedAddress) {
-        requested_.address = requestedAddress;
-        ++requested_.generation;
-        state_.listening = false;
-        state_.address = 0;
-        state_.error = 0;
-        workerAttempted_ = false;
-    }
     uint32_t now = operations_.currentTime();
-    if (!state_.workerStarted && requestedAddress != 0 && port_ != 0 &&
-        (!workerAttempted_ || now - lastWorkerAttempt_ >= startRetryIntervalMs_)) {
-        osStatus result = worker_.start(mbed::callback(this, &LocalWebServer::run));
-        state_.workerStarted = result == osOK;
-        state_.error = result == osOK ? 0 : static_cast<int>(result);
-        workerAttempted_ = true;
-        lastWorkerAttempt_ = operations_.currentTime();
-        if (result != osOK) {
-            Serial.println("Local HTTP worker start failed; retrying later");
+    uint32_t startupGeneration;
+    {
+        std::lock_guard<rtos::Mutex> lock(stateMutex_);
+        uint32_t requestedAddress = wifiConnected ? address : 0;
+        if (requested_.address != requestedAddress) {
+            requested_.address = requestedAddress;
+            ++requested_.generation;
+            state_.listening = false;
+            state_.address = 0;
+            state_.error = 0;
+            workerAttempted_ = false;
         }
+        if (requested_.shutdown || state_.workerStarted || workerStarting_ ||
+            requestedAddress == 0 || port_ == 0 ||
+            (workerAttempted_ && now - lastWorkerAttempt_ < startRetryIntervalMs_)) {
+            return;
+        }
+        workerStarting_ = true;
+        workerAttempted_ = true;
+        startupGeneration = requested_.generation;
+        state_.error = 0;
+    }
+
+    osStatus result = worker_.start(mbed::callback(this, &LocalWebServer::run));
+    uint32_t completed = operations_.currentTime();
+    {
+        std::lock_guard<rtos::Mutex> lock(stateMutex_);
+        workerStarting_ = false;
+        if (result == osOK) {
+            state_.workerStarted = true;
+        } else if (!requested_.shutdown && requested_.generation == startupGeneration) {
+            state_.error = static_cast<int>(result);
+            lastWorkerAttempt_ = completed;
+        }
+    }
+    if (result != osOK) {
+        Serial.println("Local HTTP worker start failed; retrying later");
     }
 }
 
@@ -261,6 +293,10 @@ void LocalWebServer::notifyService(bool available, uint32_t address) {
 }
 
 void LocalWebServer::run() {
+    {
+        std::lock_guard<rtos::Mutex> lock(stateMutex_);
+        state_.workerStarted = true;
+    }
     LocalHttpSocket listener(operations_);
     uint32_t generation = 0;
     uint32_t lastAttempt = 0;

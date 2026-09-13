@@ -38,8 +38,10 @@ Arduino UDP base, makes includes relative, removes the WIZnet startup delay,
 adds responder cleanup and explicit announcements, and propagates send errors.
 It also fixes used-path string allocations and query bounds, handles ANY
 questions, returns NOERROR instead of NXDOMAIN for IPv6-only questions, and uses
-an empty `IPAddress` for unresolved-name callbacks. Original copyright and
-license notices are retained. Example sketches and editor keywords are omitted.
+an empty `IPAddress` for unresolved-name callbacks. Receive-packet buffers are
+released at the shared cleanup exit, including malformed packets and short
+reads. Original copyright and license notices are retained. Example sketches
+and editor keywords are omitted.
 
 These files retain their upstream licenses; they are not relicensed as MIT.
 Firmware redistributors must comply with the LGPL, including its applicable

@@ -1066,9 +1066,9 @@ MDNSError_t MDNS::_processMDNSQuery()
 
 #endif // (defined(HAS_SERVICE_REGISTRATION) && HAS_SERVICE_REGISTRATION) || (defined(HAS_NAME_BROWSING) && HAS_NAME_BROWSING)
 
-   my_free(udpBuffer);
-
 errorReturn:
+
+   my_free(udpBuffer);
 
 #if defined(_USE_MALLOC_) 
    if (NULL != dnsHeader)

@@ -87,21 +87,32 @@ bool Az3166LocalDiscoveryOperations::start(
         service.port == 0) {
         return false;
     }
-    std::lock_guard<rtos::Mutex> lock(responderMutex_);
-    transport_.setLocalIPv4Address(address);
-    IPAddress localAddress(
-        static_cast<uint8_t>(address >> 24),
-        static_cast<uint8_t>(address >> 16),
-        static_cast<uint8_t>(address >> 8),
-        static_cast<uint8_t>(address));
-    bool started = responder_.begin(localAddress, service.hostname) &&
-        responder_.addServiceRecord(
-            service.serviceName, service.port, MDNSServiceTCP, service.txtRecord);
-    if (started && !workerStarted_) {
-        workerStarted_ = worker_.start(mbed::callback(
-            this, &Az3166LocalDiscoveryOperations::serviceDiscovery)) == osOK;
-        started = workerStarted_;
+    bool startWorker;
+    {
+        std::lock_guard<rtos::Mutex> lock(responderMutex_);
+        responderRunning_ = false;
+        followupPending_ = false;
+        transport_.setLocalIPv4Address(address);
+        IPAddress localAddress(
+            static_cast<uint8_t>(address >> 24),
+            static_cast<uint8_t>(address >> 16),
+            static_cast<uint8_t>(address >> 8),
+            static_cast<uint8_t>(address));
+        bool configured = responder_.begin(localAddress, service.hostname) &&
+            responder_.addServiceRecord(
+                service.serviceName, service.port, MDNSServiceTCP, service.txtRecord);
+        if (!configured) {
+            responder_.end();
+            return false;
+        }
+        startWorker = !workerStarted_;
     }
+
+    bool started = !startWorker || worker_.start(mbed::callback(
+        this, &Az3166LocalDiscoveryOperations::serviceDiscovery)) == osOK;
+
+    std::lock_guard<rtos::Mutex> lock(responderMutex_);
+    workerStarted_ = started;
     responderRunning_ = started;
     followupPending_ = started;
     firstAnnouncement_ = millis();

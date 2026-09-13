@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <string.h>
 #include <type_traits>
+#include "mbed_stats.h"
 
 #include "src/discovery/LocalDiscovery.h"
 #include "src/discovery/MdnsUdpTransport.h"
@@ -282,9 +283,11 @@ public:
     bool sendAllowed;
     uint8_t input[128];
     size_t inputLength;
+    bool shortRead;
 
     CaptureTransport()
-        : outputLength(0), sentCount(0), sendAllowed(true), inputLength(0) {}
+        : outputLength(0), sentCount(0), sendAllowed(true), inputLength(0),
+          shortRead(false) {}
 
     uint8_t beginMulticast(IPAddress address, uint16_t port) override {
         return address == IPAddress(224, 0, 0, 251) && port == 5353;
@@ -310,6 +313,9 @@ public:
     int read(uint8_t *buffer, size_t size) override {
         if (size > inputLength) {
             size = inputLength;
+        }
+        if (shortRead && size > 0) {
+            --size;
         }
         memcpy(buffer, input, size);
         inputLength = 0;
@@ -398,6 +404,62 @@ void testMalformedQueries() {
            "long unrelated names do not overrun hostname comparisons");
 }
 
+void testMalformedQueryHeapCleanup() {
+    CaptureTransport transport;
+    MDNS responder(transport);
+    if (responder.begin(IPAddress(192, 0, 2, 1), "az3166") != 1) {
+     expect(false, "heap regression initializes the responder");
+     return;
+    }
+
+    mbed_stats_heap_t before = {};
+    mbed_stats_heap_t after = {};
+    mbed_stats_heap_get(&before);
+    bool packetsIgnored = true;
+    for (int attempt = 0; attempt < 32; ++attempt) {
+     transport.queue(ADDRESS_QUERY, 5);
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, 12);
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY) - 1);
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, 13);
+     transport.input[12] = 0xc0;
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
+     transport.input[12] = 63;
+     responder.run();
+     packetsIgnored &= transport.sentCount == 0;
+
+     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
+     transport.shortRead = true;
+     responder.run();
+     transport.shortRead = false;
+     packetsIgnored &= transport.sentCount == 0;
+    }
+    mbed_stats_heap_get(&after);
+
+    expect(after.total_size > before.total_size,
+        "heap statistics observe the packet buffer allocations");
+    expect(after.current_size == before.current_size && after.alloc_cnt == before.alloc_cnt,
+        "repeated malformed and short-read packets retain no heap allocations");
+    expect(after.alloc_fail_cnt == before.alloc_fail_cnt && packetsIgnored,
+        "malformed packet bursts are rejected without allocation failures");
+
+    transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
+    responder.run();
+    expect(transport.sentCount == 1 && transport.outputLength == 40,
+        "valid queries still receive an answer after malformed packet bursts");
+}
+
 void testServiceAndCleanup() {
     CaptureTransport transport;
     MDNS responder(transport);
@@ -456,6 +518,7 @@ void setup() {
     testRetryAddressChangeAndWraparound();
     testHostnameAnswers();
     testMalformedQueries();
+    testMalformedQueryHeapCleanup();
     testServiceAndCleanup();
     testTransportBounds();
 }
