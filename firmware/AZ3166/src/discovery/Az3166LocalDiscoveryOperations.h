@@ -1,9 +1,9 @@
 #ifndef AZ3166_LOCAL_DISCOVERY_OPERATIONS_H
 #define AZ3166_LOCAL_DISCOVERY_OPERATIONS_H
 
+#include <ArduinoMDNS.h>
 #include "LocalDiscovery.h"
 #include "MdnsUdpTransport.h"
-#include "mdns/MDNS.h"
 #include "rtos.h"
 
 class Az3166LocalDiscoveryOperations : public LocalDiscoveryOperations {

@@ -21,7 +21,6 @@ Invoke-Az3166TestSuite `
         "config/AppConfig.h",
         "cloud/CloudTelemetry.h",
         "cloud/CloudTelemetry.cpp",
-        "platform/FloatFormatting.cpp",
         "telemetry/TelemetryService.h",
         "telemetry/TelemetryService.cpp",
         "cloud/TelemetryUploadResult.h",

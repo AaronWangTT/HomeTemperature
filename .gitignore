@@ -1,4 +1,5 @@
 .venv/
+.tools/
 firmware/AZ3166/src/config/cloud_secrets.h
 firmware/AZ3166/src/config/cloud_deployment.h
 server/.env

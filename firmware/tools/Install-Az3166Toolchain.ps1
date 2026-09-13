@@ -8,15 +8,30 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$boardManagerUrl = "https://raw.githubusercontent.com/VSChina/azureiotdevkit_tools/d0c76e57d1ad62610aab0773ba687d55df2e4c91/package_azureboard_index.json"
-$core = "AZ3166:stm32f4:2.0.0"
+$boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d3fcd963e8e6bb0b196462c894f9b5c4816d405f/package_azureboard_index.json"
+$coreVersion = "2.0.1"
+$core = "AZ3166:stm32f4:$coreVersion"
+$coreArchiveSha256 = "9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462"
+$compilerVersion = "5_4-2016q3"
+$openOcdVersion = "0.10.0"
 $arduinoVersion = "1.8.19"
 $arduinoArchiveUrl = "https://downloads.arduino.cc/arduino-$arduinoVersion-windows.zip"
 $arduinoInstallDir = Join-Path $ArduinoInstallRoot "arduino-$arduinoVersion"
 $arduinoArchive = Join-Path $ArduinoInstallRoot "arduino-$arduinoVersion-windows.zip"
 $bundledArduinoExecutable = Join-Path $arduinoInstallDir "arduino_debug.exe"
 $arduinoDataRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Arduino15"
-$installedCoreRoot = Join-Path $arduinoDataRoot "packages\AZ3166\hardware\stm32f4\2.0.0"
+$installedCoreRoot = Join-Path $arduinoDataRoot "packages\AZ3166\hardware\stm32f4\$coreVersion"
+$coreStamp = Join-Path $installedCoreRoot ".hometemperature-source.sha256"
+$installedCompilerRoot = Join-Path $arduinoDataRoot "packages\AZ3166\tools\arm-none-eabi-gcc\$compilerVersion"
+$installedCompiler = Join-Path $installedCompilerRoot "bin\arm-none-eabi-g++.exe"
+$installedOpenOcdRoot = Join-Path $arduinoDataRoot "packages\AZ3166\tools\openocd\$openOcdVersion"
+$installedOpenOcd = Join-Path $installedOpenOcdRoot "bin\openocd.exe"
+$arduinoSketchbook = Join-Path $ArduinoInstallRoot "sketchbook"
+$libraryVersion = "1.1.0"
+$libraryArchiveUrl = "https://github.com/AaronWangTT/ArduinoMDNS/releases/download/1.1.0/ArduinoMDNS-1.1.0.zip"
+$libraryArchiveSha256 = "f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47"
+$installedLibraryRoot = Join-Path $arduinoSketchbook "libraries\ArduinoMDNS"
+$libraryStamp = Join-Path $installedLibraryRoot ".hometemperature-source.sha256"
 
 function Find-ArduinoExecutable {
     $candidates = [System.Collections.Generic.List[string]]::new()
@@ -64,6 +79,77 @@ function Install-ArduinoIde {
     }
 }
 
+function Test-Az3166CoreInstallation {
+    if (
+        -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "boards.txt") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $installedCompiler -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $installedOpenOcd -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $coreStamp -PathType Leaf)
+    ) {
+        return $false
+    }
+
+    $installedHash = (Get-Content -Raw -LiteralPath $coreStamp).Trim()
+    return $installedHash -eq $coreArchiveSha256
+}
+
+function Test-ArduinoMdnsInstallation {
+    $properties = Join-Path $installedLibraryRoot "library.properties"
+    $transportHeader = Join-Path $installedLibraryRoot "MDNSTransport.h"
+    if (
+        -not (Test-Path -LiteralPath $properties -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $transportHeader -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $libraryStamp -PathType Leaf)
+    ) {
+        return $false
+    }
+    if ((Get-Content -Raw -LiteralPath $properties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$") {
+        return $false
+    }
+
+    $installedHash = (Get-Content -Raw -LiteralPath $libraryStamp).Trim()
+    return $installedHash -eq $libraryArchiveSha256
+}
+
+function Install-ArduinoMdns {
+    New-Item -ItemType Directory -Path $ArduinoInstallRoot -Force | Out-Null
+    $archive = Join-Path $ArduinoInstallRoot "ArduinoMDNS-$libraryVersion.zip"
+    $extractRoot = Join-Path $ArduinoInstallRoot "ArduinoMDNS-$libraryVersion-extract"
+
+    Write-Host "Downloading ArduinoMDNS $libraryVersion..."
+    try {
+        Invoke-WebRequest -Uri $libraryArchiveUrl -OutFile $archive
+        $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $libraryArchiveSha256) {
+            throw "ArduinoMDNS checksum mismatch. Expected $libraryArchiveSha256, received $actualHash."
+        }
+
+        Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
+        $extractedLibrary = Join-Path $extractRoot "ArduinoMDNS"
+        $properties = Join-Path $extractedLibrary "library.properties"
+        $transportHeader = Join-Path $extractedLibrary "MDNSTransport.h"
+        if (-not (Test-Path -LiteralPath $properties -PathType Leaf)) {
+            throw "ArduinoMDNS archive does not contain the expected library root."
+        }
+        if ((Get-Content -Raw -LiteralPath $properties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$") {
+            throw "ArduinoMDNS archive does not declare version $libraryVersion."
+        }
+        if (-not (Test-Path -LiteralPath $transportHeader -PathType Leaf)) {
+            throw "ArduinoMDNS archive does not contain the required MDNSTransport.h header."
+        }
+
+        New-Item -ItemType Directory -Path (Split-Path -Parent $installedLibraryRoot) -Force | Out-Null
+        Remove-Item -LiteralPath $installedLibraryRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $extractedLibrary -Destination $installedLibraryRoot
+        Set-Content -LiteralPath $libraryStamp -Value $libraryArchiveSha256 -NoNewline
+    } finally {
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $resolvedArduino = Find-ArduinoExecutable
 if (-not $resolvedArduino) {
     Install-ArduinoIde
@@ -81,12 +167,16 @@ if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($arduinoVer
     throw "Arduino IDE $arduinoVersion is required. Detected: $($versionOutput.Trim())"
 }
 
-if (
-    (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt")) -and
-    (Test-Path -LiteralPath (Join-Path $installedCoreRoot "boards.txt"))
-) {
+if (Test-Az3166CoreInstallation) {
     Write-Host "$core is already installed."
 } else {
+    if (Test-Path -LiteralPath $installedCoreRoot -PathType Container) {
+        Write-Host "Removing unverified $core installation before repair..."
+        Remove-Item -LiteralPath $installedCoreRoot -Recurse -Force
+    }
+    Remove-Item -LiteralPath $installedCompilerRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $installedOpenOcdRoot -Recurse -Force -ErrorAction SilentlyContinue
+
     Write-Host "Installing $core from the pinned board package index..."
     & $resolvedArduino `
         --install-boards $core `
@@ -95,6 +185,21 @@ if (
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to install $core."
     }
+    if (
+        -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "boards.txt") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $installedCompiler -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $installedOpenOcd -PathType Leaf)
+    ) {
+        throw "$core installation completed without all required board and tool files."
+    }
+    Set-Content -LiteralPath $coreStamp -Value $coreArchiveSha256 -NoNewline
 }
 
-Write-Host "AZ3166 Core 2.0.0 installation completed."
+if (Test-ArduinoMdnsInstallation) {
+    Write-Host "ArduinoMDNS $libraryVersion is already installed."
+} else {
+    Install-ArduinoMdns
+}
+
+Write-Host "AZ3166 Core $coreVersion and ArduinoMDNS $libraryVersion installation completed."

@@ -3,10 +3,10 @@
 #include <type_traits>
 #include "mbed_stats.h"
 
+#include <ArduinoMDNS.h>
 #include "src/discovery/LocalDiscovery.h"
 #include "src/discovery/Az3166LocalDiscoveryOperations.h"
 #include "src/discovery/MdnsUdpTransport.h"
-#include "src/discovery/mdns/MDNS.h"
 
 static_assert(std::is_abstract<LocalDiscoveryOperations>::value,
               "LocalDiscoveryOperations must remain an interface");
@@ -373,7 +373,7 @@ void testIndependentOperations() {
            "health and advertised addresses belong to the injected backend");
 }
 
-class CaptureTransport : public MdnsTransport {
+class CaptureTransport {
 public:
     uint8_t output[512];
     size_t outputLength;
@@ -387,15 +387,15 @@ public:
         : outputLength(0), sentCount(0), sendAllowed(true), inputLength(0),
           shortRead(false) {}
 
-    uint8_t beginMulticast(IPAddress address, uint16_t port) override {
+    uint8_t beginMulticast(IPAddress address, uint16_t port) {
         return address == IPAddress(224, 0, 0, 251) && port == 5353;
     }
-    void stop() override { inputLength = 0; }
-    int beginPacket(IPAddress address, uint16_t port) override {
+    void stop() { inputLength = 0; }
+    int beginPacket(IPAddress address, uint16_t port) {
         outputLength = 0;
         return address == IPAddress(224, 0, 0, 251) && port == 5353;
     }
-    size_t write(const uint8_t *buffer, size_t size) override {
+    size_t write(const uint8_t *buffer, size_t size) {
         if (size > sizeof(output) - outputLength) {
             return 0;
         }
@@ -403,12 +403,12 @@ public:
         outputLength += size;
         return size;
     }
-    int endPacket() override {
+    int endPacket() {
         ++sentCount;
         return sendAllowed;
     }
-    int parsePacket() override { return static_cast<int>(inputLength); }
-    int read(uint8_t *buffer, size_t size) override {
+    int parsePacket() { return static_cast<int>(inputLength); }
+    int read(uint8_t *buffer, size_t size) {
         if (size > inputLength) {
             size = inputLength;
         }
@@ -419,9 +419,9 @@ public:
         inputLength = 0;
         return static_cast<int>(size);
     }
-    void flush() override { inputLength = 0; }
-    IPAddress remoteIP() override { return IPAddress(192, 0, 2, 10); }
-    uint16_t remotePort() override { return 5353; }
+    void flush() { inputLength = 0; }
+    IPAddress remoteIP() { return IPAddress(192, 0, 2, 10); }
+    uint16_t remotePort() { return 5353; }
 
     void queue(const uint8_t *buffer, size_t size) {
         memcpy(input, buffer, size);
@@ -449,7 +449,7 @@ bool containsBytes(const uint8_t *buffer, size_t size, const char *text) {
 
 void testHostnameAnswers() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     expect(responder.begin(IPAddress(192, 0, 2, 1), "az3166") == 1,
            "responder joins the standard mDNS group");
     transport.queue(ADDRESS_QUERY, sizeof(ADDRESS_QUERY));
@@ -478,7 +478,7 @@ void testHostnameAnswers() {
 
 void testMalformedQueries() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     responder.begin(IPAddress(192, 0, 2, 1), "az3166");
     transport.queue(ADDRESS_QUERY, 5);
     responder.run();
@@ -504,7 +504,7 @@ void testMalformedQueries() {
 
 void testMalformedQueryHeapCleanup() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     if (responder.begin(IPAddress(192, 0, 2, 1), "az3166") != 1) {
      expect(false, "heap regression initializes the responder");
      return;
@@ -560,7 +560,7 @@ void testMalformedQueryHeapCleanup() {
 
 void testServiceAndCleanup() {
     CaptureTransport transport;
-    MDNS responder(transport);
+    MDNS responder(transport, false);
     bool restarted = true;
     for (int attempt = 0; attempt < 20; ++attempt) {
         restarted &= responder.begin(IPAddress(192, 0, 2, 1), "az3166") == 1;

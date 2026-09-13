@@ -27,8 +27,9 @@ small interfaces, with retry and scheduling policy kept separate from transport.
 
 Sources are grouped by capability under `firmware/AZ3166/src/`: `config/`,
 `connectivity/`, `http/`, `discovery/`, `telemetry/`, `cloud/`, `input/`, and
-`platform/`. Headers stay beside their implementations, and the vendored
-responder is isolated in `discovery/mdns/`.
+`platform/`. Headers stay beside their implementations. The build tooling
+installs the pinned ArduinoMDNS dependency into a repository-local sketchbook;
+`discovery/` retains only the AZ3166-specific raw-lwIP transport adapter.
 
 | Capability | Components | What They Encapsulate |
 | --- | --- | --- |
@@ -45,8 +46,8 @@ responder is isolated in `discovery/mdns/`.
 Each guide covers capabilities, design, embedding examples, ownership, limits,
 and focused verification. The [configuration guide](firmware/AZ3166/src/config/README.md)
 describes application constants and safe deployment setup; the
-[platform guide](firmware/AZ3166/src/platform/README.md) also explains the SDK
-compatibility overrides.
+[platform guide](firmware/AZ3166/src/platform/README.md) also explains the
+maintained Core behavior relied on by the firmware.
 
 ### Built for Adaptation and Testing
 
@@ -54,8 +55,9 @@ The sketch owns component wiring and loop order; components receive the state
 or collaborators they need. Injectable clock and platform operations let the
 tests exercise reconnects, retries, address changes, and failure handling
 deterministically. A replaceable mDNS transport lets protocol tests inspect
-datagrams without real Wi-Fi traffic. Focused test sketches share a build/upload
-harness that restores production firmware after an on-board run.
+datagrams without real Wi-Fi traffic through ArduinoMDNS's custom transport API.
+Focused test sketches share a build/upload harness that restores production
+firmware after an on-board run.
 
 The HTTP engine has no sensor, telemetry-schema, or mDNS dependency. Supply a
 `LocalHttpHandler` for your application and, optionally, a service-lifecycle
@@ -72,11 +74,11 @@ mDNS-capable LAN client, the running device is accessible at
 `http://az3166.local/api/telemetry`.
 
 These are reusable source components, not a separately packaged or
-board-independent SDK. Hardware adapters target AZ3166 Core 2.0.0, and the
-telemetry schema, routes, and fixed hostname reflect this application. Adapt
-those choices for your project and review
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including the vendored mDNS
-library's LGPL terms.
+board-independent SDK. Hardware adapters target AZ3166 Core 2.0.1 and
+ArduinoMDNS 1.1.0, and the telemetry schema, routes, and fixed hostname reflect
+this application. Adapt those choices for your project and review
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including ArduinoMDNS's LGPL
+terms.
 
 ## Architecture
 
@@ -166,8 +168,8 @@ Key design boundaries:
 
 ## Firmware Quick Start
 
-The verified Windows toolchain is Arduino IDE 1.8.19 with AZ3166 Core 2.0.0
-and board `AZ3166:stm32f4:MXCHIP_AZ3166`.
+The verified Windows toolchain is Arduino IDE 1.8.19 with AZ3166 Core 2.0.1,
+ArduinoMDNS 1.1.0, and board `AZ3166:stm32f4:MXCHIP_AZ3166`.
 
 ```powershell
 & .\firmware\tools\Install-Az3166Toolchain.ps1

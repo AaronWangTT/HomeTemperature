@@ -5,49 +5,54 @@ software and data keep their own licenses and terms.
 
 ## Firmware Toolchain
 
-The firmware builds against the Microsoft MXChip Azure IoT DevKit SDK / AZ3166
-Arduino board package 2.0.0. The package is installed separately and is not
-vendored in this repository.
+The firmware builds against the maintained MXChip Azure IoT DevKit SDK / AZ3166
+Arduino board package 2.0.1, based on Microsoft's final 2.0.0 release. The
+package is installed separately and is not vendored in this repository.
 
-- Source: <https://github.com/microsoft/devkit-sdk/tree/2.0.0>
-- Board package index: <https://raw.githubusercontent.com/VSChina/azureiotdevkit_tools/d0c76e57d1ad62610aab0773ba687d55df2e4c91/package_azureboard_index.json>
-- Board archive checksum declared by that index: MD5
-  `4f51c0ebf4d510f28c06d203a4ce23f8`
+- Maintained source: <https://github.com/AaronWangTT/devkit-sdk/tree/2.0.1>
+- Upstream source: <https://github.com/microsoft/devkit-sdk/tree/2.0.0>
+- Board package index: <https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d3fcd963e8e6bb0b196462c894f9b5c4816d405f/package_azureboard_index.json>
+- Release archive: <https://github.com/AaronWangTT/devkit-sdk/releases/download/2.0.1/AZ3166-2.0.1.zip>
+- Board archive SHA-256:
+  `9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462`
 - License: MIT, copyright Microsoft Corporation
 - Tool dependencies declared by that package: GNU Arm Embedded Toolchain
   `5_4-2016q3` and OpenOCD `0.10.0`
+
+The maintained release corrects `dtostrf` precision and width formatting and
+makes SDK system telemetry opt-in through `ENABLETRACE=1`.
 
 The board package contains additional third-party components. Their notices and
 licenses in the installed package continue to apply.
 
 ## Firmware mDNS Responder
 
-The firmware vendors ArduinoMDNS 1.0.1, based on Georg Kaindl's EthernetBonjour,
-under [firmware/AZ3166/src/discovery/mdns/README.md](firmware/AZ3166/src/discovery/mdns/README.md).
+The firmware builds against maintained ArduinoMDNS 1.1.0, based on Georg
+Kaindl's EthernetBonjour. The library is installed separately into the
+repository-local Arduino sketchbook and is not vendored in this repository.
 
-- Source: <https://github.com/arduino-libraries/ArduinoMDNS>
-- Release archive: <https://downloads.arduino.cc/libraries/github.com/arduino-libraries/ArduinoMDNS-1.0.1.zip>
-- SHA-256 from the official Arduino library index:
-  `df7a8c48cb74541c652c75d90e9dbe04ba0f0c0d06e515dca2a80380b0945c11`
+- Maintained source: <https://github.com/AaronWangTT/ArduinoMDNS/tree/1.1.0>
+- Upstream source: <https://github.com/arduino-libraries/ArduinoMDNS>
+- Release archive: <https://github.com/AaronWangTT/ArduinoMDNS/releases/download/1.1.0/ArduinoMDNS-1.1.0.zip>
+- Release archive SHA-256:
+  `f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47`
 - Library license: LGPL-3.0-or-later; the Arduino wrapper header carries its
   original LGPL-2.1-or-later notice.
-- License text: [firmware/AZ3166/src/discovery/mdns/LICENSE.txt](firmware/AZ3166/src/discovery/mdns/LICENSE.txt).
+- License text: <https://github.com/AaronWangTT/ArduinoMDNS/blob/1.1.0/LICENSE.txt>
 
-The AZ3166 port substitutes an injectable datagram interface for the missing
-Arduino UDP base, makes includes relative, removes the WIZnet startup delay,
-adds responder cleanup and explicit announcements, and propagates send errors.
-It also fixes used-path string allocations and query bounds, handles ANY
-questions, returns NOERROR instead of NXDOMAIN for IPv6-only questions, and uses
-an empty `IPAddress` for unresolved-name callbacks. Receive-packet buffers are
-released at the shared cleanup exit, including malformed packets and short
-reads. Original copyright and license notices are retained. Example sketches
-and editor keywords are omitted.
+The maintained release adds a borrowed custom-transport API, optional WIZnet
+startup delay, responder cleanup and explicit announcements, and send-error
+propagation. It also fixes used-path string allocations and query bounds,
+handles ANY questions, returns NOERROR instead of NXDOMAIN for IPv6-only
+questions, and uses an empty `IPAddress` for unresolved-name callbacks.
+Receive-packet buffers are released at the shared cleanup exit, including
+malformed packets and short reads. Original copyright and license notices are
+retained in the released library.
 
 These files retain their upstream licenses; they are not relicensed as MIT.
 Firmware redistributors must comply with the LGPL, including its applicable
 source and relinking requirements. Keep the corresponding library source,
-local modifications, notices, and reproducible firmware build instructions
-available with releases.
+notices, and reproducible firmware build instructions available with releases.
 
 ## Embedded Trust Anchor
 

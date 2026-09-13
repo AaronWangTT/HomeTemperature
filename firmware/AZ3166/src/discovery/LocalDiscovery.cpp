@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 Az3166LocalDiscoveryOperations::Az3166LocalDiscoveryOperations()
-    : responder_(transport_),
+    : responder_(transport_, false),
       worker_(osPriorityNormal, sizeof(workerStack_), workerStack_),
       workerStarted_(false),
       shutdown_(false),

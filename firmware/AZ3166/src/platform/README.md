@@ -1,8 +1,8 @@
-# Platform Support and Compatibility
+# Platform Support
 
-Keep board identity, watchdog recovery, and AZ3166 Core compatibility behavior
-in one place. Identity and watchdog are small reusable wrappers; the compatibility
-files deliberately affect process-wide SDK behavior and are not general utilities.
+Keep board identity and watchdog recovery in one place. The maintained AZ3166
+Core supplies the process-wide formatting and SDK telemetry behavior relied on
+by the application.
 
 ## Components
 
@@ -10,8 +10,6 @@ files deliberately affect process-wide SDK behavior and are not general utilitie
 | --- | --- |
 | [DeviceIdentity.h](DeviceIdentity.h) | Read the STM32 unique identifier and provide a stable application ID. |
 | [WatchdogController.h](WatchdogController.h) | Configure the board watchdog, report its reset cause, and feed its timer. |
-| [FloatFormatting.cpp](FloatFormatting.cpp) | Supply the project's corrected C-linkage `dtostrf` implementation for AZ3166 Core 2.0.0. |
-| [disable_system_telemetry.cpp](disable_system_telemetry.cpp) | Replace SDK system-telemetry hooks with no-op definitions without modifying the installed board package. |
 
 ## DeviceIdentity
 
@@ -93,33 +91,19 @@ currently feeds from the main loop around input, connectivity, and upload work.
 - Do not deliberately force resets during normal automated test runs or live
   deployments. Recovery checks need a controlled board test with state preserved.
 
-## Float Formatting Override
+## Board Package Behavior
 
-Core 2.0.0's `dtostrf` has incorrect fractional-digit behavior. The local override
-keeps the same C-linkage function signature and supplies rounding, width/padding,
-and handling of non-finite or out-of-range values. The sensor formatter uses it
-instead of relying on problematic floating-point `printf` behavior in this core.
+The firmware requires maintained AZ3166 Core 2.0.1. Its `dtostrf` implementation
+corrects Core 2.0.0's fractional-digit and width behavior while retaining
+rounding and non-finite handling. `TelemetryService` uses that Core function
+instead of floating-point `printf`; callers must still provide enough output
+storage for the requested width, precision, sign, and terminator.
 
-There is no component object to construct. Include the translation unit in the
-firmware build, as the recursive `src/` build already does. Do not `#include` the
-implementation file into another source file or add a second competing override.
-
-The function writes into caller-owned storage and has no capacity parameter;
-callers must size the output for their requested width, precision, sign, and
-terminator. Review this workaround when upgrading the board package rather
-than assuming every future core needs the replacement.
-
-## SDK Telemetry Override
-
-The no-op C definitions replace `telemetry_init`, `send_telemetry_data`, and the
-corresponding asynchronous and synchronous send hooks linked from the SDK.
-This prevents those SDK hooks from sending unrelated system telemetry while
-leaving the application's [cloud uploader](../cloud/README.md) intact.
-
-This is a firmware-wide link decision, not a runtime privacy toggle. The exact
-symbol names and signatures must match the installed SDK. Reusing the file on
-another SDK requires checking those definitions and link behavior; it is not
-a general guarantee that every possible network egress path is disabled.
+Core 2.0.1 also disables the bundled SDK system telemetry hooks by default.
+Defining `ENABLETRACE=1` in platform build flags opts into that vendor behavior.
+This does not disable or alter the application's explicit
+[cloud uploader](../cloud/README.md). Review both behaviors when selecting a
+different board package; no project-local symbol overrides remain.
 
 ## Verification and Related Guides
 
@@ -131,11 +115,11 @@ From the repository root:
 ```
 
 The first suite covers identity formatting and object state, plus the hardware
-read when executed on the board. The second includes float-formatting regression
-coverage. Neither command above executes the tests on hardware.
+read when executed on the board. The second includes regression coverage for
+the Core's float formatting. Neither command above executes tests on hardware.
 
 There is no dedicated watchdog reset suite. Compile/link checks and a controlled
-startup/recovery observation are relevant when changing watchdog or SDK overrides.
+startup/recovery observation are relevant when changing watchdog or Core behavior.
 Recheck resource usage after link-layout changes; known AZ3166 alignment warnings
 must not be mistaken for runtime validation.
 
