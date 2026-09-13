@@ -7,6 +7,7 @@
 
 #include "src/config/AppConfig.h"
 #include "src/http/LocalWebServer.h"
+#include "src/http/Az3166LocalWebServerOperations.h"
 #include "src/telemetry/TelemetryHttpHandler.h"
 #include "src/telemetry/TelemetryService.h"
 
@@ -96,6 +97,112 @@ void testAcceptErrorClassification() {
     }
     expect(fatalClassified,
            "fatal and unrecognized accept errors retain listener recovery");
+}
+
+class NativeAcceptOperations : public Az3166LocalWebServerOperations {
+public:
+    int readyResult = 1;
+    int optionResult = 0;
+    int socketError = LWIP_EWOULDBLOCK;
+    socklen_t returnedSize = sizeof(int);
+    bool writeError = true;
+    bool lookupContract = true;
+    int readyCount = 0;
+    int acceptCount = 0;
+    int lookupCount = 0;
+    int closeCount = 0;
+
+    void closeSocket(int) override { ++closeCount; }
+
+protected:
+    int listenerReady(int listener) override {
+        ++readyCount;
+        lookupContract &= listener == 10;
+        return readyResult;
+    }
+
+    int acceptSocket(int listener) override {
+        ++acceptCount;
+        lookupContract &= listener == 10;
+        return -1;
+    }
+
+    int getSocketOption(int descriptor, int level, int option,
+                        void *value, socklen_t *length) override {
+        ++lookupCount;
+        if (value == NULL || length == NULL) {
+            lookupContract = false;
+            return -1;
+        }
+        lookupContract &= descriptor == 10 && level == SOL_SOCKET &&
+            option == SO_ERROR && *length == sizeof(int);
+        if (writeError) {
+            *static_cast<int *>(value) = socketError;
+        }
+        *length = returnedSize;
+        return optionResult;
+    }
+};
+
+void testNativeAcceptErrorLookup() {
+    NativeAcceptOperations operations;
+    bool transientHandled = true;
+    int expectedLookups = 0;
+    for (int socketError : TRANSIENT_ACCEPT_ERRORS) {
+        operations.socketError = socketError;
+        transientHandled &= operations.acceptClient(10) == LocalWebServer::ACCEPT_IDLE;
+        ++expectedLookups;
+    }
+    expect(transientHandled, "native accept uses SO_ERROR to preserve transient failures");
+
+    const int fatalErrors[] = {LWIP_EBADF, LWIP_ENOTSOCK, LWIP_EINVAL, LWIP_ENETDOWN, 0};
+    bool fatalHandled = true;
+    for (int socketError : fatalErrors) {
+        operations.socketError = socketError;
+        fatalHandled &= operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR;
+        ++expectedLookups;
+    }
+    expect(fatalHandled, "native accept retains recovery for fatal or unrecognized SO_ERROR");
+    expect(operations.lookupContract && operations.readyCount == expectedLookups &&
+               operations.acceptCount == expectedLookups &&
+               operations.lookupCount == expectedLookups && operations.closeCount == 0,
+           "native error lookup uses the listener, SOL_SOCKET, SO_ERROR, and exact int size");
+}
+
+void testNativeAcceptInvalidErrorLookup() {
+    NativeAcceptOperations operations;
+    operations.optionResult = -1;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR,
+           "failed SO_ERROR lookup cannot be accepted as a transient error");
+
+    operations.optionResult = 0;
+    const socklen_t invalidSizes[] = {0, sizeof(int) - 1, sizeof(int) + 1};
+    bool invalidSizesRejected = true;
+    for (socklen_t length : invalidSizes) {
+        operations.returnedSize = length;
+        invalidSizesRejected &= operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR;
+    }
+    expect(invalidSizesRejected, "zero, short, and oversized SO_ERROR lengths are rejected");
+
+    operations.returnedSize = sizeof(int);
+    operations.writeError = false;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR,
+           "SO_ERROR lookup without an error value does not reuse a previous transient value");
+    expect(operations.lookupContract && operations.lookupCount == 5 && operations.closeCount == 0,
+           "failed error lookups never close the listener or an invalid accepted handle");
+}
+
+void testNativeAcceptReadinessFailures() {
+    NativeAcceptOperations operations;
+    operations.readyResult = 0;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_IDLE,
+           "native accept skips an idle listener");
+    operations.readyResult = -1;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR,
+           "native accept reports a failed readiness check");
+    expect(operations.readyCount == 2 && operations.acceptCount == 0 &&
+               operations.lookupCount == 0 && operations.closeCount == 0,
+           "idle or invalid readiness never calls accept or SO_ERROR");
 }
 
 void testDisconnectedPolling() {
@@ -945,6 +1052,9 @@ void setup() {
     testTelemetryRoute();
     testUnknownRoutes();
     testAcceptErrorClassification();
+    testNativeAcceptErrorLookup();
+    testNativeAcceptInvalidErrorLookup();
+    testNativeAcceptReadinessFailures();
     testDisconnectedPolling();
     testTelemetryHandler();
     testSocketScopeAndReset();

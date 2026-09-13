@@ -842,10 +842,26 @@ mocking framework:
   tests run the real worker. Each fake backend binds a fixture and its mutex and
   semaphores; separate instances can drive separate workers. Large packet buffers
   remain in static test storage rather than on the embedded test stack.
+- `Az3166LocalWebServerOperations` exposes protected readiness, accept, and
+  socket-option calls for adapter tests. These tests invoke the production
+  `acceptClient()` method and verify the listener descriptor, `SOL_SOCKET`,
+  `SO_ERROR`, and initial `socklen_t` length. They cover transient and fatal
+  values, failed lookups, zero/short/oversized returned lengths, missing error
+  output, and readiness paths that must not attempt a lookup.
 - `TelemetryHttpPayloadBuilder` replaces telemetry acquisition in HTTP response-contract tests.
 - `LocalDiscoveryOperations` injects clock, responder startup/shutdown, and health
   checks through a stateful fake implementation. Shared-backend cases verify
   exclusive ownership, scope cleanup, and retry handoff without live multicast.
+- `Az3166LocalDiscoveryOperations` exposes protected responder operations and
+  worker creation while retaining the production startup, locking, and iteration
+  logic. A fault-injecting backend checks cleanup after partial setup and a
+  forced thread-start error. A higher-priority probe invokes the same
+  `serviceOnce()` method used by the worker before startup returns; a bounded
+  semaphore wait checks that the responder mutex is available and the running
+  gate prevents premature polling. The probe is joined before assertions, and
+  the test confirms that failure leaves later iterations gated. These adapter
+  tests simulate SDK failures rather than exhausting actual RTOS resources or
+  generating live network faults.
 - `MdnsTransport` lets protocol tests capture datagrams without using real Wi-Fi.
 - `CloudTelemetryOperations` injects HTTPS send behavior into transport, uploader,
   and upload-controller tests. Test backends are constructed before their consumers.

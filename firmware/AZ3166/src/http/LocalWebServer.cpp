@@ -1,4 +1,4 @@
-#include "LocalWebServer.h"
+#include "Az3166LocalWebServerOperations.h"
 
 #include <mutex>
 #include <Arduino.h>
@@ -13,24 +13,6 @@ const uint32_t WORKER_STACK_SIZE = 6144;
 const size_t REQUEST_LINE_SIZE = 96;
 const size_t RESPONSE_BODY_SIZE = 512;
 const size_t MAX_HEADER_BYTES = 2048;
-
-class Az3166LocalWebServerOperations : public LocalWebServerOperations {
-public:
-    uint32_t currentTime() override;
-    int openListener(uint32_t address, uint16_t port) override;
-    int acceptClient(int listener) override;
-    int receiveBytes(int client, char *buffer, size_t size) override;
-    int sendBytes(int client, const char *buffer, size_t size) override;
-    void closeSocket(int descriptor) override;
-};
-
-uint32_t Az3166LocalWebServerOperations::currentTime() {
-    return millis();
-}
-
-void Az3166LocalWebServerOperations::closeSocket(int descriptor) {
-    lwip_close(descriptor);
-}
 
 bool setNonblocking(int descriptor) {
     unsigned long enabled = 1;
@@ -48,6 +30,29 @@ int socketReady(int descriptor, bool writing) {
     return lwip_select(descriptor + 1,
                        writing ? NULL : &descriptors,
                        writing ? &descriptors : NULL, NULL, &timeout);
+}
+
+}  // namespace
+
+uint32_t Az3166LocalWebServerOperations::currentTime() {
+    return millis();
+}
+
+void Az3166LocalWebServerOperations::closeSocket(int descriptor) {
+    lwip_close(descriptor);
+}
+
+int Az3166LocalWebServerOperations::listenerReady(int listener) {
+    return socketReady(listener, false);
+}
+
+int Az3166LocalWebServerOperations::acceptSocket(int listener) {
+    return lwip_accept(listener, NULL, NULL);
+}
+
+int Az3166LocalWebServerOperations::getSocketOption(
+    int descriptor, int level, int option, void *value, socklen_t *length) {
+    return lwip_getsockopt(descriptor, level, option, value, length);
 }
 
 int Az3166LocalWebServerOperations::openListener(uint32_t address, uint16_t port) {
@@ -73,19 +78,19 @@ int Az3166LocalWebServerOperations::openListener(uint32_t address, uint16_t port
 }
 
 int Az3166LocalWebServerOperations::acceptClient(int listener) {
-    int ready = socketReady(listener, false);
+    int ready = listenerReady(listener);
     if (ready == 0) {
         return LocalWebServer::ACCEPT_IDLE;
     }
     if (ready < 0) {
         return LocalWebServer::ACCEPT_ERROR;
     }
-    LocalHttpSocket client(*this, lwip_accept(listener, NULL, NULL));
+    LocalHttpSocket client(*this, acceptSocket(listener));
     if (!client) {
         int socketError = 0;
         socklen_t errorSize = sizeof(socketError);
-        if (lwip_getsockopt(listener, SOL_SOCKET, SO_ERROR,
-                            &socketError, &errorSize) != 0 ||
+        if (getSocketOption(listener, SOL_SOCKET, SO_ERROR,
+                    &socketError, &errorSize) != 0 ||
             errorSize != sizeof(socketError)) {
             return LocalWebServer::ACCEPT_ERROR;
         }
@@ -116,8 +121,6 @@ int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, si
     }
     return lwip_send(client, buffer, size, MSG_DONTWAIT);
 }
-
-}  // namespace
 
 int LocalWebServer::classifyAcceptError(int socketError) {
     bool transient = socketError == LWIP_EWOULDBLOCK ||

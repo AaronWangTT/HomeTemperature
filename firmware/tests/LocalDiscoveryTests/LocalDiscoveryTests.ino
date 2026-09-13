@@ -4,6 +4,7 @@
 #include "mbed_stats.h"
 
 #include "src/discovery/LocalDiscovery.h"
+#include "src/discovery/Az3166LocalDiscoveryOperations.h"
 #include "src/discovery/MdnsUdpTransport.h"
 #include "src/discovery/mdns/MDNS.h"
 
@@ -55,6 +56,103 @@ void expect(bool condition, const char *name) {
     if (!condition) {
         ++failureCount;
     }
+}
+
+class NativeStartupFailureOperations : public Az3166LocalDiscoveryOperations {
+public:
+    NativeStartupFailureOperations()
+        : probe_(osPriorityAboveNormal, 2048), completed_(0), probeStarted_(false) {
+    }
+
+    ~NativeStartupFailureOperations() override {
+        finishProbe();
+    }
+
+    bool configureAllowed = false;
+    bool resourcesConfigured = false;
+    bool setupCompleteAtStart = false;
+    bool startupWindowAccessible = false;
+    bool earlyIterationGated = false;
+    int configureCount = 0;
+    int startCount = 0;
+    int cleanupCount = 0;
+    int serviceCount = 0;
+
+    bool finishProbe() {
+        if (!probeStarted_) {
+            return false;
+        }
+        osStatus result = probe_.join();
+        probeStarted_ = false;
+        return result == osOK;
+    }
+
+    bool pollOnce() {
+        return serviceOnce();
+    }
+
+protected:
+    bool configureResponder(uint32_t, const LocalDiscoveryService &) override {
+        ++configureCount;
+        resourcesConfigured = true;
+        return configureAllowed;
+    }
+
+    void endResponder() override {
+        ++cleanupCount;
+        resourcesConfigured = false;
+        Az3166LocalDiscoveryOperations::endResponder();
+    }
+
+    bool serviceResponder() override {
+        ++serviceCount;
+        return true;
+    }
+
+    osStatus startWorker() override {
+        ++startCount;
+        setupCompleteAtStart = resourcesConfigured;
+        probeStarted_ = probe_.start(mbed::callback(
+            this, &NativeStartupFailureOperations::probeOnce)) == osOK;
+        if (probeStarted_) {
+            startupWindowAccessible = completed_.wait(1000) > 0;
+        }
+        return osErrorResource;
+    }
+
+private:
+    void probeOnce() {
+        bool keepRunning = serviceOnce();
+        earlyIterationGated = keepRunning && !isHealthy() && serviceCount == 0;
+        completed_.release();
+    }
+
+    rtos::Thread probe_;
+    rtos::Semaphore completed_;
+    bool probeStarted_;
+};
+
+void testNativeStartupFailure() {
+    static NativeStartupFailureOperations operations;
+    expect(!operations.start(0xC0000201UL, TEST_SERVICE) &&
+               operations.configureCount == 1 && operations.startCount == 0 &&
+               operations.cleanupCount == 1 && !operations.resourcesConfigured &&
+               !operations.isHealthy(),
+           "native setup failure cleans partial state without starting a worker");
+
+    operations.configureAllowed = true;
+    bool started = operations.start(0xC0000201UL, TEST_SERVICE);
+    bool joined = operations.finishProbe();
+    expect(joined && operations.startupWindowAccessible && operations.setupCompleteAtStart,
+           "native worker startup releases the responder mutex after setup");
+    expect(operations.earlyIterationGated && operations.serviceCount == 0,
+           "an early native worker iteration cannot use the responder before readiness");
+    expect(!started && operations.configureCount == 2 && operations.startCount == 1 &&
+               operations.cleanupCount == 2 && !operations.resourcesConfigured &&
+               !operations.isHealthy(),
+           "native thread-start failure releases responder state and remains unhealthy");
+    expect(operations.pollOnce() && operations.serviceCount == 0,
+           "native worker iterations remain gated after thread-start failure");
 }
 
 void testScopeCleanup() {
@@ -507,6 +605,7 @@ void setup() {
     while (!Serial);
     delay(3000);
     Serial.println("TEST_SUITE: LocalDiscoveryTests");
+    testNativeStartupFailure();
     testScopeCleanup();
     testSharedBackendOwnership();
     testFailedStartupReleasesOwnership();

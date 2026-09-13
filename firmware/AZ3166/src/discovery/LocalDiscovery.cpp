@@ -1,37 +1,6 @@
-#include "LocalDiscovery.h"
-
 #include <mutex>
+#include "Az3166LocalDiscoveryOperations.h"
 #include <Arduino.h>
-#include "MdnsUdpTransport.h"
-#include "mdns/MDNS.h"
-#include "rtos.h"
-
-namespace {
-
-class Az3166LocalDiscoveryOperations : public LocalDiscoveryOperations {
-public:
-    Az3166LocalDiscoveryOperations();
-    ~Az3166LocalDiscoveryOperations() override;
-
-    uint32_t currentTime() override;
-    bool start(uint32_t address, const LocalDiscoveryService &service) override;
-    void stop() override;
-    bool isHealthy() override;
-
-private:
-    void serviceDiscovery();
-
-    MdnsUdpTransport transport_;
-    MDNS responder_;
-    rtos::Mutex responderMutex_;
-    alignas(8) unsigned char workerStack_[4096];
-    rtos::Thread worker_;
-    bool workerStarted_;
-    bool shutdown_;
-    bool responderRunning_;
-    bool followupPending_;
-    uint32_t firstAnnouncement_;
-};
 
 Az3166LocalDiscoveryOperations::Az3166LocalDiscoveryOperations()
     : responder_(transport_),
@@ -57,23 +26,51 @@ Az3166LocalDiscoveryOperations::~Az3166LocalDiscoveryOperations() {
 }
 
 void Az3166LocalDiscoveryOperations::serviceDiscovery() {
-    for (;;) {
-        {
-            std::lock_guard<rtos::Mutex> lock(responderMutex_);
-            if (shutdown_) {
-                return;
-            }
-            if (responderRunning_) {
-                responder_.run();
-                if (followupPending_ && millis() - firstAnnouncement_ >= 1000UL) {
-                    responder_.announce();
-                    followupPending_ = false;
-                }
-                responderRunning_ = !transport_.failed();
-            }
-        }
+    while (serviceOnce()) {
         rtos::Thread::wait(20);
     }
+}
+
+bool Az3166LocalDiscoveryOperations::serviceOnce() {
+    std::lock_guard<rtos::Mutex> lock(responderMutex_);
+    if (shutdown_) {
+        return false;
+    }
+    if (responderRunning_) {
+        responderRunning_ = serviceResponder();
+    }
+    return true;
+}
+
+osStatus Az3166LocalDiscoveryOperations::startWorker() {
+    return worker_.start(mbed::callback(
+        this, &Az3166LocalDiscoveryOperations::serviceDiscovery));
+}
+
+bool Az3166LocalDiscoveryOperations::configureResponder(
+    uint32_t address, const LocalDiscoveryService &service) {
+    transport_.setLocalIPv4Address(address);
+    IPAddress localAddress(
+        static_cast<uint8_t>(address >> 24),
+        static_cast<uint8_t>(address >> 16),
+        static_cast<uint8_t>(address >> 8),
+        static_cast<uint8_t>(address));
+    return responder_.begin(localAddress, service.hostname) &&
+        responder_.addServiceRecord(
+            service.serviceName, service.port, MDNSServiceTCP, service.txtRecord);
+}
+
+void Az3166LocalDiscoveryOperations::endResponder() {
+    responder_.end();
+}
+
+bool Az3166LocalDiscoveryOperations::serviceResponder() {
+    responder_.run();
+    if (followupPending_ && millis() - firstAnnouncement_ >= 1000UL) {
+        responder_.announce();
+        followupPending_ = false;
+    }
+    return !transport_.failed();
 }
 
 uint32_t Az3166LocalDiscoveryOperations::currentTime() {
@@ -92,24 +89,14 @@ bool Az3166LocalDiscoveryOperations::start(
         std::lock_guard<rtos::Mutex> lock(responderMutex_);
         responderRunning_ = false;
         followupPending_ = false;
-        transport_.setLocalIPv4Address(address);
-        IPAddress localAddress(
-            static_cast<uint8_t>(address >> 24),
-            static_cast<uint8_t>(address >> 16),
-            static_cast<uint8_t>(address >> 8),
-            static_cast<uint8_t>(address));
-        bool configured = responder_.begin(localAddress, service.hostname) &&
-            responder_.addServiceRecord(
-                service.serviceName, service.port, MDNSServiceTCP, service.txtRecord);
-        if (!configured) {
-            responder_.end();
+        if (!configureResponder(address, service)) {
+            endResponder();
             return false;
         }
         startWorker = !workerStarted_;
     }
 
-    bool started = !startWorker || worker_.start(mbed::callback(
-        this, &Az3166LocalDiscoveryOperations::serviceDiscovery)) == osOK;
+    bool started = !startWorker || this->startWorker() == osOK;
 
     std::lock_guard<rtos::Mutex> lock(responderMutex_);
     workerStarted_ = started;
@@ -117,7 +104,7 @@ bool Az3166LocalDiscoveryOperations::start(
     followupPending_ = started;
     firstAnnouncement_ = millis();
     if (!started) {
-        responder_.end();
+        endResponder();
     }
     return started;
 }
@@ -126,14 +113,12 @@ void Az3166LocalDiscoveryOperations::stop() {
     std::lock_guard<rtos::Mutex> lock(responderMutex_);
     responderRunning_ = false;
     followupPending_ = false;
-    responder_.end();
+    endResponder();
 }
 
 bool Az3166LocalDiscoveryOperations::isHealthy() {
     std::lock_guard<rtos::Mutex> lock(responderMutex_);
     return responderRunning_;
-}
-
 }
 
 bool LocalDiscoveryOperations::tryAcquire() {

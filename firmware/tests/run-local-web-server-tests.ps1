@@ -21,6 +21,7 @@ Invoke-Az3166TestSuite `
         "config/AppConfig.h",
         "http/LocalWebServer.h",
         "http/LocalWebServer.cpp",
+        "http/Az3166LocalWebServerOperations.h",
         "http/LocalHttpHandler.h",
         "telemetry/TelemetryHttpHandler.h",
         "telemetry/TelemetryHttpHandler.cpp",
