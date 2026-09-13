@@ -84,9 +84,11 @@ if (
 }
 
 $libraryProperties = Join-Path $installedLibraryRoot "library.properties"
+$libraryTransportHeader = Join-Path $installedLibraryRoot "MDNSTransport.h"
 if (
     -not (Test-Path -LiteralPath $libraryProperties -PathType Leaf) -or
     (Get-Content -Raw -LiteralPath $libraryProperties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$" -or
+    -not (Test-Path -LiteralPath $libraryTransportHeader -PathType Leaf) -or
     -not (Test-Path -LiteralPath $libraryStamp -PathType Leaf) -or
     (Get-Content -Raw -LiteralPath $libraryStamp).Trim() -ne $libraryArchiveSha256
 ) {

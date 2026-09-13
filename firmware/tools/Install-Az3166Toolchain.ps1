@@ -129,11 +129,15 @@ function Install-ArduinoMdns {
         Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
         $extractedLibrary = Join-Path $extractRoot "ArduinoMDNS"
         $properties = Join-Path $extractedLibrary "library.properties"
+        $transportHeader = Join-Path $extractedLibrary "MDNSTransport.h"
         if (-not (Test-Path -LiteralPath $properties -PathType Leaf)) {
             throw "ArduinoMDNS archive does not contain the expected library root."
         }
         if ((Get-Content -Raw -LiteralPath $properties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$") {
             throw "ArduinoMDNS archive does not declare version $libraryVersion."
+        }
+        if (-not (Test-Path -LiteralPath $transportHeader -PathType Leaf)) {
+            throw "ArduinoMDNS archive does not contain the required MDNSTransport.h header."
         }
 
         New-Item -ItemType Directory -Path (Split-Path -Parent $installedLibraryRoot) -Force | Out-Null
