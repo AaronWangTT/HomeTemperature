@@ -50,6 +50,37 @@ function Get-RequiredMatchValue {
     return $match.Groups["value"].Value
 }
 
+function Assert-MaintenanceRevision {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Revision,
+
+        [Parameter(Mandatory = $true)]
+        [string]$MaintenanceRevision,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Headers
+    )
+
+    if ($Revision -eq $MaintenanceRevision) {
+        return
+    }
+
+    try {
+        $comparison = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/AaronWangTT/azureiotdevkit_tools/compare/$Revision...$MaintenanceRevision" `
+            -Headers $Headers
+    } catch {
+        throw "Could not prove that index revision $Revision is reachable from azureiotdevkit_tools/maintenance."
+    }
+
+    $status = [string]$comparison.status
+    $mergeBaseRevision = ([string]$comparison.merge_base_commit.sha).ToLowerInvariant()
+    if ($status -notin @("ahead", "identical") -or $mergeBaseRevision -ne $Revision) {
+        throw "Index revision $Revision is not reachable from azureiotdevkit_tools/maintenance at $MaintenanceRevision."
+    }
+}
+
 $currentVersion = Get-RequiredMatchValue `
     -Text $installer `
     -Pattern '^\$coreVersion\s*=\s*"(?<value>[^\"]+)"\s*$' `
@@ -82,13 +113,28 @@ $headers = @{
     "X-GitHub-Api-Version" = "2022-11-28"
 }
 
+$maintenanceCommit = Invoke-RestMethod `
+    -Uri "https://api.github.com/repos/AaronWangTT/azureiotdevkit_tools/commits/maintenance" `
+    -Headers $headers
+$maintenanceRevision = ([string]$maintenanceCommit.sha).ToLowerInvariant()
+if ($maintenanceRevision -notmatch '^[0-9a-f]{40}$') {
+    throw "Could not resolve azureiotdevkit_tools/maintenance to a full commit SHA."
+}
+
 if ([string]::IsNullOrWhiteSpace($IndexRevision)) {
-    $commit = Invoke-RestMethod `
-        -Uri "https://api.github.com/repos/AaronWangTT/azureiotdevkit_tools/commits/maintenance" `
-        -Headers $headers
-    $IndexRevision = [string]$commit.sha
+    $IndexRevision = $maintenanceRevision
 }
 $IndexRevision = $IndexRevision.ToLowerInvariant()
+Assert-MaintenanceRevision `
+    -Revision $IndexRevision `
+    -MaintenanceRevision $maintenanceRevision `
+    -Headers $headers
+if ($currentIndexRevision -ne $IndexRevision) {
+    Assert-MaintenanceRevision `
+        -Revision $currentIndexRevision `
+        -MaintenanceRevision $maintenanceRevision `
+        -Headers $headers
+}
 
 $indexUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/$IndexRevision/package_azureboard_index.json"
 $index = Invoke-RestMethod -Uri $indexUrl -Headers $headers
@@ -183,9 +229,17 @@ if ($currentPlatforms.Count -ne 1) {
     $issues.Add("Core $currentVersion is not uniquely published in index revision $IndexRevision.")
 } else {
     $currentPlatform = $currentPlatforms[0]
+    $currentArchiveUrl = [string]$currentPlatform.url
+    $currentArchiveFileName = [string]$currentPlatform.archiveFileName
+    $currentArchiveSize = [int64]$currentPlatform.size
     $publishedChecksum = [string]$currentPlatform.checksum
     if ($publishedChecksum -ne "SHA-256:$currentArchiveSha256") {
         $issues.Add("Installer archive SHA-256 does not match the published Core $currentVersion entry.")
+    }
+
+    $currentArchiveUri = [uri]$currentArchiveUrl
+    if ([System.IO.Path]::GetFileName($currentArchiveUri.AbsolutePath) -ne $currentArchiveFileName) {
+        $issues.Add("Published Core $currentVersion archive filename does not match its URL.")
     }
 
     $compilerDependencies = @($currentPlatform.toolsDependencies | Where-Object { $_.name -eq "arm-none-eabi-gcc" })
@@ -196,19 +250,92 @@ if ($currentPlatforms.Count -ne 1) {
     if ($openOcdDependencies.Count -ne 1 -or $openOcdDependencies[0].version -ne $installerOpenOcdVersion) {
         $issues.Add("Installer OpenOCD version does not match the published Core $currentVersion entry.")
     }
-}
 
-$firmwareReadmePath = Join-Path $repositoryRoot "firmware\README.md"
-$firmwareReadme = Get-Content -Raw -LiteralPath $firmwareReadmePath
-$thirdPartyPath = Join-Path $repositoryRoot "THIRD_PARTY_NOTICES.md"
-$thirdParty = Get-Content -Raw -LiteralPath $thirdPartyPath
-foreach ($document in @(
-    @{ Path = $firmwareReadmePath; Text = $firmwareReadme },
-    @{ Path = $thirdPartyPath; Text = $thirdParty }
-)) {
-    foreach ($value in @($currentVersion, $currentIndexRevision, $currentArchiveSha256)) {
-        if (-not $document.Text.Contains($value)) {
-            $issues.Add("$($document.Path) does not contain current pin '$value'.")
+    $currentPinnedIndexUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/$currentIndexRevision/package_azureboard_index.json"
+    $currentArchiveSizeText = $currentArchiveSize.ToString(
+        "N0",
+        [System.Globalization.CultureInfo]::InvariantCulture
+    )
+    $documentationExpectations = @(
+        @{
+            RelativePath = "README.md"
+            Values = @(
+                "Hardware adapters target AZ3166 Core $currentVersion",
+                "Arduino IDE 1.8.19 with AZ3166 Core $currentVersion"
+            )
+        },
+        @{
+            RelativePath = "docs\firmware-design.md"
+            Values = @(
+                "maintained AZ3166 Core`n$currentVersion",
+                "Core $currentVersion also reports",
+                "AZ3166 Core $currentVersion keeps"
+            )
+        },
+        @{
+            RelativePath = "firmware\README.md"
+            Values = @(
+                "| Board package | ``AZ3166:stm32f4:$currentVersion`` |",
+                "installing ``AZ3166:stm32f4:$currentVersion``",
+                $currentPinnedIndexUrl,
+                $currentArchiveFileName,
+                "$currentArchiveSizeText-byte",
+                $currentArchiveSha256,
+                $installerCompilerVersion,
+                $installerOpenOcdVersion
+            )
+        },
+        @{
+            RelativePath = "THIRD_PARTY_NOTICES.md"
+            Values = @(
+                "Arduino board package $currentVersion",
+                "devkit-sdk/tree/$currentVersion",
+                $currentPinnedIndexUrl,
+                $currentArchiveUrl,
+                $currentArchiveFileName,
+                "$currentArchiveSizeText bytes",
+                $currentArchiveSha256,
+                $installerCompilerVersion,
+                $installerOpenOcdVersion
+            )
+        },
+        @{
+            RelativePath = "firmware\AZ3166\src\cloud\README.md"
+            Values = @("AZ3166 Core $currentVersion")
+        },
+        @{
+            RelativePath = "firmware\AZ3166\src\discovery\README.md"
+            Values = @("AZ3166 Core $currentVersion")
+        },
+        @{
+            RelativePath = "firmware\AZ3166\src\http\README.md"
+            Values = @("AZ3166 Core $currentVersion")
+        },
+        @{
+            RelativePath = "firmware\AZ3166\src\platform\README.md"
+            Values = @(
+                "requires maintained AZ3166 Core $currentVersion",
+                "Core $currentVersion keeps"
+            )
+        },
+        @{
+            RelativePath = "firmware\AZ3166\src\telemetry\README.md"
+            Values = @("AZ3166 Core $currentVersion")
+        }
+    )
+
+    foreach ($expectation in $documentationExpectations) {
+        $documentPath = Join-Path $repositoryRoot $expectation.RelativePath
+        if (-not (Test-Path -LiteralPath $documentPath -PathType Leaf)) {
+            $issues.Add("Required documentation surface is missing: $($expectation.RelativePath).")
+            continue
+        }
+
+        $documentText = Get-Content -Raw -LiteralPath $documentPath
+        foreach ($value in $expectation.Values) {
+            if (-not $documentText.Contains($value)) {
+                $issues.Add("$($expectation.RelativePath) does not contain expected Core metadata '$value'.")
+            }
         }
     }
 }
@@ -216,6 +343,8 @@ foreach ($document in @(
 $current = [pscustomobject]@{
     Version = $currentVersion
     IndexRevision = $currentIndexRevision
+    MaintenanceRevision = $maintenanceRevision
+    IndexRevisionReachableFromMaintenance = $true
     ArchiveSha256 = $currentArchiveSha256
     IsPublished = $publishedVersions -contains $currentVersion
     IsConsistent = $issues.Count -eq 0
@@ -234,6 +363,7 @@ switch ($Action) {
     "List" {
         $result = [pscustomobject]@{
             IndexRevision = $IndexRevision
+            MaintenanceRevision = $maintenanceRevision
             IndexUrl = $indexUrl
             Count = $publishedVersions.Count
             Versions = $publishedVersions
@@ -280,6 +410,7 @@ switch ($Action) {
             Name = [string]$platform.name
             Architecture = [string]$platform.architecture
             IndexRevision = $IndexRevision
+            MaintenanceRevision = $maintenanceRevision
             IndexUrl = $indexUrl
             ArchiveUrl = [string]$platform.url
             ArchiveFileName = [string]$platform.archiveFileName
@@ -304,7 +435,7 @@ switch ($Action) {
         Write-Output ($result.Versions -join ", ")
     }
     "Current" {
-        $result | Format-List Version, IndexRevision, ArchiveSha256, IsPublished, IsConsistent
+        $result | Format-List Version, IndexRevision, MaintenanceRevision, IndexRevisionReachableFromMaintenance, ArchiveSha256, IsPublished, IsConsistent
         if (-not $result.IsConsistent) {
             $result.Issues | ForEach-Object { Write-Output "- $_" }
         }

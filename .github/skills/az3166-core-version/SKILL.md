@@ -61,7 +61,7 @@ Run the bundled read-only helper from the repository root:
 The helper resolves `maintenance` to a full SHA before downloading the index,
 sorts versions semantically, and reports the current local pin alongside the
 published set. If a sibling `azureiotdevkit_tools` checkout is available, fetch
-it and pass its exact remote SHA to avoid public API rate limits:
+it and pass its exact remote SHA:
 
 ```powershell
 git -C ..\azureiotdevkit_tools fetch origin --prune
@@ -70,6 +70,10 @@ $indexRevision = git -C ..\azureiotdevkit_tools rev-parse origin/maintenance
     -Action List `
     -IndexRevision $indexRevision
 ```
+
+The helper still resolves the live `maintenance` tip through GitHub and proves
+that both the selected revision and HomeTemperature's pinned revision are
+reachable from it before accepting either index.
 
 For `current`, run the helper with `-Action Current`. Report inconsistencies
 between the installer, build helper, CI cache, editor path, and documentation;
