@@ -123,9 +123,9 @@ int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, si
 }
 
 int LocalWebServer::classifyAcceptError(int socketError) {
-    bool transient = socketError == LWIP_EWOULDBLOCK ||
-        socketError == LWIP_EINTR || socketError == LWIP_ECONNABORTED ||
-        socketError == LWIP_ECONNRESET;
+    bool transient = socketError == LWIP_EAGAIN ||
+        socketError == LWIP_EWOULDBLOCK || socketError == LWIP_EINTR ||
+        socketError == LWIP_ECONNABORTED || socketError == LWIP_ECONNRESET;
     return transient ? ACCEPT_IDLE : ACCEPT_ERROR;
 }
 
