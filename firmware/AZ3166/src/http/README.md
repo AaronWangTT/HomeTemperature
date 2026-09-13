@@ -92,7 +92,7 @@ constructor argument to connect an existing discovery object. See the
 
 ## Limits and Dependencies
 
-- AZ3166 Core 2.0.1, Mbed RTOS, and lwIP are required by the default backend.
+- AZ3166 Core 2.0.2, Mbed RTOS, and lwIP are required by the default backend.
 - One client is handled at a time. The worker uses a 6144-byte stack allocated
   at startup, plus RTOS and socket resources.
 - Request line: 96 bytes; total request headers: 2048 bytes; response body:

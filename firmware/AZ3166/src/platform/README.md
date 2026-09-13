@@ -93,15 +93,16 @@ currently feeds from the main loop around input, connectivity, and upload work.
 
 ## Board Package Behavior
 
-The firmware requires maintained AZ3166 Core 2.0.1. Its `dtostrf` implementation
-corrects Core 2.0.0's fractional-digit and width behavior while retaining
+The firmware requires maintained AZ3166 Core 2.0.2. It carries forward Core
+2.0.1's corrected `dtostrf` fractional-digit and width behavior while retaining
 rounding and non-finite handling. `TelemetryService` uses that Core function
 instead of floating-point `printf`; callers must still provide enough output
 storage for the requested width, precision, sign, and terminator.
 
-Core 2.0.1 also disables the bundled SDK system telemetry hooks by default.
-Defining `ENABLETRACE=1` in platform build flags opts into that vendor behavior.
-This does not disable or alter the application's explicit
+Core 2.0.2 keeps the bundled SDK system telemetry hooks disabled by default and
+reports the maintained version through `getDevkitVersion()`. Defining
+`ENABLETRACE=1` in platform build flags opts into that vendor behavior. This
+does not disable or alter the application's explicit
 [cloud uploader](../cloud/README.md). Review both behaviors when selecting a
 different board package; no project-local symbol overrides remain.
 

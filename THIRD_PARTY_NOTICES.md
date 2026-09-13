@@ -6,21 +6,23 @@ software and data keep their own licenses and terms.
 ## Firmware Toolchain
 
 The firmware builds against the maintained MXChip Azure IoT DevKit SDK / AZ3166
-Arduino board package 2.0.1, based on Microsoft's final 2.0.0 release. The
+Arduino board package 2.0.2, based on Microsoft's final 2.0.0 release. The
 package is installed separately and is not vendored in this repository.
 
-- Maintained source: <https://github.com/AaronWangTT/devkit-sdk/tree/2.0.1>
+- Maintained source: <https://github.com/AaronWangTT/devkit-sdk/tree/2.0.2>
 - Upstream source: <https://github.com/microsoft/devkit-sdk/tree/2.0.0>
-- Board package index: <https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d3fcd963e8e6bb0b196462c894f9b5c4816d405f/package_azureboard_index.json>
-- Release archive: <https://github.com/AaronWangTT/devkit-sdk/releases/download/2.0.1/AZ3166-2.0.1.zip>
+- Board package index: <https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/ac5055ec3a8fddd3135b1c367a9f630d33f65ef8/package_azureboard_index.json>
+- Release archive: <https://github.com/AaronWangTT/devkit-sdk/releases/download/2.0.2/AZ3166-2.0.2.zip>
+- Board archive size: 5,497,641 bytes
 - Board archive SHA-256:
-  `9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462`
+  `5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677`
 - License: MIT, copyright Microsoft Corporation
 - Tool dependencies declared by that package: GNU Arm Embedded Toolchain
   `5_4-2016q3` and OpenOCD `0.10.0`
 
-The maintained release corrects `dtostrf` precision and width formatting and
-makes SDK system telemetry opt-in through `ENABLETRACE=1`.
+The maintained release corrects `dtostrf` precision and width formatting,
+makes SDK system telemetry opt-in through `ENABLETRACE=1`, and reports the
+maintained Core version through `getDevkitVersion()`.
 
 The board package contains additional third-party components. Their notices and
 licenses in the installed package continue to apply.

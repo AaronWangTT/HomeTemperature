@@ -126,7 +126,7 @@ application-specific branches to the HTTP engine.
   `PAYLOAD_SENSOR_ERROR` (-1) for invalid/unavailable measurements, or
   `PAYLOAD_FORMAT_ERROR` (-2) for invalid arguments or formatting failures.
   Do not transmit the buffer after a failure; it may contain incomplete data.
-- AZ3166 Core 2.0.1 supplies the corrected `dtostrf` behavior covered by the
+- AZ3166 Core 2.0.2 supplies the corrected `dtostrf` behavior covered by the
   formatter regression tests.
 - There is one acquisition attempt per request, with no retries or calibration
   workflow. Cloud retry scheduling belongs to the [cloud components](../cloud/README.md).

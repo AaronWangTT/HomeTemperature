@@ -18,8 +18,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$coreVersion = "2.0.1"
-$coreArchiveSha256 = "9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462"
+$coreVersion = "2.0.2"
+$coreArchiveSha256 = "5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677"
 $libraryVersion = "1.1.0"
 $libraryArchiveSha256 = "f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47"
 $compilerVersion = "5_4-2016q3"

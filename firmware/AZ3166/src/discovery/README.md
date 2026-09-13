@@ -93,7 +93,7 @@ reconciliation for its listener.
 
 ## Limits and Dependencies
 
-- Default transport: AZ3166 Core 2.0.1, Mbed RTOS, and lwIP multicast sockets on
+- Default transport: AZ3166 Core 2.0.2, Mbed RTOS, and lwIP multicast sockets on
   `224.0.0.251:5353`; this implementation is IPv4-only.
 - Responder: checksum-pinned ArduinoMDNS 1.1.0 installed under
   `.tools/sketchbook/libraries`; build helpers select that sketchbook explicitly.

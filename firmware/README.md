@@ -12,7 +12,7 @@ The checked configuration is:
 | Component | Version |
 | --- | --- |
 | Arduino IDE | 1.8.19 |
-| Board package | `AZ3166:stm32f4:2.0.1` |
+| Board package | `AZ3166:stm32f4:2.0.2` |
 | ArduinoMDNS | 1.1.0 |
 | FQBN | `AZ3166:stm32f4:MXCHIP_AZ3166` |
 | GNU Arm toolchain | `5_4-2016q3` from the board package |
@@ -21,11 +21,11 @@ The checked configuration is:
 The board package index is:
 
 ```text
-https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d3fcd963e8e6bb0b196462c894f9b5c4816d405f/package_azureboard_index.json
+https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/ac5055ec3a8fddd3135b1c367a9f630d33f65ef8/package_azureboard_index.json
 ```
 
-That immutable index declares `AZ3166-2.0.1.zip` with SHA-256
-`9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462`.
+That immutable index declares the 5,497,641-byte `AZ3166-2.0.2.zip` with SHA-256
+`5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677`.
 Arduino Board Manager verifies the Core, GNU Arm toolchain, and OpenOCD
 archives while installing them. The installer separately verifies ArduinoMDNS
 1.1.0 with SHA-256
@@ -40,7 +40,7 @@ On Windows, install Arduino IDE 1.8.19 and the pinned Core with:
 The script reuses an existing Arduino IDE from `-ArduinoExecutable`,
 `ARDUINO_IDE_PATH`, a standard Program Files installation, or `PATH`. If none is
 found, it downloads Arduino IDE 1.8.19 into `.tools\arduino-1.8.19` before
-installing `AZ3166:stm32f4:2.0.1`. It installs ArduinoMDNS 1.1.0 under
+installing `AZ3166:stm32f4:2.0.2`. It installs ArduinoMDNS 1.1.0 under
 `.tools\sketchbook\libraries` and all build helpers select that repository-local
 sketchbook explicitly.
 
@@ -234,7 +234,7 @@ suite only when a full hardware regression is required:
 ```
 
 An upload is successful only when the command exits zero and OpenOCD reports
-`Verified OK`. The AZ3166 2.0.1 linker can emit a repeated four-byte `.bss`
+`Verified OK`. The AZ3166 2.0.2 build can emit a repeated four-byte `.bss`
 alignment warning; resource usage and runtime tests must still be checked after
 link-layout changes.
 
