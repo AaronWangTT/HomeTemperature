@@ -2,9 +2,12 @@
 #include <Arduino.h>
 #include <string.h>
 #include <type_traits>
+#include "lwip/opt.h"
+#include "lwip/arch.h"
 
 #include "src/config/AppConfig.h"
 #include "src/http/LocalWebServer.h"
+#include "src/http/Az3166LocalWebServerOperations.h"
 #include "src/telemetry/TelemetryHttpHandler.h"
 #include "src/telemetry/TelemetryService.h"
 
@@ -23,6 +26,10 @@ static_assert(std::is_nothrow_move_constructible<LocalHttpSocket>::value &&
               "LocalHttpSocket must transfer ownership without throwing");
 
 int failureCount = 0;
+
+const int TRANSIENT_ACCEPT_ERRORS[] = {
+    LWIP_EAGAIN, LWIP_EWOULDBLOCK, LWIP_EINTR, LWIP_ECONNABORTED, LWIP_ECONNRESET
+};
 
 void expect(bool condition, const char *name) {
     Serial.print(condition ? "PASS: " : "FAIL: ");
@@ -71,6 +78,131 @@ void testUnknownRoutes() {
     expect(
         TelemetryHttpHandler::routeRequest(NULL) == LOCAL_ROUTE_NOT_FOUND,
         "null request line is rejected");
+}
+
+void testAcceptErrorClassification() {
+    bool transientClassified = true;
+    for (int socketError : TRANSIENT_ACCEPT_ERRORS) {
+        transientClassified &= LocalWebServer::classifyAcceptError(socketError) ==
+            LocalWebServer::ACCEPT_IDLE;
+    }
+    expect(transientClassified,
+           "would-block, interrupted, aborted, and reset accepts keep the listener alive");
+
+    const int fatalErrors[] = {LWIP_EBADF, LWIP_ENOTSOCK, LWIP_EINVAL, LWIP_ENETDOWN, 0};
+    bool fatalClassified = true;
+    for (int socketError : fatalErrors) {
+        fatalClassified &= LocalWebServer::classifyAcceptError(socketError) ==
+            LocalWebServer::ACCEPT_ERROR;
+    }
+    expect(fatalClassified,
+           "fatal and unrecognized accept errors retain listener recovery");
+}
+
+class NativeAcceptOperations : public Az3166LocalWebServerOperations {
+public:
+    int readyResult = 1;
+    int optionResult = 0;
+    int socketError = LWIP_EWOULDBLOCK;
+    socklen_t returnedSize = sizeof(int);
+    bool writeError = true;
+    bool lookupContract = true;
+    int readyCount = 0;
+    int acceptCount = 0;
+    int lookupCount = 0;
+    int closeCount = 0;
+
+    void closeSocket(int) override { ++closeCount; }
+
+protected:
+    int listenerReady(int listener) override {
+        ++readyCount;
+        lookupContract &= listener == 10;
+        return readyResult;
+    }
+
+    int acceptSocket(int listener) override {
+        ++acceptCount;
+        lookupContract &= listener == 10;
+        return -1;
+    }
+
+    int getSocketOption(int descriptor, int level, int option,
+                        void *value, socklen_t *length) override {
+        ++lookupCount;
+        if (value == NULL || length == NULL) {
+            lookupContract = false;
+            return -1;
+        }
+        lookupContract &= descriptor == 10 && level == SOL_SOCKET &&
+            option == SO_ERROR && *length == sizeof(int);
+        if (writeError) {
+            *static_cast<int *>(value) = socketError;
+        }
+        *length = returnedSize;
+        return optionResult;
+    }
+};
+
+void testNativeAcceptErrorLookup() {
+    NativeAcceptOperations operations;
+    bool transientHandled = true;
+    int expectedLookups = 0;
+    for (int socketError : TRANSIENT_ACCEPT_ERRORS) {
+        operations.socketError = socketError;
+        transientHandled &= operations.acceptClient(10) == LocalWebServer::ACCEPT_IDLE;
+        ++expectedLookups;
+    }
+    expect(transientHandled, "native accept uses SO_ERROR to preserve transient failures");
+
+    const int fatalErrors[] = {LWIP_EBADF, LWIP_ENOTSOCK, LWIP_EINVAL, LWIP_ENETDOWN, 0};
+    bool fatalHandled = true;
+    for (int socketError : fatalErrors) {
+        operations.socketError = socketError;
+        fatalHandled &= operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR;
+        ++expectedLookups;
+    }
+    expect(fatalHandled, "native accept retains recovery for fatal or unrecognized SO_ERROR");
+    expect(operations.lookupContract && operations.readyCount == expectedLookups &&
+               operations.acceptCount == expectedLookups &&
+               operations.lookupCount == expectedLookups && operations.closeCount == 0,
+           "native error lookup uses the listener, SOL_SOCKET, SO_ERROR, and exact int size");
+}
+
+void testNativeAcceptInvalidErrorLookup() {
+    NativeAcceptOperations operations;
+    operations.optionResult = -1;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR,
+           "failed SO_ERROR lookup cannot be accepted as a transient error");
+
+    operations.optionResult = 0;
+    const socklen_t invalidSizes[] = {0, sizeof(int) - 1, sizeof(int) + 1};
+    bool invalidSizesRejected = true;
+    for (socklen_t length : invalidSizes) {
+        operations.returnedSize = length;
+        invalidSizesRejected &= operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR;
+    }
+    expect(invalidSizesRejected, "zero, short, and oversized SO_ERROR lengths are rejected");
+
+    operations.returnedSize = sizeof(int);
+    operations.writeError = false;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR,
+           "SO_ERROR lookup without an error value does not reuse a previous transient value");
+    expect(operations.lookupContract && operations.lookupCount == 5 && operations.closeCount == 0,
+           "failed error lookups never close the listener or an invalid accepted handle");
+}
+
+void testNativeAcceptReadinessFailures() {
+    NativeAcceptOperations operations;
+    operations.readyResult = 0;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_IDLE,
+           "native accept skips an idle listener");
+    operations.readyResult = -1;
+    expect(operations.acceptClient(10) == LocalWebServer::ACCEPT_ERROR,
+           "native accept reports a failed readiness check");
+    expect(operations.readyCount == 2 && operations.acceptCount == 0 &&
+               operations.lookupCount == 0 && operations.closeCount == 0,
+           "idle or invalid readiness never calls accept or SO_ERROR");
 }
 
 void testDisconnectedPolling() {
@@ -150,8 +282,11 @@ struct FakeHttpPlatform {
     int lastClosedDescriptor;
     int advertisedCloseCount;
     int clientAcceptCount;
+    int acceptSocketError;
+    int acceptFailureCount;
     int readyCount;
     int serviceUpdates;
+    int serviceWithdrawals;
     int invalidAdvertisements;
     int handlerCount;
     int handlerMode;
@@ -262,6 +397,10 @@ int FakeLocalWebServerOperations::acceptClient(int) {
     if (fake.acceptError) {
         result = LocalWebServer::ACCEPT_ERROR;
         fake.acceptError = false;
+    } else if (fake.acceptSocketError != 0) {
+        result = LocalWebServer::classifyAcceptError(fake.acceptSocketError);
+        fake.acceptSocketError = 0;
+        ++fake.acceptFailureCount;
     } else if (fake.clientQueued) {
         fake.clientQueued = false;
         ++fake.clientAcceptCount;
@@ -332,11 +471,45 @@ void FakeLocalWebServerOperations::updateService(bool available, uint32_t addres
     if (available && (!fake.advertised || fake.advertisedAddress != address)) {
         ++fake.readyCount;
     }
+    if (!available && fake.advertised) {
+        ++fake.serviceWithdrawals;
+    }
     fake.advertised = available;
     fake.advertisedAddress = address;
     fakeMutex.unlock();
     progress.release();
 }
+
+class StartupObservingOperations : public FakeLocalWebServerOperations {
+public:
+    StartupObservingOperations()
+        : FakeLocalWebServerOperations(::fake, ::fakeMutex, ::progress, ::openGate),
+          server(NULL),
+          workerProgressed(false),
+          stateDuringStartup({false, false, 0, 0}),
+          callerThread_(osThreadGetId()),
+          callerClockCalls_(0) {
+    }
+
+    uint32_t currentTime() override {
+        uint32_t now = FakeLocalWebServerOperations::currentTime();
+        if (osThreadGetId() == callerThread_ && ++callerClockCalls_ == 2) {
+            workerProgressed = waitForCount(&FakeHttpPlatform::serviceUpdates, 2);
+            if (workerProgressed && server != NULL) {
+                stateDuringStartup = server->state();
+            }
+        }
+        return now;
+    }
+
+    LocalWebServer *server;
+    bool workerProgressed;
+    LocalWebServerState stateDuringStartup;
+
+private:
+    osThreadId callerThread_;
+    int callerClockCalls_;
+};
 
 void testServiceCallbackBinding() {
     resetHttpPlatform();
@@ -512,6 +685,48 @@ bool outputContains(const char *text) {
     return found;
 }
 
+void testWorkerProgressDuringStartup() {
+    resetHttpPlatform();
+    StartupObservingOperations operations;
+    FakeLocalWebServerOperations &callbackOperations = operations;
+    ExampleHandler handler;
+    LocalWebServer server(handler, 8080, 5000, operations,
+        mbed::callback(&callbackOperations, &FakeLocalWebServerOperations::updateService));
+    operations.server = &server;
+
+    server.update(true, 0xC0000201UL);
+    expect(operations.workerProgressed,
+           "the worker can publish listener readiness before startup completion returns");
+    expect(operations.stateDuringStartup.workerStarted &&
+               operations.stateDuringStartup.listening &&
+               operations.stateDuringStartup.address == 0xC0000201UL,
+           "early worker progress publishes a consistent started and listening snapshot");
+    server.update(true, 0xC0000201UL);
+    expect(fakeCount(&FakeHttpPlatform::openCount) == 1 && server.state().error == 0,
+           "startup completion retains the worker state without reopening the listener");
+}
+
+void testStartupCompletionPreservesListenerError() {
+    resetHttpPlatform();
+    const int listenerError = -71;
+    fake.openResult = listenerError;
+    StartupObservingOperations operations;
+    FakeLocalWebServerOperations &callbackOperations = operations;
+    ExampleHandler handler;
+    LocalWebServer server(handler, 8080, 5000, operations,
+        mbed::callback(&callbackOperations, &FakeLocalWebServerOperations::updateService));
+    operations.server = &server;
+
+    server.update(true, 0xC0000201UL);
+    expect(operations.workerProgressed && operations.stateDuringStartup.workerStarted &&
+               !operations.stateDuringStartup.listening &&
+               operations.stateDuringStartup.error == listenerError,
+           "a listener failure can be published while the caller completes startup");
+    LocalWebServerState state = server.state();
+    expect(state.workerStarted && !state.listening && state.error == listenerError,
+           "successful thread startup does not erase an already-published listener error");
+}
+
 void testWorkerLifecycle() {
     resetHttpPlatform();
     ExampleHandler handler;
@@ -584,6 +799,43 @@ void testListenerFailureAndRetry() {
     expect(waitForCount(&FakeHttpPlatform::closeListenerCount, 1) &&
                !server.state().listening,
            "listener accept failure clears readiness and releases the socket");
+}
+
+void testTransientAcceptFailures() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    LocalWebServer server(handler, 8080, 5000, httpOperations(),
+        mbed::callback(&httpOperations(), &FakeLocalWebServerOperations::updateService));
+    server.update(true, 0xC0000201UL);
+    expect(waitForCount(&FakeHttpPlatform::readyCount, 1),
+           "transient accept test starts an advertised listener");
+
+    const char request[] = "GET /example HTTP/1.1\r\n\r\n";
+    int expectedClients = 0;
+    bool requestsCompleted = true;
+    for (int socketError : TRANSIENT_ACCEPT_ERRORS) {
+        fakeMutex.lock();
+        fake.acceptSocketError = socketError;
+        fakeMutex.unlock();
+        queueRequest(request, sizeof(request) - 1);
+        ++expectedClients;
+        requestsCompleted &= waitForCount(&FakeHttpPlatform::closeClientCount, expectedClients);
+    }
+
+    LocalWebServerState state = server.state();
+    fakeMutex.lock();
+    bool listenerPreserved = fake.listenerOpen && fake.advertised &&
+        fake.openCount == 1 && fake.closeListenerCount == 0 &&
+        fake.readyCount == 1 && fake.serviceWithdrawals == 0;
+    bool failuresExercised = fake.acceptFailureCount == expectedClients &&
+        fake.clientAcceptCount == expectedClients && fake.closeClientCount == expectedClients &&
+        fake.now == 0;
+    fakeMutex.unlock();
+
+    expect(requestsCompleted && failuresExercised && outputContains("HTTP/1.1 200 OK"),
+           "queued clients succeed after each transient accept without advancing the retry clock");
+    expect(listenerPreserved && state.workerStarted && state.listening && state.error == 0,
+           "transient accepts neither reopen the listener nor withdraw discovery");
 }
 
 void testAddressChangesDuringStartup() {
@@ -799,6 +1051,10 @@ void setup() {
         "local web server retries startup every five seconds");
     testTelemetryRoute();
     testUnknownRoutes();
+    testAcceptErrorClassification();
+    testNativeAcceptErrorLookup();
+    testNativeAcceptInvalidErrorLookup();
+    testNativeAcceptReadinessFailures();
     testDisconnectedPolling();
     testTelemetryHandler();
     testSocketScopeAndReset();
@@ -806,8 +1062,11 @@ void setup() {
     testSocketMoveOwnership();
     testIndependentOperations();
     testServiceCallbackBinding();
+    testWorkerProgressDuringStartup();
+    testStartupCompletionPreservesListenerError();
     testWorkerLifecycle();
     testListenerFailureAndRetry();
+    testTransientAcceptFailures();
     testAddressChangesDuringStartup();
     testWorkerRequests();
     testRequestBoundsAndDisconnect();

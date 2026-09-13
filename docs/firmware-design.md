@@ -371,13 +371,27 @@ shutdown, releases the mutex, joins the worker, and ends the responder before
 member teardown. Ending an individual service session leaves the worker idle
 and available for the next session rather than destroying the backend.
 
+Startup clears the running and follow-up flags, then configures the responder
+under its mutex. Setup failure releases partial responder state without
+starting a worker. After setup succeeds, the mutex is released before creating
+the worker; the running flag remains false so an early child cannot process
+responder state. Startup then reacquires the mutex to publish readiness and the
+follow-up schedule, or release responder state if thread creation failed. The
+exclusive session lease serializes startup, and an existing worker is reused.
+
 The worker services at most one received datagram every 20 milliseconds and
 does not access sensors or mutate connectivity state. The HTTP worker and mDNS
-worker serialize responder access with `std::lock_guard<rtos::Mutex>`; waits and
-joins remain outside the lock scope. Multicast UDP uses port 5353 and
+worker serialize responder access with `std::lock_guard<rtos::Mutex>`; thread
+creation, waits, and joins remain outside the lock scope. Multicast UDP uses port 5353 and
 `224.0.0.251` on the current IPv4 interface, nonblocking sockets, a 1536-byte
 receive buffer, and a 512-byte send buffer. Oversized packets are discarded
 rather than passed partially to the parser.
+
+The parser releases its receive-packet allocation at the common cleanup exit,
+including short transport reads, truncated questions, and invalid label bounds.
+The discovery regression suite checks allocated bytes and live allocation count
+before and after malformed-packet bursts, then checks that a valid query still
+receives a response.
 
 This is an IPv4 LAN responder, not router DNS registration or a `.local` client
 resolver. Clients must support IPv4 mDNS and multicast must reach the device.
@@ -480,6 +494,15 @@ starts one normal-priority RTOS worker when an address first becomes available.
 It does not poll clients or perform network I/O in the main loop. The worker
 uses a 6144-byte stack allocated at startup and is reused across reconnects.
 
+Worker startup reserves a single launch attempt under the state mutex, then
+releases the mutex before `Thread::start()` and the completion clock read.
+The worker can acquire the state mutex immediately and marks itself started
+before publishing listener results. Startup completion must not overwrite a
+listener error already published by the worker. A failed launch records its
+error and completion-based retry time only if its requested generation is still
+current; a newer address request retains its own retry eligibility. As with
+other member calls, callers must finish `update()` before destroying the server.
+
 `LocalHttpSocket` owns one descriptor and borrows the `LocalWebServerOperations`
 backend that must close it. The owner is move-only and allocates no memory. All
 nonnegative descriptors, including zero, are valid; negative results retain
@@ -508,8 +531,14 @@ borrow descriptors; they do not close them.
   Core `WiFiServer::begin()` wrapper's silent failures. A successful listener is
   not reopened periodically. This reports socket readiness, not a guarantee of
   network reachability.
-- Startup and accept failures retry at a bounded five-second interval, measured
-  from completion. A new requested address resets the retry delay.
+- Listener startup and fatal accept failures retry at a bounded five-second
+  interval, measured from completion. A new requested address resets the retry delay.
+- A failed `accept` reads the listener's `SO_ERROR` and classifies the SDK's
+  `LWIP_*` error value. Would-block/try-again, interrupted calls, and aborted or
+  reset client connections return `ACCEPT_IDLE`; the listener stays open and
+  service availability is not withdrawn. Failed readiness checks, unavailable
+  socket-error information, and fatal or unrecognized errors retain
+  `ACCEPT_ERROR` recovery. Client option-setup failures close only that client.
 - A generation counter detects address changes and disconnect/reconnect pairs,
   even if Wi-Fi returns to the same address before the next worker iteration.
 - An outdated startup result is closed without advertisement. Active I/O checks
@@ -813,10 +842,26 @@ mocking framework:
   tests run the real worker. Each fake backend binds a fixture and its mutex and
   semaphores; separate instances can drive separate workers. Large packet buffers
   remain in static test storage rather than on the embedded test stack.
+- `Az3166LocalWebServerOperations` exposes protected readiness, accept, and
+  socket-option calls for adapter tests. These tests invoke the production
+  `acceptClient()` method and verify the listener descriptor, `SOL_SOCKET`,
+  `SO_ERROR`, and initial `socklen_t` length. They cover transient and fatal
+  values, failed lookups, zero/short/oversized returned lengths, missing error
+  output, and readiness paths that must not attempt a lookup.
 - `TelemetryHttpPayloadBuilder` replaces telemetry acquisition in HTTP response-contract tests.
 - `LocalDiscoveryOperations` injects clock, responder startup/shutdown, and health
   checks through a stateful fake implementation. Shared-backend cases verify
   exclusive ownership, scope cleanup, and retry handoff without live multicast.
+- `Az3166LocalDiscoveryOperations` exposes protected responder operations and
+  worker creation while retaining the production startup, locking, and iteration
+  logic. A fault-injecting backend checks cleanup after partial setup and a
+  forced thread-start error. A higher-priority probe invokes the same
+  `serviceOnce()` method used by the worker before startup returns; a bounded
+  semaphore wait checks that the responder mutex is available and the running
+  gate prevents premature polling. The probe is joined before assertions, and
+  the test confirms that failure leaves later iterations gated. These adapter
+  tests simulate SDK failures rather than exhausting actual RTOS resources or
+  generating live network faults.
 - `MdnsTransport` lets protocol tests capture datagrams without using real Wi-Fi.
 - `CloudTelemetryOperations` injects HTTPS send behavior into transport, uploader,
   and upload-controller tests. Test backends are constructed before their consumers.

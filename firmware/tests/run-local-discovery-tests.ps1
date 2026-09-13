@@ -21,6 +21,7 @@ Invoke-Az3166TestSuite `
         "config/AppConfig.h",
         "discovery/LocalDiscovery.h",
         "discovery/LocalDiscovery.cpp",
+        "discovery/Az3166LocalDiscoveryOperations.h",
         "discovery/MdnsTransport.h",
         "discovery/MdnsUdpTransport.h",
         "discovery/MdnsUdpTransport.cpp",
