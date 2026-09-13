@@ -1,5 +1,6 @@
 #include "TelemetryService.h"
 
+#include <mutex>
 #include <Arduino.h>
 #include <HTS221Sensor.h>
 #include <LPS22HBSensor.h>
@@ -38,12 +39,10 @@ void TelemetryService::begin(const char *deviceId) {
 }
 
 bool TelemetryService::read(TelemetryReading &reading) {
-    sensorMutex_.lock();
-    bool success = hts221_.getTemperature(&reading.temperature) == 0 &&
-                   hts221_.getHumidity(&reading.humidity) == 0 &&
-                   lps22hb_.getPressure(&reading.pressure) == 0;
-    sensorMutex_.unlock();
-    return success;
+    std::lock_guard<rtos::Mutex> lock(sensorMutex_);
+    return hts221_.getTemperature(&reading.temperature) == 0 &&
+           hts221_.getHumidity(&reading.humidity) == 0 &&
+           lps22hb_.getPressure(&reading.pressure) == 0;
 }
 
 int TelemetryService::formatPayload(

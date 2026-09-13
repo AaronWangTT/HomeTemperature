@@ -136,6 +136,14 @@ operations nonblocking and synchronize shared backend state: `currentTime()`
 can run on the main loop as well as the HTTP worker. The default constructor
 continues to use the internal process-lifetime AZ3166 backend.
 
+HTTP sockets are owned by move-only `LocalHttpSocket` objects. A successful
+`openListener()` or `acceptClient()` transfers its nonnegative descriptor to the
+caller; a failure must release any partially acquired socket before returning.
+The native adapter uses scoped ownership for these failure paths. Owners close
+through their original backend on reset or destruction, and moves retain that
+backend binding. Keep the backend alive until all its socket owners are gone;
+its `closeSocket()` implementation must be bounded and nonthrowing.
+
 For discovery, pass an optional `LocalHttpServiceUpdate` to the constructor.
 This is a typed `mbed::Callback<void(bool, uint32_t)>`; bind discovery directly
 with `mbed::callback(&localDiscovery, &LocalDiscovery::update)`, without a wrapper
@@ -145,6 +153,16 @@ Supply a `LocalDiscoveryService`
 descriptor containing the hostname (without `.local`), instance/service name
 (such as `example._http`), matching listener port, and DNS-SD length-prefixed TXT
 data. The application sketch demonstrates the complete wiring.
+
+`LocalDiscovery` is noncopyable and nonmovable. It owns an exclusive active
+session on its borrowed `LocalDiscoveryOperations` backend and stops that
+session on destruction. Failed startup releases partial state and the lease;
+explicit shutdown is not repeated at destruction. A second controller sharing
+the same backend waits for its normal retry interval without restarting or
+stopping the current owner's service. The backend must outlive all its
+controllers, and a bound discovery controller must outlive the HTTP server's
+shutdown and join. The default backend still provides one process-lifetime mDNS
+responder and worker; stopping a session leaves the worker idle for reuse.
 
 - Initialize handlers and sensors before the first connected update. The callback
   does not own its bound object: the handler, discovery instance or other callback

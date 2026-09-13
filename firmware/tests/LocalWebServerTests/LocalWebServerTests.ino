@@ -1,3 +1,4 @@
+#include <utility>
 #include <Arduino.h>
 #include <string.h>
 #include <type_traits>
@@ -14,6 +15,12 @@ static_assert(std::is_abstract<LocalWebServerOperations>::value,
               "LocalWebServerOperations must remain an interface");
 static_assert(std::has_virtual_destructor<LocalWebServerOperations>::value,
               "LocalWebServerOperations must have a virtual destructor");
+static_assert(!std::is_copy_constructible<LocalHttpSocket>::value &&
+                  !std::is_copy_assignable<LocalHttpSocket>::value,
+              "LocalHttpSocket must not duplicate descriptor ownership");
+static_assert(std::is_nothrow_move_constructible<LocalHttpSocket>::value &&
+                  std::is_nothrow_move_assignable<LocalHttpSocket>::value,
+              "LocalHttpSocket must transfer ownership without throwing");
 
 int failureCount = 0;
 
@@ -140,6 +147,8 @@ struct FakeHttpPlatform {
     int openCount;
     int closeListenerCount;
     int closeClientCount;
+    int lastClosedDescriptor;
+    int advertisedCloseCount;
     int clientAcceptCount;
     int readyCount;
     int serviceUpdates;
@@ -300,10 +309,14 @@ int FakeLocalWebServerOperations::sendBytes(int, const char *buffer, size_t size
 
 void FakeLocalWebServerOperations::closeSocket(int descriptor) {
     fakeMutex.lock();
+    fake.lastClosedDescriptor = descriptor;
     if (descriptor == 20) {
         ++fake.closeClientCount;
     } else {
         ++fake.closeListenerCount;
+        if (fake.advertised) {
+            ++fake.advertisedCloseCount;
+        }
         fake.listenerOpen = false;
     }
     fakeMutex.unlock();
@@ -357,6 +370,104 @@ void testServiceCallbackBinding() {
 FakeLocalWebServerOperations &httpOperations() {
     static FakeLocalWebServerOperations operations(fake, fakeMutex, progress, openGate);
     return operations;
+}
+
+void testSocketScopeAndReset() {
+    resetHttpPlatform();
+    {
+        LocalHttpSocket empty(httpOperations());
+        LocalHttpSocket failed(httpOperations(), LocalWebServer::ACCEPT_ERROR);
+        expect(!empty && empty.get() == -1 && !failed &&
+                   failed.get() == LocalWebServer::ACCEPT_ERROR,
+               "empty and failed handles retain their non-owning status");
+    }
+    expect(fake.closeListenerCount == 0 && fake.closeClientCount == 0,
+           "invalid handles are never closed");
+    {
+        LocalHttpSocket socket(httpOperations(), 0);
+        expect(socket && socket.get() == 0, "descriptor zero is a valid owned socket");
+        socket.reset(0);
+        expect(fake.closeListenerCount == 0, "resetting to the same descriptor does not close it");
+        socket.reset(10);
+        expect(socket.get() == 10 && fake.closeListenerCount == 1 &&
+                   fake.lastClosedDescriptor == 0,
+               "reset closes the previous descriptor before replacing ownership");
+        socket.reset();
+        socket.reset();
+        expect(!socket && fake.closeListenerCount == 2 && fake.lastClosedDescriptor == 10,
+               "repeated reset closes an owned socket exactly once");
+    }
+    expect(fake.closeListenerCount == 2, "destruction does not close an already reset socket");
+    {
+        LocalHttpSocket socket(httpOperations(), 20);
+    }
+    expect(fake.closeClientCount == 1 && fake.lastClosedDescriptor == 20,
+           "scope exit closes the remaining owned socket exactly once");
+}
+
+void testSocketRelease() {
+    resetHttpPlatform();
+    int descriptor;
+    {
+        LocalHttpSocket socket(httpOperations(), 20);
+        descriptor = socket.release();
+        expect(descriptor == 20 && !socket && socket.release() == -1,
+               "release transfers the raw descriptor and leaves the owner empty");
+    }
+    expect(fake.closeClientCount == 0 && fake.closeListenerCount == 0,
+           "destroying a released owner does not close the transferred descriptor");
+    {
+        LocalHttpSocket receiver(httpOperations(), descriptor);
+    }
+    expect(fake.closeClientCount == 1 && fake.lastClosedDescriptor == descriptor,
+           "the receiving owner closes a released descriptor once");
+}
+
+void testSocketMoveOwnership() {
+    resetHttpPlatform();
+    {
+        LocalHttpSocket source(httpOperations(), 20);
+        LocalHttpSocket destination(std::move(source));
+        expect(!source && destination.get() == 20 && fake.closeClientCount == 0,
+               "move construction transfers ownership without closing the socket");
+        destination = std::move(destination);
+        expect(destination.get() == 20 && fake.closeClientCount == 0,
+               "self move preserves socket ownership");
+    }
+    expect(fake.closeClientCount == 1, "moved-from destruction cannot double-close a socket");
+
+    resetHttpPlatform();
+    static FakeHttpPlatform secondFake;
+    memset(&secondFake, 0, sizeof(secondFake));
+    rtos::Mutex secondMutex;
+    rtos::Semaphore secondProgress(0);
+    rtos::Semaphore secondOpenGate(0);
+    FakeLocalWebServerOperations secondOperations(
+        secondFake, secondMutex, secondProgress, secondOpenGate);
+    {
+        LocalHttpSocket source(secondOperations, 10);
+        LocalHttpSocket destination(httpOperations(), 10);
+        destination = std::move(source);
+        expect(!source && destination.get() == 10 && fake.closeListenerCount == 1 &&
+                   fake.lastClosedDescriptor == 10 && secondFake.closeListenerCount == 0,
+               "move assignment closes the target through its original backend");
+        source.reset(20);
+        expect(source.get() == 20 && secondFake.closeClientCount == 0,
+               "a moved-from socket can adopt another descriptor on its original backend");
+    }
+    expect(fake.closeListenerCount == 1 && secondFake.closeListenerCount == 1 &&
+               secondFake.closeClientCount == 1,
+           "transferred and reused owners close only through their correct backends");
+
+    {
+        LocalHttpSocket empty(secondOperations);
+        LocalHttpSocket destination(httpOperations(), 10);
+        destination = std::move(empty);
+        expect(!destination && fake.closeListenerCount == 2,
+               "moving an empty owner closes the destination and leaves it empty");
+    }
+    expect(secondFake.closeListenerCount == 1 && secondFake.closeClientCount == 1,
+           "empty moved owners perform no extra cleanup");
 }
 
 class ExampleHandler : public LocalHttpHandler {
@@ -606,6 +717,25 @@ void testResponseDeadline() {
            "a non-reading client cannot block the HTTP worker indefinitely");
 }
 
+void testSocketCleanupDuringShutdown() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    {
+        LocalWebServer server(handler, 8080, 5000, httpOperations(),
+            mbed::callback(&httpOperations(), &FakeLocalWebServerOperations::updateService));
+        server.update(true, 0xC0000201UL);
+        const char incomplete[] = "GET /example HTTP/1.1\r\n";
+        queueRequest(incomplete, sizeof(incomplete) - 1);
+        expect(waitForCount(&FakeHttpPlatform::clientAcceptCount, 1),
+               "shutdown test holds an accepted client with an incomplete request");
+    }
+    expect(fake.closeClientCount == 1 && fake.closeListenerCount == 1 &&
+               fake.lastClosedDescriptor == 10,
+           "destruction closes the in-progress client and then its listener exactly once");
+    expect(!fake.advertised && fake.advertisedCloseCount == 0 && fake.outputLength == 0,
+           "shutdown withdraws discovery before listener closure without sending a stale response");
+}
+
 void testIndependentOperations() {
     resetHttpPlatform();
     static FakeHttpPlatform secondFake;
@@ -671,6 +801,9 @@ void setup() {
     testUnknownRoutes();
     testDisconnectedPolling();
     testTelemetryHandler();
+    testSocketScopeAndReset();
+    testSocketRelease();
+    testSocketMoveOwnership();
     testIndependentOperations();
     testServiceCallbackBinding();
     testWorkerLifecycle();
@@ -679,6 +812,7 @@ void setup() {
     testWorkerRequests();
     testRequestBoundsAndDisconnect();
     testResponseDeadline();
+    testSocketCleanupDuringShutdown();
 }
 
 void loop() {
