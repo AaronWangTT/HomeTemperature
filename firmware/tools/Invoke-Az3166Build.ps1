@@ -18,6 +18,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$coreVersion = "2.0.1"
+$libraryVersion = "1.1.0"
+$compilerVersion = "5_4-2016q3"
+$openOcdVersion = "0.10.0"
+$arduinoDataRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Arduino15"
+$installedCoreRoot = Join-Path $arduinoDataRoot "packages\AZ3166\hardware\stm32f4\$coreVersion"
+$installedCompiler = Join-Path $arduinoDataRoot "packages\AZ3166\tools\arm-none-eabi-gcc\$compilerVersion\bin\arm-none-eabi-g++.exe"
+$installedOpenOcd = Join-Path $arduinoDataRoot "packages\AZ3166\tools\openocd\$openOcdVersion\bin\openocd.exe"
+$arduinoSketchbook = Join-Path $ArduinoInstallRoot "sketchbook"
+$installedLibraryRoot = Join-Path $arduinoSketchbook "libraries\ArduinoMDNS"
+
 function Find-ArduinoExecutable {
     param([string]$RequestedExecutable)
 
@@ -57,14 +68,39 @@ if ([System.IO.Path]::GetExtension($resolvedSketch) -ne ".ino") {
 }
 
 $arduino = Find-ArduinoExecutable -RequestedExecutable $ArduinoExecutable
+if (
+    -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt") -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "boards.txt") -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $installedCompiler -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $installedOpenOcd -PathType Leaf)
+) {
+    throw "AZ3166 Core $coreVersion and its pinned tools are not installed. Run firmware/tools/Install-Az3166Toolchain.ps1."
+}
+
+$libraryProperties = Join-Path $installedLibraryRoot "library.properties"
+if (
+    -not (Test-Path -LiteralPath $libraryProperties -PathType Leaf) -or
+    (Get-Content -Raw -LiteralPath $libraryProperties) -notmatch "(?m)^version=$([regex]::Escape($libraryVersion))\s*$"
+) {
+    throw "ArduinoMDNS $libraryVersion is not installed in $arduinoSketchbook. Run firmware/tools/Install-Az3166Toolchain.ps1."
+}
+
 if ($Action -eq "Upload") {
     if ($Port -notmatch "^COM\d+$") {
         throw "Upload requires an explicit ST-Link port such as -Port COM3."
     }
-    $arguments = @("--upload", "--board", $Board, "--port", $Port, $resolvedSketch)
+    $arguments = @(
+        "--upload", "--board", $Board,
+        "--pref", "sketchbook.path=$arduinoSketchbook",
+        "--port", $Port, $resolvedSketch
+    )
     Write-Host "Uploading $resolvedSketch to $Board on $Port"
 } else {
-    $arguments = @("--verify", "--board", $Board, $resolvedSketch)
+    $arguments = @(
+        "--verify", "--board", $Board,
+        "--pref", "sketchbook.path=$arduinoSketchbook",
+        $resolvedSketch
+    )
     Write-Host "Verifying $resolvedSketch for $Board"
 }
 

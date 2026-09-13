@@ -21,10 +21,8 @@ Invoke-Az3166TestSuite `
         "config/AppConfig.h",
         "discovery/LocalDiscovery.h",
         "discovery/LocalDiscovery.cpp",
-        "discovery/MdnsTransport.h",
         "discovery/MdnsUdpTransport.h",
-        "discovery/MdnsUdpTransport.cpp",
-        "discovery/mdns"
+        "discovery/MdnsUdpTransport.cpp"
     ) `
     -StageSourcesUnderSrc `
     -Action $Action `

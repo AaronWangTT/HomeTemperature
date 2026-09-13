@@ -19,7 +19,6 @@ Invoke-Az3166TestSuite `
     -TestSource $testSource `
     -SourceFiles @(
         "config/AppConfig.h",
-        "platform/FloatFormatting.cpp",
         "telemetry/TelemetryService.h",
         "telemetry/TelemetryService.cpp"
     ) `

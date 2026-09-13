@@ -1,25 +1,26 @@
 #ifndef MDNS_UDP_TRANSPORT_H
 #define MDNS_UDP_TRANSPORT_H
 
-#include "MdnsTransport.h"
+#include <Arduino.h>
+#include <IPAddress.h>
 
-class MdnsUdpTransport : public MdnsTransport {
+class MdnsUdpTransport {
 public:
     MdnsUdpTransport();
-    ~MdnsUdpTransport() override;
+    ~MdnsUdpTransport();
     void setLocalIPv4Address(uint32_t address);
     bool failed() const;
 
-    uint8_t beginMulticast(IPAddress address, uint16_t port) override;
-    void stop() override;
-    int beginPacket(IPAddress address, uint16_t port) override;
-    size_t write(const uint8_t *buffer, size_t size) override;
-    int endPacket() override;
-    int parsePacket() override;
-    int read(uint8_t *buffer, size_t size) override;
-    void flush() override;
-    IPAddress remoteIP() override;
-    uint16_t remotePort() override;
+    uint8_t beginMulticast(IPAddress address, uint16_t port);
+    void stop();
+    int beginPacket(IPAddress address, uint16_t port);
+    size_t write(const uint8_t *buffer, size_t size);
+    int endPacket();
+    int parsePacket();
+    int read(uint8_t *buffer, size_t size);
+    void flush();
+    IPAddress remoteIP();
+    uint16_t remotePort();
 
 private:
     MdnsUdpTransport(const MdnsUdpTransport &) = delete;

@@ -5,9 +5,9 @@ Status: current implementation as of 2026-09-13.
 ## 1. Scope
 
 This document describes only the firmware that runs on the MXCHIP AZ3166. It
-covers sensor acquisition, local HTTP telemetry, mDNS discovery, cloud upload, connectivity,
-buttons, scheduling, watchdog behavior, platform compatibility fixes, and
-firmware tests.
+covers sensor acquisition, local HTTP telemetry, mDNS discovery, cloud upload,
+connectivity, buttons, scheduling, watchdog behavior, pinned platform
+dependencies, and firmware tests.
 
 The implementation under `server/`, including ingestion, persistence,
 dashboard, deployment, and operations, is outside the scope of this document.
@@ -107,7 +107,6 @@ src/
   connectivity/
   http/
   discovery/
-    mdns/
   telemetry/
   cloud/
   input/
@@ -117,8 +116,8 @@ src/
 Headers stay beside their implementations. `http/` contains only the reusable
 HTTP engine and handler interface; the application-specific HTTP adapter lives
 in `telemetry/`. `cloud/` owns transport and upload coordination. `platform/`
-holds device identity, watchdog support, and the SDK compatibility overrides.
-The vendored responder, metadata, and license stay together in `discovery/mdns/`.
+holds device identity and watchdog support. ArduinoMDNS is installed into the
+repository-local sketchbook; `discovery/` retains the AZ3166 raw-lwIP adapter.
 `config/` holds `AppConfig.h`, the cloud configuration loader, the public root
 certificate, deployment templates, and ignored local overrides. These remain
 separate from the reusable implementation in `cloud/`. The Arduino sketch stays
@@ -141,14 +140,12 @@ Focused test sketches and staging scripts live separately under `firmware/tests/
 | Sensor and JSON | `firmware/AZ3166/src/telemetry/TelemetryService.h/.cpp` | Stores an injected device ID pointer, owns and reads sensor objects, and formats the shared telemetry payload. |
 | Local HTTP | `firmware/AZ3166/src/http/LocalWebServer.h/.cpp`, `LocalHttpHandler.h` | Owns the nonblocking lwIP listener, dedicated worker, bounded HTTP protocol, synchronized status, and optional service-lifecycle callback. |
 | Telemetry HTTP adapter | `firmware/AZ3166/src/telemetry/TelemetryHttpHandler.h/.cpp` | Implements the application route and JSON/status mapping using its injected payload builder. |
-| Local discovery | `firmware/AZ3166/src/discovery/`: `LocalDiscovery`, `MdnsTransport`, `MdnsUdpTransport`, vendored ArduinoMDNS | Owns discovery lifecycle, bounded multicast transport, and the synchronized background responder. |
+| Local discovery | `firmware/AZ3166/src/discovery/`: `LocalDiscovery`, `MdnsUdpTransport`; installed ArduinoMDNS 1.1.0 | Owns discovery lifecycle, the bounded AZ3166 multicast transport, and the synchronized background responder. |
 | Upload workflow | `firmware/AZ3166/src/cloud/CloudUploadController.h/.cpp` | Gates attempts, translates upload outcomes into scheduling policy, and records completion-time results. |
 | Upload coordination | `firmware/AZ3166/src/cloud/TelemetryUploader.h/.cpp` | Builds one payload and forwards its exact bytes and length to cloud transport. |
 | Upload policy | `firmware/AZ3166/src/cloud/UploadScheduler.h/.cpp` | Decides when scheduled, retry, and manual uploads are due. |
 | Upload result | `firmware/AZ3166/src/cloud/TelemetryUploadResult.h` | Carries typed upload status and the underlying network or HTTP detail code. |
 | HTTPS transport | `firmware/AZ3166/src/cloud/CloudTelemetry.h/.cpp` | Builds the authenticated HTTPS request and classifies the response. |
-| Core compatibility | `firmware/AZ3166/src/platform/FloatFormatting.cpp` | Replaces the defective AZ3166 Core `dtostrf` implementation. |
-| SDK behavior | `firmware/AZ3166/src/platform/disable_system_telemetry.cpp` | Replaces SDK system telemetry hooks with no-op definitions. |
 
 ### 4.1 Injected Operations Interfaces
 
@@ -184,7 +181,9 @@ state as appropriate. Connectivity and cloud calls remain synchronous.
 
 Single-function hooks remain callbacks, including upload clocks, payload
 builders, cloud response handlers, and the typed HTTP service notification.
-`LocalHttpHandler` and `MdnsTransport` were already interfaces and are unchanged.
+`LocalHttpHandler` remains an abstract interface. ArduinoMDNS accepts the local
+transport through a borrowed, type-erased template adapter, so
+`MdnsUdpTransport` does not inherit from a library or application base class.
 
 ## 5. Startup and Main Loop
 
@@ -296,7 +295,7 @@ no address is currently recorded. The getter does not access the network stack.
 
 The platform adapter treats a null interface or null/invalid address text as
 unavailable. It guards the SDK parser rather than using `WiFi.localIP()`, whose
-Core 2.0.0 implementation can pass a null interface address to that parser.
+underlying implementation can pass a null interface address to that parser.
 
 - Read the address after each successful Wi-Fi connection and during the
   existing one-second status checks while Wi-Fi remains connected.
@@ -349,10 +348,11 @@ callback must outlive that server's worker shutdown and join. Access to each
 controller must remain serialized; the atomic lease protects backend ownership,
 not the controller's cached state or a backend's clock implementation.
 
-ArduinoMDNS 1.0.1 supplies DNS encoding, query handling, and service registration.
-The source is vendored with its LGPL notices and local compatibility fixes; the
-installed AZ3166 board package is not modified. Its native mDNS header
-declarations do not provide linkable responder implementations in Core 2.0.0.
+ArduinoMDNS 1.1.0 supplies DNS encoding, query handling, service registration,
+explicit announcements, and responder cleanup. The checksum-pinned release is
+installed separately into the repository-local sketchbook. Its custom transport
+constructor borrows the AZ3166 raw-lwIP adapter through type erasure; the
+firmware does not modify the installed library or board package.
 
 `LocalDiscoveryService` supplies borrowed, process-lifetime hostname, service
 name, port, and TXT metadata; the controller no longer includes `AppConfig` or
@@ -699,19 +699,13 @@ with one bounded `snprintf`, and the resulting explicit length is passed to the
 HTTPS layer. Platform libraries such as `HTTPClient` may still allocate memory
 internally.
 
-### 13.1 `dtostrf` Core Override
+### 13.1 Core Float Formatting
 
 The AZ3166 C library does not reliably support `%f` in the `printf` family, so
-Arduino uses `dtostrf` for float-to-text conversion. AZ3166 Core 2.0.0 has a
-defect in its `dtostrf` implementation: it may append an extra fractional digit,
-for example formatting `45.0` at precision 1 as `45.00`.
-
-`FloatFormatting.cpp` defines the same `extern "C"` function signature. Sketch
-objects are linked before the Core archive, so this project definition satisfies
-`dtostrf` references before the defective archive member is selected. The board
-package remains unmodified.
-
-The replacement preserves the expected Arduino behavior for:
+Arduino uses `dtostrf` for float-to-text conversion. The maintained AZ3166 Core
+2.0.1 corrects the fractional-digit defect in Core 2.0.0, which could format
+`45.0` at precision 1 as `45.00`. The Core implementation preserves expected
+Arduino behavior for:
 
 - `nan`, `inf`, and `ovf` markers;
 - positive and negative values;
@@ -719,15 +713,16 @@ The replacement preserves the expected Arduino behavior for:
 - right alignment for positive width;
 - left alignment for negative width.
 
-Because the symbol is global, Core code such as `String(float)` also resolves to
-the fixed implementation, although the telemetry path avoids `String`.
+Core code such as `String(float)` also uses the corrected implementation,
+although the telemetry path avoids `String`. No project-local symbol override
+is linked.
 
-### 13.2 SDK System Telemetry Override
+### 13.2 SDK System Telemetry
 
-`disable_system_telemetry.cpp` supplies no-op C definitions for the SDK system
-telemetry hooks. This prevents the bundled SDK telemetry callbacks from sending
-unrelated system telemetry while leaving application telemetry under explicit
-firmware control.
+AZ3166 Core 2.0.1 disables the bundled SDK system telemetry hooks by default.
+Defining `ENABLETRACE=1` in the platform build flags opts back into the vendor
+behavior. This Core-level default leaves the application's cloud uploader under
+explicit firmware control and removes the need for project-local no-op symbols.
 
 ## 14. Configuration and Credentials
 
@@ -784,11 +779,12 @@ explicit pass/fail result.
 All eleven suite runners use `StageSourcesUnderSrc`. Each entry in `SourceFiles`
 is relative to the production source root, and the harness preserves that path
 inside the staged sketch's `src/` tree instead of flattening individual files.
-Only selected dependencies are copied, including the whole `discovery/mdns/`
-subtree for discovery tests. Suites that need application constants select
-`config/AppConfig.h` individually; they do not copy private cloud overrides or
-the entire `config/` directory. This keeps cross-component includes identical in
-production and tests and allows Arduino to compile nested sources recursively.
+Only selected first-party dependencies are copied. Arduino resolves the pinned
+ArduinoMDNS library from the repository-local sketchbook. Suites that need
+application constants select `config/AppConfig.h` individually; they do not copy
+private cloud overrides or the entire `config/` directory. This keeps
+cross-component includes identical in production and tests and allows Arduino
+to compile nested sources recursively.
 
 | Suite | Primary coverage |
 | --- | --- |
@@ -817,7 +813,8 @@ mocking framework:
 - `LocalDiscoveryOperations` injects clock, responder startup/shutdown, and health
   checks through a stateful fake implementation. Shared-backend cases verify
   exclusive ownership, scope cleanup, and retry handoff without live multicast.
-- `MdnsTransport` lets protocol tests capture datagrams without using real Wi-Fi.
+- A duck-typed capture transport exercises ArduinoMDNS packets without using
+  real Wi-Fi.
 - `CloudTelemetryOperations` injects HTTPS send behavior into transport, uploader,
   and upload-controller tests. Test backends are constructed before their consumers.
 - `CloudUploadClock` replaces the controller clock.

@@ -2,8 +2,8 @@
 
 #include <mutex>
 #include <Arduino.h>
+#include <ArduinoMDNS.h>
 #include "MdnsUdpTransport.h"
-#include "mdns/MDNS.h"
 #include "rtos.h"
 
 namespace {
@@ -34,7 +34,7 @@ private:
 };
 
 Az3166LocalDiscoveryOperations::Az3166LocalDiscoveryOperations()
-    : responder_(transport_),
+    : responder_(transport_, false),
       worker_(osPriorityNormal, sizeof(workerStack_), workerStack_),
       workerStarted_(false),
       shutdown_(false),

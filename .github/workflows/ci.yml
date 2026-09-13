@@ -94,18 +94,19 @@ jobs:
         id: arduino-ide-cache
         uses: actions/cache@v6
         with:
-          path: .tools/arduino-1.8.19
-          key: arduino-ide-1.8.19-windows
+          path: |
+            .tools/arduino-1.8.19
+            .tools/sketchbook/libraries/ArduinoMDNS
+          key: arduino-ide-1.8.19-mdns-1.1.0-windows
 
       - name: Cache AZ3166 board package
         id: az3166-core-cache
         uses: actions/cache@v6
         with:
           path: ~/AppData/Local/Arduino15
-          key: az3166-core-2.0.0-windows
+          key: az3166-core-2.0.1-index-d3fcd963-windows
 
       - name: Install pinned AZ3166 toolchain
-        if: steps.arduino-ide-cache.outputs.cache-hit != 'true' || steps.az3166-core-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./firmware/tools/Install-Az3166Toolchain.ps1
 

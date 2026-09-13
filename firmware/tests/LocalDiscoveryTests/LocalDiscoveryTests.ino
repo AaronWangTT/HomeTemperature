@@ -2,9 +2,9 @@
 #include <string.h>
 #include <type_traits>
 
+#include <ArduinoMDNS.h>
 #include "src/discovery/LocalDiscovery.h"
 #include "src/discovery/MdnsUdpTransport.h"
-#include "src/discovery/mdns/MDNS.h"
 
 static_assert(std::is_abstract<LocalDiscoveryOperations>::value,
               "LocalDiscoveryOperations must remain an interface");
@@ -274,7 +274,7 @@ void testIndependentOperations() {
            "health and advertised addresses belong to the injected backend");
 }
 
-class CaptureTransport : public MdnsTransport {
+class CaptureTransport {
 public:
     uint8_t output[512];
     size_t outputLength;
@@ -286,15 +286,15 @@ public:
     CaptureTransport()
         : outputLength(0), sentCount(0), sendAllowed(true), inputLength(0) {}
 
-    uint8_t beginMulticast(IPAddress address, uint16_t port) override {
+    uint8_t beginMulticast(IPAddress address, uint16_t port) {
         return address == IPAddress(224, 0, 0, 251) && port == 5353;
     }
-    void stop() override { inputLength = 0; }
-    int beginPacket(IPAddress address, uint16_t port) override {
+    void stop() { inputLength = 0; }
+    int beginPacket(IPAddress address, uint16_t port) {
         outputLength = 0;
         return address == IPAddress(224, 0, 0, 251) && port == 5353;
     }
-    size_t write(const uint8_t *buffer, size_t size) override {
+    size_t write(const uint8_t *buffer, size_t size) {
         if (size > sizeof(output) - outputLength) {
             return 0;
         }
@@ -302,12 +302,12 @@ public:
         outputLength += size;
         return size;
     }
-    int endPacket() override {
+    int endPacket() {
         ++sentCount;
         return sendAllowed;
     }
-    int parsePacket() override { return static_cast<int>(inputLength); }
-    int read(uint8_t *buffer, size_t size) override {
+    int parsePacket() { return static_cast<int>(inputLength); }
+    int read(uint8_t *buffer, size_t size) {
         if (size > inputLength) {
             size = inputLength;
         }
@@ -315,9 +315,9 @@ public:
         inputLength = 0;
         return static_cast<int>(size);
     }
-    void flush() override { inputLength = 0; }
-    IPAddress remoteIP() override { return IPAddress(192, 0, 2, 10); }
-    uint16_t remotePort() override { return 5353; }
+    void flush() { inputLength = 0; }
+    IPAddress remoteIP() { return IPAddress(192, 0, 2, 10); }
+    uint16_t remotePort() { return 5353; }
 
     void queue(const uint8_t *buffer, size_t size) {
         memcpy(input, buffer, size);

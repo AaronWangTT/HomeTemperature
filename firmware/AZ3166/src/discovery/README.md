@@ -11,9 +11,8 @@ changes without depending on cloud credentials, Internet DNS, or NTP.
 | [LocalDiscovery.h](LocalDiscovery.h) | Reconcile service availability, retry startup or transport failure, and expose the controller's running state. |
 | `LocalDiscoveryService` | Caller-supplied hostname, instance/service name, TCP port, and encoded TXT metadata. |
 | `LocalDiscoveryOperations` | Abstract clock, responder startup/shutdown, and health operations for replacement backends. |
-| [MdnsTransport.h](MdnsTransport.h) | Abstract datagram contract consumed by the responder and implemented by protocol-test fakes. |
 | [MdnsUdpTransport.h](MdnsUdpTransport.h) | Bounded, nonblocking lwIP multicast transport for AZ3166. |
-| [mdns/README.md](mdns/README.md) | Vendored ArduinoMDNS responder; the application does not implement DNS packet handling itself. |
+| ArduinoMDNS 1.1.0 | Installed responder library for DNS encoding, query handling, service registration, and lifecycle operations. |
 
 `LocalDiscovery::update(serviceAvailable, address)` starts the responder once a
 service is available on a nonzero IPv4 address. Unchanged state does not cause
@@ -86,13 +85,16 @@ reconciliation for its listener.
   `parsePacket()` obtains the next packet, `read()` consumes buffered bytes, and
   `flush()` discards the current receive state. Configure the local address
   before joining a multicast group, and call `stop()` before rebinding.
-- A replacement `MdnsTransport` must preserve datagram boundaries and report
-  failed operations accurately. It is not a byte-stream socket interface.
+- A replacement transport is accepted structurally by ArduinoMDNS and must
+  implement the same datagram methods as `MdnsUdpTransport`. It must preserve
+  packet boundaries and report failures accurately; it is not a byte stream.
 
 ## Limits and Dependencies
 
-- Default transport: AZ3166 Core 2.0.0, Mbed RTOS, and lwIP multicast sockets on
+- Default transport: AZ3166 Core 2.0.1, Mbed RTOS, and lwIP multicast sockets on
   `224.0.0.251:5353`; this implementation is IPv4-only.
+- Responder: checksum-pinned ArduinoMDNS 1.1.0 installed under
+  `.tools/sketchbook/libraries`; build helpers select that sketchbook explicitly.
 - Worker: fixed 4096-byte stack and one polling iteration every 20 milliseconds.
   Transport buffers: 1536 receive bytes and 512 send bytes; oversized packets
   are rejected rather than passed partially to the responder.
@@ -104,8 +106,8 @@ reconciliation for its listener.
 - No automatic conflict renaming is provided. Assign distinct hostnames when
   deploying several devices on one LAN. Advertisement adds no authentication
   or encryption to the advertised service.
-- ArduinoMDNS retains its LGPL terms. Preserve the vendor license and local
-  port notices when reusing or distributing it; see
+- ArduinoMDNS retains its LGPL terms. Preserve its license and source notices
+  when reusing or distributing it; see
   [THIRD_PARTY_NOTICES.md](../../../../THIRD_PARTY_NOTICES.md).
 
 ## Verification and Related Guides

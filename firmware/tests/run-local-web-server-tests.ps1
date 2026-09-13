@@ -24,7 +24,6 @@ Invoke-Az3166TestSuite `
         "http/LocalHttpHandler.h",
         "telemetry/TelemetryHttpHandler.h",
         "telemetry/TelemetryHttpHandler.cpp",
-        "platform/FloatFormatting.cpp",
         "telemetry/TelemetryService.h",
         "telemetry/TelemetryService.cpp"
     ) `

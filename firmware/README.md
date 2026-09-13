@@ -12,7 +12,8 @@ The checked configuration is:
 | Component | Version |
 | --- | --- |
 | Arduino IDE | 1.8.19 |
-| Board package | `AZ3166:stm32f4:2.0.0` |
+| Board package | `AZ3166:stm32f4:2.0.1` |
+| ArduinoMDNS | 1.1.0 |
 | FQBN | `AZ3166:stm32f4:MXCHIP_AZ3166` |
 | GNU Arm toolchain | `5_4-2016q3` from the board package |
 | OpenOCD | `0.10.0` from the board package |
@@ -20,12 +21,15 @@ The checked configuration is:
 The board package index is:
 
 ```text
-https://raw.githubusercontent.com/VSChina/azureiotdevkit_tools/d0c76e57d1ad62610aab0773ba687d55df2e4c91/package_azureboard_index.json
+https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d3fcd963e8e6bb0b196462c894f9b5c4816d405f/package_azureboard_index.json
 ```
 
-That index declares `AZ3166-2.0.0.zip` with MD5
-`4f51c0ebf4d510f28c06d203a4ce23f8`. Arduino Board Manager verifies the
-archive against the index while installing it.
+That immutable index declares `AZ3166-2.0.1.zip` with SHA-256
+`9908715a6d1815dbd41899b6c7cfaf65d25cfa6fcd775b096bad0d11a259e462`.
+Arduino Board Manager verifies the Core, GNU Arm toolchain, and OpenOCD
+archives while installing them. The installer separately verifies ArduinoMDNS
+1.1.0 with SHA-256
+`f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47`.
 
 On Windows, install Arduino IDE 1.8.19 and the pinned Core with:
 
@@ -36,7 +40,9 @@ On Windows, install Arduino IDE 1.8.19 and the pinned Core with:
 The script reuses an existing Arduino IDE from `-ArduinoExecutable`,
 `ARDUINO_IDE_PATH`, a standard Program Files installation, or `PATH`. If none is
 found, it downloads Arduino IDE 1.8.19 into `.tools\arduino-1.8.19` before
-installing `AZ3166:stm32f4:2.0.0`.
+installing `AZ3166:stm32f4:2.0.1`. It installs ArduinoMDNS 1.1.0 under
+`.tools\sketchbook\libraries` and all build helpers select that repository-local
+sketchbook explicitly.
 
 ## Configuration
 
@@ -91,8 +97,10 @@ or DHCP changes. The HTTP worker coordinates advertisement only after its
 listener is ready, and withdraws it when the listener stops. Cloud uploads stay
 in the main loop but no longer prevent HTTP polling. Shared sensor acquisition
 is protected by a short mutex; network operations never hold that sensor lock.
-The vendored ArduinoMDNS 1.0.1 source and its local port are described in the
-repository's third-party notices.
+ArduinoMDNS 1.1.0 supplies the responder protocol and lifecycle API. The
+firmware keeps only its bounded raw-lwIP transport adapter; dependency source,
+release provenance, and LGPL terms are described in the repository's
+third-party notices.
 
 ## Reusing the HTTP Service
 
@@ -226,7 +234,7 @@ suite only when a full hardware regression is required:
 ```
 
 An upload is successful only when the command exits zero and OpenOCD reports
-`Verified OK`. The AZ3166 2.0.0 linker can emit a repeated four-byte `.bss`
+`Verified OK`. The AZ3166 2.0.1 linker can emit a repeated four-byte `.bss`
 alignment warning; resource usage and runtime tests must still be checked after
 link-layout changes.
 

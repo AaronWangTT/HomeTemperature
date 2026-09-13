@@ -128,7 +128,7 @@ borrows the backend; construct it first and destroy it after its consumer.
 - Network work remains synchronous. These components do not create a cloud
   worker, queue jobs, or make the main loop nonblocking. Local HTTP responsiveness
   comes from the separate [HTTP worker](../http/README.md).
-- The default transport needs AZ3166 Core 2.0.0, network access, a suitable TLS
+- The default transport needs AZ3166 Core 2.0.1, network access, a suitable TLS
   trust anchor, and a valid system time. Key validation alone does not prove the
   endpoint or certificate is usable.
 - Endpoint, certificate, key, and placeholder pointers are borrowed. The
