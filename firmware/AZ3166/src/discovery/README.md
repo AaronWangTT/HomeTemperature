@@ -32,6 +32,8 @@ Given the `handler` from the [HTTP guide](../http/README.md), this wiring expose
 the same service at `http://status-device.local:8080/status`:
 
 ```cpp
+#include <ArduinoMDNS.h>
+
 #include "src/discovery/LocalDiscovery.h"
 #include "src/http/LocalWebServer.h"
 
