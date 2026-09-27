@@ -1011,6 +1011,31 @@ void testWorkerRequests() {
     expect(binary, "binary response bytes are preserved");
 }
 
+void testRequestLineBoundary() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    LocalWebServer server(handler, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+
+    char maximumRequest[100];
+    memset(maximumRequest, 'x', 95);
+    memcpy(maximumRequest + 95, "\r\n\r\n", 4);
+    queueRequest(maximumRequest, sizeof(maximumRequest) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+               outputContains("HTTP/1.1 200 OK") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 1,
+           "a 95-character request line fits with its CRLF terminator");
+
+    char oversizedRequest[101];
+    memset(oversizedRequest, 'x', 96);
+    memcpy(oversizedRequest + 96, "\r\n\r\n", 4);
+    queueRequest(oversizedRequest, sizeof(oversizedRequest) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 2) &&
+               outputContains("HTTP/1.1 400 Bad Request") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 1,
+           "a 96-character request line is rejected before dispatch");
+}
+
 void testRequestBoundsAndDisconnect() {
     resetHttpPlatform();
     ExampleHandler handler;
@@ -1440,6 +1465,7 @@ void setup() {
     testTransientAcceptFailures();
     testAddressChangesDuringStartup();
     testWorkerRequests();
+    testRequestLineBoundary();
     testRequestBoundsAndDisconnect();
     testStreamingFramingAndPrefetchedBody();
     testStreamingFaultsAndGenerationCancellation();

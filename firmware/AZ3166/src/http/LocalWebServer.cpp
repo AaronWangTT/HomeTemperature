@@ -791,7 +791,9 @@ bool LocalWebServer::readRequest(
     char receivedBytes[MAX_HEADER_BYTES + MAX_PREFETCH_BYTES];
     size_t receivedLength = 0;
     size_t headerLength = 0;
+    size_t requestLineLength = 0;
     bool requestLineComplete = false;
+    bool requestLineCarriageReturn = false;
 
     while (isCurrent(generation) &&
            operations_.currentTime() - requestStart < IO_TIMEOUT_MS) {
@@ -808,14 +810,18 @@ bool LocalWebServer::readRequest(
             }
             receivedBytes[receivedLength++] = current;
             if (!requestLineComplete) {
-                if (current == '\n') {
-                    if (receivedLength < 2 ||
-                        receivedBytes[receivedLength - 2] != '\r') {
+                if (requestLineCarriageReturn) {
+                    if (current != '\n') {
                         return false;
                     }
                     requestLineComplete = true;
-                } else if (receivedLength >= REQUEST_LINE_SIZE) {
+                } else if (current == '\r') {
+                    requestLineCarriageReturn = true;
+                } else if (current == '\n' ||
+                           requestLineLength + 1 >= REQUEST_LINE_SIZE) {
                     return false;
+                } else {
+                    ++requestLineLength;
                 }
             }
             if (receivedLength >= 4 &&
@@ -853,7 +859,7 @@ bool LocalWebServer::readRequest(
     if (firstLineEnd == NULL) {
         return false;
     }
-    size_t requestLineLength =
+    requestLineLength =
         static_cast<size_t>(firstLineEnd - receivedBytes);
     if (requestLineLength == 0 || requestLineLength >= sizeof(request.requestLine)) {
         return false;
