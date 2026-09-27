@@ -147,15 +147,16 @@ HTTP headers:
 
 ```text
 +-------------------------+
-| Fixed package header    |
+| 256-byte package header |
 | - magic and format      |
 | - target board ID       |
 | - firmware version      |
 | - payload length        |
 | - SHA-256 payload hash  |
-| - signature metadata    |
+| - algorithm identifier  |
 +-------------------------+
-| ECDSA signature         |
+| 64-byte ECDSA signature |
+| raw P-256 r || s        |
 +-------------------------+
 | Raw application .bin    |
 +-------------------------+
@@ -166,10 +167,20 @@ device parses the envelope while streaming but writes only the raw application
 payload at offset zero of the OTA partition, preserving the existing bootloader
 format.
 
-All integers must have specified widths and byte order. Header length, signature
-length, payload length, and total HTTP `Content-Length` must be checked for
-overflow before erasing or writing Flash. Unknown format versions, target board
-IDs, algorithms, or trailing bytes are rejected.
+The first format uses an exactly 256-byte header and an exactly 64-byte raw
+ECDSA P-256 signature containing fixed-width `r` and `s` values. Header strings
+have fixed capacities, require termination, and leave unused bytes zero. No
+variable-sized header or signature allocation is permitted. Payload length and
+total HTTP `Content-Length` must be checked for overflow and must satisfy:
+
+```text
+package length = 256 + 64 + payload length
+```
+
+All integers have specified widths and byte order. Unknown format versions,
+target board IDs, algorithms, nonzero reserved bytes, inconsistent lengths, or
+trailing bytes are rejected before activation. Tests must include oversized and
+malformed header, signature, and payload declarations.
 
 Before staging, validate that the payload:
 
@@ -219,7 +230,8 @@ Exact names are not prescribed, but the Core implementation should own:
 - streaming bootloader-compatible CRC16;
 - streaming SHA-256;
 - signature verification using the application-supplied trust anchor;
-- optional read-back verification from external Flash;
+- mandatory full read-back from external Flash with independently recomputed
+  CRC16 and SHA-256 before the image can become staged;
 - deterministic begin/write/finish/abort state transitions;
 - exclusive ownership of one active staging session;
 - clearing incomplete state without marking an image bootable;
