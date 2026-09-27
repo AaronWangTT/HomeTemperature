@@ -126,5 +126,6 @@ checks cannot establish that a particular LAN or browser permits mDNS. A live
 check should resolve the chosen name and inspect the advertised service on an
 mDNS-capable client, while retaining direct-IP access as a diagnostic fallback.
 
-See [LocalDiscovery.cpp](LocalDiscovery.cpp) and the
+See [LocalDiscovery.cpp](LocalDiscovery.cpp), the
+[Core multicast UDP design](core-multicast-udp-design.md), and the
 [firmware design](../../../../docs/firmware-design.md#64-local-mdns-discovery).
