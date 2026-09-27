@@ -8,10 +8,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/ac5055ec3a8fddd3135b1c367a9f630d33f65ef8/package_azureboard_index.json"
-$coreVersion = "2.0.2"
+$boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d588a7a094be2f9df73dfb4a0172f05997003757/package_azureboard_index.json"
+$coreVersion = "3.0.0"
 $core = "AZ3166:stm32f4:$coreVersion"
-$coreArchiveSha256 = "5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677"
+$coreArchiveSha256 = "d314b0b345add84a4ae46d44ac6c0a29f2a0e32f2993757d03d577147b892f0d"
 $compilerVersion = "5_4-2016q3"
 $openOcdVersion = "0.10.0"
 $arduinoVersion = "1.8.19"
@@ -27,9 +27,9 @@ $installedCompiler = Join-Path $installedCompilerRoot "bin\arm-none-eabi-g++.exe
 $installedOpenOcdRoot = Join-Path $arduinoDataRoot "packages\AZ3166\tools\openocd\$openOcdVersion"
 $installedOpenOcd = Join-Path $installedOpenOcdRoot "bin\openocd.exe"
 $arduinoSketchbook = Join-Path $ArduinoInstallRoot "sketchbook"
-$libraryVersion = "1.1.0"
-$libraryArchiveUrl = "https://github.com/AaronWangTT/ArduinoMDNS/releases/download/1.1.0/ArduinoMDNS-1.1.0.zip"
-$libraryArchiveSha256 = "f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47"
+$libraryVersion = "1.1.1"
+$libraryArchiveUrl = "https://github.com/AaronWangTT/ArduinoMDNS/releases/download/1.1.1/ArduinoMDNS-1.1.1.zip"
+$libraryArchiveSha256 = "7c65dc64220ed25be7e55a8e11ac138210c4502977fc72808730251e373ddd80"
 $installedLibraryRoot = Join-Path $arduinoSketchbook "libraries\ArduinoMDNS"
 $libraryStamp = Join-Path $installedLibraryRoot ".hometemperature-source.sha256"
 

@@ -49,12 +49,12 @@ osStatus Az3166LocalDiscoveryOperations::startWorker() {
 
 bool Az3166LocalDiscoveryOperations::configureResponder(
     uint32_t address, const LocalDiscoveryService &service) {
-    transport_.setLocalIPv4Address(address);
     IPAddress localAddress(
         static_cast<uint8_t>(address >> 24),
         static_cast<uint8_t>(address >> 16),
         static_cast<uint8_t>(address >> 8),
         static_cast<uint8_t>(address));
+    transport_.setLocalIPv4Address(localAddress);
     return responder_.begin(localAddress, service.hostname) &&
         responder_.addServiceRecord(
             service.serviceName, service.port, MDNSServiceTCP, service.txtRecord);

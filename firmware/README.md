@@ -12,8 +12,8 @@ The checked configuration is:
 | Component | Version |
 | --- | --- |
 | Arduino IDE | 1.8.19 |
-| Board package | `AZ3166:stm32f4:2.0.2` |
-| ArduinoMDNS | 1.1.0 |
+| Board package | `AZ3166:stm32f4:3.0.0` (`base` profile) |
+| ArduinoMDNS | 1.1.1 |
 | FQBN | `AZ3166:stm32f4:MXCHIP_AZ3166` |
 | GNU Arm toolchain | `5_4-2016q3` from the board package |
 | OpenOCD | `0.10.0` from the board package |
@@ -21,15 +21,16 @@ The checked configuration is:
 The board package index is:
 
 ```text
-https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/ac5055ec3a8fddd3135b1c367a9f630d33f65ef8/package_azureboard_index.json
+https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d588a7a094be2f9df73dfb4a0172f05997003757/package_azureboard_index.json
 ```
 
-That immutable index declares the 5,497,641-byte `AZ3166-2.0.2.zip` with SHA-256
-`5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677`.
+That immutable index declares the 4,966,693-byte `AZ3166-3.0.0-base.zip` with
+SHA-256
+`d314b0b345add84a4ae46d44ac6c0a29f2a0e32f2993757d03d577147b892f0d`.
 Arduino Board Manager verifies the Core, GNU Arm toolchain, and OpenOCD
 archives while installing them. The installer separately verifies ArduinoMDNS
-1.1.0 with SHA-256
-`f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47`.
+1.1.1 with SHA-256
+`7c65dc64220ed25be7e55a8e11ac138210c4502977fc72808730251e373ddd80`.
 
 On Windows, install Arduino IDE 1.8.19 and the pinned Core with:
 
@@ -40,7 +41,7 @@ On Windows, install Arduino IDE 1.8.19 and the pinned Core with:
 The script reuses an existing Arduino IDE from `-ArduinoExecutable`,
 `ARDUINO_IDE_PATH`, a standard Program Files installation, or `PATH`. If none is
 found, it downloads Arduino IDE 1.8.19 into `.tools\arduino-1.8.19` before
-installing `AZ3166:stm32f4:2.0.2`. It installs ArduinoMDNS 1.1.0 under
+installing `AZ3166:stm32f4:3.0.0`. It installs ArduinoMDNS 1.1.1 under
 `.tools\sketchbook\libraries` and all build helpers select that repository-local
 sketchbook explicitly.
 
@@ -97,10 +98,10 @@ or DHCP changes. The HTTP worker coordinates advertisement only after its
 listener is ready, and withdraws it when the listener stops. Cloud uploads stay
 in the main loop but no longer prevent HTTP polling. Shared sensor acquisition
 is protected by a short mutex; network operations never hold that sensor lock.
-ArduinoMDNS 1.1.0 supplies the responder protocol and lifecycle API. The
-firmware keeps only its bounded raw-lwIP transport adapter; dependency source,
-release provenance, and LGPL terms are described in the repository's
-third-party notices.
+ArduinoMDNS 1.1.1 supplies the responder protocol and lifecycle API. AZ3166
+Core 3.0.0 supplies the bounded, nonblocking multicast UDP transport;
+dependency source, release provenance, and LGPL terms are described in the
+repository's third-party notices.
 
 ## Reusing the HTTP Service
 
@@ -234,7 +235,7 @@ suite only when a full hardware regression is required:
 ```
 
 An upload is successful only when the command exits zero and OpenOCD reports
-`Verified OK`. The AZ3166 2.0.2 build can emit a repeated four-byte `.bss`
+`Verified OK`. The AZ3166 3.0.0 build can emit a repeated four-byte `.bss`
 alignment warning; resource usage and runtime tests must still be checked after
 link-layout changes.
 

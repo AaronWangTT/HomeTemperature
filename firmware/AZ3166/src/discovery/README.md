@@ -11,8 +11,8 @@ changes without depending on cloud credentials, Internet DNS, or NTP.
 | [LocalDiscovery.h](LocalDiscovery.h) | Reconcile service availability, retry startup or transport failure, and expose the controller's running state. |
 | `LocalDiscoveryService` | Caller-supplied hostname, instance/service name, TCP port, and encoded TXT metadata. |
 | `LocalDiscoveryOperations` | Abstract clock, responder startup/shutdown, and health operations for replacement backends. |
-| [MdnsUdpTransport.h](MdnsUdpTransport.h) | Bounded, nonblocking lwIP multicast transport for AZ3166. |
-| ArduinoMDNS 1.1.0 | Installed responder library for DNS encoding, query handling, service registration, and lifecycle operations. |
+| `AZ3166MulticastUDP` | Core-provided bounded, nonblocking multicast transport for AZ3166. |
+| ArduinoMDNS 1.1.1 | Installed responder library for DNS encoding, query handling, service registration, and lifecycle operations. |
 
 `LocalDiscovery::update(serviceAvailable, address)` starts the responder once a
 service is available on a nonzero IPv4 address. Unchanged state does not cause
@@ -83,19 +83,19 @@ reconciliation for its listener.
 - To substitute lifecycle behavior, derive from `LocalDiscoveryOperations` and
   inject it by reference. The backend is borrowed and must outlive the controller.
   Independent fake implementations can own independent state.
-- `MdnsUdpTransport` accumulates writes into one datagram until `endPacket()`.
+- `AZ3166MulticastUDP` accumulates writes into one datagram until `endPacket()`.
   `parsePacket()` obtains the next packet, `read()` consumes buffered bytes, and
   `flush()` discards the current receive state. Configure the local address
   before joining a multicast group, and call `stop()` before rebinding.
 - A replacement transport is accepted structurally by ArduinoMDNS and must
-  implement the same datagram methods as `MdnsUdpTransport`. It must preserve
+  implement the same datagram methods as `AZ3166MulticastUDP`. It must preserve
   packet boundaries and report failures accurately; it is not a byte stream.
 
 ## Limits and Dependencies
 
-- Default transport: AZ3166 Core 2.0.2, Mbed RTOS, and lwIP multicast sockets on
+- Default transport: AZ3166 Core 3.0.0 `AZ3166MulticastUDP` on
   `224.0.0.251:5353`; this implementation is IPv4-only.
-- Responder: checksum-pinned ArduinoMDNS 1.1.0 installed under
+- Responder: checksum-pinned ArduinoMDNS 1.1.1 installed under
   `.tools/sketchbook/libraries`; build helpers select that sketchbook explicitly.
 - Worker: fixed 4096-byte stack and one polling iteration every 20 milliseconds.
   Transport buffers: 1536 receive bytes and 512 send bytes; oversized packets
@@ -126,6 +126,6 @@ checks cannot establish that a particular LAN or browser permits mDNS. A live
 check should resolve the chosen name and inspect the advertised service on an
 mDNS-capable client, while retaining direct-IP access as a diagnostic fallback.
 
-See [LocalDiscovery.cpp](LocalDiscovery.cpp),
-[MdnsUdpTransport.cpp](MdnsUdpTransport.cpp), and the
+See [LocalDiscovery.cpp](LocalDiscovery.cpp), the
+[Core multicast UDP design](core-multicast-udp-design.md), and the
 [firmware design](../../../../docs/firmware-design.md#64-local-mdns-discovery).

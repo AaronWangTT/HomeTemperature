@@ -18,10 +18,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$coreVersion = "2.0.2"
-$coreArchiveSha256 = "5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677"
-$libraryVersion = "1.1.0"
-$libraryArchiveSha256 = "f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47"
+$coreVersion = "3.0.0"
+$coreArchiveSha256 = "d314b0b345add84a4ae46d44ac6c0a29f2a0e32f2993757d03d577147b892f0d"
+$libraryVersion = "1.1.1"
+$libraryArchiveSha256 = "7c65dc64220ed25be7e55a8e11ac138210c4502977fc72808730251e373ddd80"
 $compilerVersion = "5_4-2016q3"
 $openOcdVersion = "0.10.0"
 $arduinoDataRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Arduino15"

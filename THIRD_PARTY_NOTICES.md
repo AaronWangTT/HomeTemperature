@@ -6,41 +6,43 @@ software and data keep their own licenses and terms.
 ## Firmware Toolchain
 
 The firmware builds against the maintained MXChip Azure IoT DevKit SDK / AZ3166
-Arduino board package 2.0.2, based on Microsoft's final 2.0.0 release. The
-package is installed separately and is not vendored in this repository.
+Arduino board package 3.0.0 base profile, based on Microsoft's final 2.0.0
+release. The package is installed separately and is not vendored in this
+repository.
 
-- Maintained source: <https://github.com/AaronWangTT/devkit-sdk/tree/2.0.2>
+- Maintained source: <https://github.com/AaronWangTT/devkit-sdk/tree/3.0.0>
 - Upstream source: <https://github.com/microsoft/devkit-sdk/tree/2.0.0>
-- Board package index: <https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/ac5055ec3a8fddd3135b1c367a9f630d33f65ef8/package_azureboard_index.json>
-- Release archive: <https://github.com/AaronWangTT/devkit-sdk/releases/download/2.0.2/AZ3166-2.0.2.zip>
-- Board archive size: 5,497,641 bytes
+- Board package index: <https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/d588a7a094be2f9df73dfb4a0172f05997003757/package_azureboard_index.json>
+- Release archive: <https://github.com/AaronWangTT/devkit-sdk/releases/download/3.0.0/AZ3166-3.0.0-base.zip>
+- Board archive size: 4,966,693 bytes
 - Board archive SHA-256:
-  `5914d3e7b988fdc50b00ff241b7ac191fd6fb9bdc234b4a3f86c51ed0d5e9677`
+  `d314b0b345add84a4ae46d44ac6c0a29f2a0e32f2993757d03d577147b892f0d`
 - License: MIT, copyright Microsoft Corporation
 - Tool dependencies declared by that package: GNU Arm Embedded Toolchain
   `5_4-2016q3` and OpenOCD `0.10.0`
 
-The maintained release corrects `dtostrf` precision and width formatting,
-makes SDK system telemetry opt-in through `ENABLETRACE=1`, and reports the
-maintained Core version through `getDevkitVersion()`.
+The maintained release carries forward corrected `dtostrf` precision and width
+formatting, keeps SDK system telemetry opt-in through `ENABLETRACE=1`, reports
+the maintained Core version through `getDevkitVersion()`, supplies bounded
+multicast UDP, and excludes Azure IoT support from the base profile.
 
 The board package contains additional third-party components. Their notices and
 licenses in the installed package continue to apply.
 
 ## Firmware mDNS Responder
 
-The firmware builds against maintained ArduinoMDNS 1.1.0, based on Georg
+The firmware builds against maintained ArduinoMDNS 1.1.1, based on Georg
 Kaindl's EthernetBonjour. The library is installed separately into the
 repository-local Arduino sketchbook and is not vendored in this repository.
 
-- Maintained source: <https://github.com/AaronWangTT/ArduinoMDNS/tree/1.1.0>
+- Maintained source: <https://github.com/AaronWangTT/ArduinoMDNS/tree/1.1.1>
 - Upstream source: <https://github.com/arduino-libraries/ArduinoMDNS>
-- Release archive: <https://github.com/AaronWangTT/ArduinoMDNS/releases/download/1.1.0/ArduinoMDNS-1.1.0.zip>
+- Release archive: <https://github.com/AaronWangTT/ArduinoMDNS/releases/download/1.1.1/ArduinoMDNS-1.1.1.zip>
 - Release archive SHA-256:
-  `f7a4c6f53d614d05aef3c6c02f6f49b4057202a42a8e40f63bdb062e99162e47`
+  `7c65dc64220ed25be7e55a8e11ac138210c4502977fc72808730251e373ddd80`
 - Library license: LGPL-3.0-or-later; the Arduino wrapper header carries its
   original LGPL-2.1-or-later notice.
-- License text: <https://github.com/AaronWangTT/ArduinoMDNS/blob/1.1.0/LICENSE.txt>
+- License text: <https://github.com/AaronWangTT/ArduinoMDNS/blob/1.1.1/LICENSE.txt>
 
 The maintained release adds a borrowed custom-transport API, optional WIZnet
 startup delay, responder cleanup and explicit announcements, and send-error

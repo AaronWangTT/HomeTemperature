@@ -1,6 +1,6 @@
 {
     "env": {
-        "AZ3166_CORE": "${env:LOCALAPPDATA}/Arduino15/packages/AZ3166/hardware/stm32f4/2.0.2"
+        "AZ3166_CORE": "${env:LOCALAPPDATA}/Arduino15/packages/AZ3166/hardware/stm32f4/3.0.0"
     },
     "configurations": [
         {
@@ -67,22 +67,6 @@
                 "${AZ3166_CORE}/system/az3166-driver/mico/system/command_console",
                 "${AZ3166_CORE}/system/az3166-driver/TARGET_AZ3166",
                 "${AZ3166_CORE}/system/az3166-driver/TARGET_STM/peripherals",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/c-utility/inc",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/c-utility/pal/mbed_os5",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/deps/parson",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/deps/uhttp/inc",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/deps/umock-c/inc",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/deps/azure-macro-utils-c/inc",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/iothub_client/inc",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/iothub_client/inc/internal",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/provisioning_client/inc",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/provisioning_client/adapters",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/provisioning_client/deps/RIoT/Reference/DICE",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/provisioning_client/deps/RIoT/Reference/RIoT",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/provisioning_client/deps/RIoT/Reference/RIoT/Core",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/provisioning_client/deps/RIoT/Reference/RIoT/Core/RIoTCrypt/include",
-                "${AZ3166_CORE}/system/azure-iot-sdk-c/umqtt/inc",
                 "${AZ3166_CORE}/cores/arduino",
                 "${AZ3166_CORE}/cores/arduino/cli",
                 "${AZ3166_CORE}/cores/arduino/httpclient",
