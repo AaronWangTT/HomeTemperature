@@ -100,10 +100,10 @@ adding account management solely for OTA would be a separate product decision.
 
 | Layer | Responsibilities |
 | --- | --- |
-| AZ3166 Core | Partition discovery, erase/write/read-back, bounds checking, streaming CRC16 and SHA-256, image-shape validation, signature-verification mechanism, activation metadata, typed errors, cancellation, and fault-injection seams. |
+| AZ3166 Core | Package-envelope parsing, partition discovery, erase/write/read-back, bounds checking, streaming CRC16 and SHA-256, image-shape validation, signature-verification mechanism, activation metadata, typed errors, cancellation, and fault-injection seams. |
 | HomeTemperature | Physical authorization, trusted public key, product/board/version policy, HTTP routes, upload ownership and deadlines, progress/status UX, coordination with cloud and discovery, and delayed reboot. |
 | Host tooling | Build provenance, package construction, offline private-key signing, pre-upload inspection, upload progress, and preservation of the raw `.bin` used for ST-Link recovery. |
-| Bootloader | Verify the existing CRC contract and copy the staged image into the application region. Rollback is not available in the current bootloader. |
+| Bootloader | Consume the existing length-and-CRC boot-table contract and copy the staged image into the application region. Whether it validates CRC before modifying internal Flash remains a hardware-test gate. Rollback is not available in the current bootloader. |
 
 The Core owns cryptographic implementation but not trust policy: it may verify
 an image with a caller-supplied public key, while the application decides which
@@ -125,10 +125,14 @@ The proposed design requires both:
    only the public verification key; the private key must never be stored in
    this repository or on the device.
 
-Core 3.0.0 includes Mbed TLS SHA-256, ECDSA, secp256r1, and public-key parsing,
-so ECDSA P-256 with SHA-256 is the preferred initial signature scheme. Signature
-policy and the trusted public key belong to the application, while the Core can
-provide bounded parsing and verification helpers.
+Core 3.0.0 includes the Mbed TLS sources for SHA-256, ECDSA, secp256r1, and
+public-key parsing, but its effective `mbed_config.h` enables only SHA-256.
+ECDSA P-256 with SHA-256 is the preferred initial signature scheme only after a
+future Core release enables and links the required ECP, ECDSA, bignum, ASN.1,
+and public-key parsing modules. Core CI must compile and execute a
+known-answer signature verification test and record the resulting flash and RAM
+cost. Signature policy and the trusted public key belong to the application,
+while the Core provides bounded parsing and verification.
 
 The application should reject downgrades by default. A downgrade, if needed for
 recovery, requires a separate physical maintenance action. Local HTTP can remain
@@ -176,14 +180,25 @@ Before staging, validate that the payload:
 
 ## 7. Core Responsibilities
 
-The Core should expose a transport-neutral session API. A representative shape
-is:
+The Core should expose a transport-neutral package session API. It consumes the
+complete wire package, parses the bounded envelope and signature before writing
+only payload bytes to the OTA partition, and asks the application to approve
+the parsed metadata before erase begins. A representative shape is:
 
 ```cpp
+typedef OTAResult (*OTAAdmissionCallback)(
+    const OTAPackageMetadata *metadata,
+    void *context);
+
 class OTAUpdateSession {
 public:
-    OTAResult begin(size_t expectedSize);
-    OTAResult write(const uint8_t *data, size_t size);
+    OTAResult begin(
+        size_t packageSize,
+        const uint8_t *trustedPublicKey,
+        size_t trustedPublicKeySize,
+        OTAAdmissionCallback admit,
+        void *context);
+    OTAResult writePackage(const uint8_t *data, size_t size);
     OTAResult finish(OTAImageInfo *result);
     void abort();
 };
@@ -193,13 +208,17 @@ OTAResult OTAActivate(const OTAImageInfo &image);
 
 Exact names are not prescribed, but the Core implementation should own:
 
+- incrementally parsing a fixed-size envelope across arbitrary input chunks;
+- buffering only the bounded header and signature, never the complete image;
+- invoking the admission callback after metadata parsing and before Flash erase;
+- rejecting trailing bytes or a package length inconsistent with its envelope;
 - querying the application and OTA partition layouts;
 - validating all offsets, additions, and lengths;
 - erasing the required OTA Flash range before the first write;
 - bounded sequential writes with explicit short/error results;
 - streaming bootloader-compatible CRC16;
 - streaming SHA-256;
-- signature verification using an application-supplied trust anchor;
+- signature verification using the application-supplied trust anchor;
 - optional read-back verification from external Flash;
 - deterministic begin/write/finish/abort state transitions;
 - exclusive ownership of one active staging session;
