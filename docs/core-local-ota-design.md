@@ -134,11 +134,18 @@ known-answer signature verification test and record the resulting flash and RAM
 cost. Signature policy and the trusted public key belong to the application,
 while the Core provides bounded parsing and verification.
 
-The application should reject downgrades by default. A downgrade, if needed for
-recovery, requires a separate physical maintenance action. Local HTTP can remain
-unencrypted for the first version because signatures protect authenticity and
-integrity, but firmware contents and device metadata will be visible on the
-LAN.
+Firmware versions use exactly three decimal components,
+`MAJOR.MINOR.PATCH`. Each component is in the range 0 through 65535, has no
+leading zero unless it is zero, and is compared numerically and
+lexicographically as a three-element tuple. A normal OTA session rejects both
+equal and lower versions, preventing replay of an already installed release.
+The source commit identifies provenance but does not participate in ordering.
+A downgrade, if needed for recovery, requires a separate physical maintenance
+action that explicitly changes the admission policy for one session.
+
+Local HTTP can remain unencrypted for the first version because signatures
+protect authenticity and integrity, but firmware contents and device metadata
+will be visible on the LAN.
 
 ## 6. Package Format
 
@@ -163,10 +170,22 @@ HTTP headers:
 
 The fixed package header is 320 bytes: a 64-byte envelope prefix followed by an
 exact copy of the firmware's 256-byte compatibility descriptor. The signature
-covers all 320 header bytes. The prefix contains an 8-byte magic, 16-bit format
-and header sizes, 16-bit signature algorithm and size, 32-bit payload length,
-the 32-byte payload SHA-256, and zero-filled reserved bytes. Integers use little
-endian. Format version 1 permits only the fixed sizes above.
+covers all 320 header bytes. Format version 1 defines the prefix as:
+
+| Offset | Size | Field |
+| ---: | ---: | --- |
+| `0` | 8 | Magic `AZPKG001` |
+| `8` | 2 | Package format version, value 1 |
+| `10` | 2 | Total header size, value 320 |
+| `12` | 2 | Signature algorithm, value 1 for ECDSA P-256/SHA-256 |
+| `14` | 2 | Signature size, value 64 |
+| `16` | 4 | Raw application payload length |
+| `20` | 32 | SHA-256 of the complete raw application payload |
+| `52` | 12 | Reserved, all zero |
+| `64` | 256 | Exact copy of the compatibility descriptor |
+
+All integers are unsigned and little endian. The signature begins at package
+offset 320, and the raw application begins at package offset 384.
 
 The application image places its compatibility descriptor at raw-image offset
 `0x200` in a dedicated, retained linker section. Its versioned layout is:
@@ -180,17 +199,19 @@ The application image places its compatibility descriptor at raw-image offset
 | `16` | 32 | NUL-terminated product ID |
 | `48` | 32 | NUL-terminated board ID |
 | `80` | 32 | NUL-terminated firmware version |
-| `112` | 40 | Lowercase hexadecimal source commit |
+| `112` | 40 | Lowercase hexadecimal source commit, fixed width without NUL |
 | `152` | 4 | Application address |
 | `156` | 4 | Application capacity |
 | `160` | 4 | Package-format version |
 | `164` | 32 | Trusted signing-key SHA-256 identifier |
 | `196` | 60 | Zero-filled reserved bytes |
 
-Strings must contain a NUL within their field and all bytes after it must be
-zero. The descriptor and package format versions are independent and both are
-checked. The build fails unless the linker map places exactly one 256-byte
-descriptor at raw-image offset `0x200`.
+The product, board, and firmware-version strings must contain a NUL within their
+fields, and all bytes after it must be zero. The source commit is instead
+exactly 40 lowercase hexadecimal bytes without a terminator. The descriptor and
+package format versions are independent and both are checked. The build fails
+unless the linker map places exactly one 256-byte descriptor at raw-image offset
+`0x200`.
 
 After read-back, the Core extracts the embedded descriptor and requires it to be
 byte-for-byte identical to the descriptor copied into the signed package
@@ -220,6 +241,8 @@ Before staging, validate that the payload:
 
 - is nonempty and no larger than the runtime OTA partition capacity;
 - fits the internal application partition;
+- declares an application address and capacity exactly equal to the values
+  returned for `MICO_PARTITION_APPLICATION`;
 - has a plausible STM32 vector table for the configured application region; and
 - contains a valid embedded compatibility descriptor matching the signed
   product, board, version, and format-generation metadata.
@@ -256,10 +279,15 @@ Exact names are not prescribed, but the Core implementation should own:
 
 - incrementally parsing a fixed-size envelope across arbitrary input chunks;
 - buffering only the bounded header and signature, never the complete image;
-- invoking the admission callback after metadata parsing and before Flash erase;
+- verifying the 320-byte header signature with the supplied trust anchor before
+  exposing authenticated metadata to the admission callback or erasing Flash;
+- invoking the admission callback only after signature verification and before
+  Flash erase;
 - rejecting trailing bytes or a package length inconsistent with its envelope;
 - querying the application and OTA partition layouts;
-- validating all offsets, additions, and lengths;
+- requiring the signed application address and capacity to match the runtime
+  application partition exactly, then validating all offsets, additions, and
+  lengths against both application and staging partitions;
 - erasing the required OTA Flash range before the first write;
 - bounded sequential writes with explicit short/error results;
 - streaming bootloader-compatible CRC16;
@@ -437,7 +465,8 @@ separate recovery and manufacturing review.
 2. Add partition discovery, erase, bounds checks, CRC16, SHA-256, read-back,
    image-shape checks, typed errors, and exclusive session ownership.
 3. Add Flash and clock injection with fault tests.
-4. Preserve `OTADownloadFirmware()` as a compatibility wrapper.
+4. Preserve `OTADownloadFirmware()` as a deprecated legacy raw-image path,
+   separate from the signed package-session API.
 
 ### Phase 3: Add signed artifact tooling
 
