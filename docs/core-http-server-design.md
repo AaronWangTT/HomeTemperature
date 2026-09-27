@@ -75,6 +75,26 @@ The enhanced server should provide:
 - a route form containing a caller-owned context pointer; and
 - replaceable clock and socket operations for deterministic tests.
 
+The enhanced lifecycle API must let a caller rebind or disconnect a running
+instance without reaching into Core internals:
+
+```cpp
+int httpd_reconfigure(const httpd_config_v2_t *config);
+int httpd_stop(unsigned timeout_ms);
+```
+
+`httpd_reconfigure()` accepts a new bind address and port from the caller's
+current connectivity snapshot. If either value differs from the active listener,
+or if the caller passes a null address to represent Wi-Fi disconnect, the Core
+must immediately mark listener readiness false, cancel the active listener and
+clients, join the worker within the configured stop bound, and restart
+synchronously with the new endpoint. The call returns only after the server is
+listening, stopped for disconnect, failed, or the bounded restart times out.
+`httpd_stop()` performs the same readiness invalidation and bounded cancellation
+without starting a replacement listener. Stale readiness from a previous Wi-Fi
+generation or bind address must never remain observable after either call
+begins.
+
 An extended route can use one callback plus a method mask:
 
 ```cpp
