@@ -12,6 +12,7 @@ public:
     int receiveBytes(int client, char *buffer, size_t size) override;
     int sendBytes(int client, const char *buffer, size_t size) override;
     void closeSocket(int descriptor) override;
+    bool supportsConcurrentSockets() const override { return true; }
 
 protected:
     virtual int listenerReady(int listener);

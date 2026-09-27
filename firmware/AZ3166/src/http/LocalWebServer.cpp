@@ -10,9 +10,56 @@ namespace {
 
 const uint32_t IO_TIMEOUT_MS = 2000UL;
 const uint32_t WORKER_STACK_SIZE = 6144;
+const uint32_t STREAMING_WORKER_STACK_SIZE = 6144;
 const size_t REQUEST_LINE_SIZE = 96;
 const size_t RESPONSE_BODY_SIZE = 512;
 const size_t MAX_HEADER_BYTES = 2048;
+
+bool asciiEqualIgnoreCase(const char *value, size_t length, const char *expected) {
+    size_t expectedLength = strlen(expected);
+    if (length != expectedLength) {
+        return false;
+    }
+    for (size_t index = 0; index < length; ++index) {
+        char current = value[index];
+        if (current >= 'A' && current <= 'Z') {
+            current = static_cast<char>(current - 'A' + 'a');
+        }
+        if (current != expected[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool parseContentLength(const char *value, size_t length, size_t &result) {
+    while (length > 0 && (*value == ' ' || *value == '\t')) {
+        ++value;
+        --length;
+    }
+    while (length > 0 &&
+           (value[length - 1] == ' ' || value[length - 1] == '\t')) {
+        --length;
+    }
+    if (length == 0) {
+        return false;
+    }
+
+    size_t parsed = 0;
+    for (size_t index = 0; index < length; ++index) {
+        char current = value[index];
+        if (current < '0' || current > '9') {
+            return false;
+        }
+        size_t digit = static_cast<size_t>(current - '0');
+        if (parsed > (SIZE_MAX - digit) / 10) {
+            return false;
+        }
+        parsed = parsed * 10 + digit;
+    }
+    result = parsed;
+    return true;
+}
 
 bool setNonblocking(int descriptor) {
     unsigned long enabled = 1;
@@ -107,11 +154,24 @@ int Az3166LocalWebServerOperations::acceptClient(int listener) {
 
 int Az3166LocalWebServerOperations::receiveBytes(int client, char *buffer, size_t size) {
     int ready = socketReady(client, false);
-    if (ready <= 0) {
-        return ready;
+    if (ready == 0) {
+        return 0;
+    }
+    if (ready < 0) {
+        return LocalWebServer::RECEIVE_ERROR;
     }
     int received = lwip_recv(client, buffer, size, MSG_DONTWAIT);
-    return received > 0 ? received : -1;
+    if (received > 0) {
+        return received;
+    }
+    if (received == 0) {
+        return LocalWebServer::RECEIVE_DISCONNECTED;
+    }
+    if (errno == LWIP_EAGAIN || errno == LWIP_EWOULDBLOCK ||
+        errno == LWIP_EINTR) {
+        return 0;
+    }
+    return LocalWebServer::RECEIVE_ERROR;
 }
 
 int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, size_t size) {
@@ -175,6 +235,115 @@ void LocalHttpSocket::reset(int descriptor) noexcept {
     }
 }
 
+class LocalHttpBodyStreamImpl : public LocalHttpBodyStream {
+public:
+    LocalHttpBodyStreamImpl(
+        LocalWebServer &server,
+        LocalWebServerOperations &operations,
+        int client,
+        uint32_t generation,
+        size_t contentLength,
+        const char *prefetched,
+        size_t prefetchedLength,
+        const LocalHttpStreamingLimits &limits)
+        : server_(server),
+          operations_(operations),
+          client_(client),
+          generation_(generation),
+          remaining_(contentLength),
+          prefetched_(prefetched),
+          prefetchedLength_(prefetchedLength),
+          prefetchedOffset_(0),
+          started_(operations.currentTime()),
+          lastProgress_(started_),
+          limits_(limits) {
+    }
+
+    LocalHttpBodyReadStatus read(
+        char *buffer,
+        size_t capacity,
+        size_t &received) override {
+        received = 0;
+        if (buffer == NULL || capacity == 0) {
+            return LOCAL_HTTP_BODY_ERROR;
+        }
+        if (!server_.isStreamingCurrent(generation_)) {
+            return LOCAL_HTTP_BODY_CANCELLED;
+        }
+        if (remaining_ == 0) {
+            return LOCAL_HTTP_BODY_COMPLETE;
+        }
+
+        uint32_t now = operations_.currentTime();
+        if (now - started_ >= limits_.totalTimeoutMs ||
+            now - lastProgress_ >= limits_.idleTimeoutMs) {
+            return LOCAL_HTTP_BODY_TIMEOUT;
+        }
+
+        if (prefetchedOffset_ < prefetchedLength_) {
+            size_t available = prefetchedLength_ - prefetchedOffset_;
+            received = available < capacity ? available : capacity;
+            if (received > remaining_) {
+                return LOCAL_HTTP_BODY_ERROR;
+            }
+            memcpy(buffer, prefetched_ + prefetchedOffset_, received);
+            prefetchedOffset_ += received;
+            remaining_ -= received;
+            lastProgress_ = operations_.currentTime();
+            return LOCAL_HTTP_BODY_DATA;
+        }
+
+        int count = operations_.receiveBytes(
+            client_, buffer, capacity < remaining_ ? capacity : remaining_);
+        if (count == LocalWebServer::RECEIVE_DISCONNECTED) {
+            return LOCAL_HTTP_BODY_DISCONNECTED;
+        }
+        if (count < 0) {
+            return LOCAL_HTTP_BODY_ERROR;
+        }
+        if (count == 0) {
+            rtos::Thread::wait(1);
+            return server_.isStreamingCurrent(generation_)
+                ? LOCAL_HTTP_BODY_DATA
+                : LOCAL_HTTP_BODY_CANCELLED;
+        }
+        if (static_cast<size_t>(count) > capacity ||
+            static_cast<size_t>(count) > remaining_) {
+            return LOCAL_HTTP_BODY_ERROR;
+        }
+        uint32_t completed = operations_.currentTime();
+        if (completed - started_ >= limits_.totalTimeoutMs ||
+            completed - lastProgress_ >= limits_.idleTimeoutMs) {
+            return LOCAL_HTTP_BODY_TIMEOUT;
+        }
+        received = static_cast<size_t>(count);
+        remaining_ -= received;
+        lastProgress_ = completed;
+        return LOCAL_HTTP_BODY_DATA;
+    }
+
+    size_t remaining() const override {
+        return remaining_;
+    }
+
+    bool cancelled() const override {
+        return !server_.isStreamingCurrent(generation_);
+    }
+
+private:
+    LocalWebServer &server_;
+    LocalWebServerOperations &operations_;
+    int client_;
+    uint32_t generation_;
+    size_t remaining_;
+    const char *prefetched_;
+    size_t prefetchedLength_;
+    size_t prefetchedOffset_;
+    uint32_t started_;
+    uint32_t lastProgress_;
+    LocalHttpStreamingLimits limits_;
+};
+
 LocalWebServer::LocalWebServer(
     LocalHttpHandler &handler,
     uint16_t port,
@@ -191,27 +360,104 @@ LocalWebServer::LocalWebServer(
     LocalWebServerOperations &operations,
     LocalHttpServiceUpdate serviceUpdate)
     : handler_(handler),
+      streamingHandler_(NULL),
+      streamingLimits_({0, 0, 0}),
       port_(port),
       startRetryIntervalMs_(startRetryIntervalMs),
       operations_(operations),
+      streamingOperations_(operations),
       serviceUpdate_(serviceUpdate),
       worker_(osPriorityNormal, WORKER_STACK_SIZE),
+      streamingWorker_(osPriorityNormal, STREAMING_WORKER_STACK_SIZE),
+      streamingSignal_(0),
       requested_({0, 0, false}),
       state_({false, false, 0, 0}),
+      streamingJob_({false, false, false, -1, 0, 0, 0, {}, {}}),
       lastWorkerAttempt_(0),
-    workerAttempted_(false),
-    workerStarting_(false) {
+      workerAttempted_(false),
+      workerStarting_(false),
+      streamingWorkerStarted_(false),
+      streamingWorkerStarting_(false),
+      streamingWorkerAttempted_(false),
+      lastStreamingWorkerAttempt_(0) {
+}
+
+LocalWebServer::LocalWebServer(
+    LocalHttpHandler &handler,
+    LocalHttpStreamingHandler &streamingHandler,
+    const LocalHttpStreamingLimits &streamingLimits,
+    uint16_t port,
+    uint32_t startRetryIntervalMs,
+    LocalHttpServiceUpdate serviceUpdate)
+    : LocalWebServer(handler, streamingHandler, streamingLimits, port,
+                     startRetryIntervalMs, defaultOperations(),
+                     defaultOperations(), serviceUpdate) {
+}
+
+LocalWebServer::LocalWebServer(
+    LocalHttpHandler &handler,
+    LocalHttpStreamingHandler &streamingHandler,
+    const LocalHttpStreamingLimits &streamingLimits,
+    uint16_t port,
+    uint32_t startRetryIntervalMs,
+    LocalWebServerOperations &operations,
+    LocalHttpServiceUpdate serviceUpdate)
+    : LocalWebServer(handler, streamingHandler, streamingLimits, port,
+                     startRetryIntervalMs, operations, operations,
+                     serviceUpdate) {
+}
+
+LocalWebServer::LocalWebServer(
+    LocalHttpHandler &handler,
+    LocalHttpStreamingHandler &streamingHandler,
+    const LocalHttpStreamingLimits &streamingLimits,
+    uint16_t port,
+    uint32_t startRetryIntervalMs,
+    LocalWebServerOperations &listenerOperations,
+    LocalWebServerOperations &streamingOperations,
+    LocalHttpServiceUpdate serviceUpdate)
+    : handler_(handler),
+      streamingHandler_(&streamingHandler),
+      streamingLimits_(streamingLimits),
+      port_(port),
+      startRetryIntervalMs_(startRetryIntervalMs),
+      operations_(listenerOperations),
+      streamingOperations_(streamingOperations),
+      serviceUpdate_(serviceUpdate),
+      worker_(osPriorityNormal, WORKER_STACK_SIZE),
+      streamingWorker_(osPriorityNormal, STREAMING_WORKER_STACK_SIZE),
+      streamingSignal_(0),
+      requested_({0, 0, false}),
+      state_({false, false, 0, 0}),
+      streamingJob_({false, false, false, -1, 0, 0, 0, {}, {}}),
+      lastWorkerAttempt_(0),
+      workerAttempted_(false),
+      workerStarting_(false),
+      streamingWorkerStarted_(false),
+      streamingWorkerStarting_(false),
+      streamingWorkerAttempted_(false),
+      lastStreamingWorkerAttempt_(0) {
 }
 
 LocalWebServer::~LocalWebServer() {
     bool started;
+    bool streamingStarted;
     {
         std::lock_guard<rtos::Mutex> lock(stateMutex_);
         requested_.shutdown = true;
         started = state_.workerStarted;
+        streamingStarted = streamingWorkerStarted_;
     }
+    {
+        std::lock_guard<rtos::Mutex> lock(streamingMutex_);
+        streamingJob_.cancelled = true;
+    }
+    streamingSignal_.release();
     if (started) {
         worker_.join();
+    }
+    if (streamingStarted) {
+        streamingWorker_.join();
     }
 }
 
@@ -220,12 +466,57 @@ LocalWebServerOperations &LocalWebServer::defaultOperations() {
     return operations;
 }
 
+bool LocalWebServer::startStreamingWorker(uint32_t now) {
+    if (streamingHandler_ == NULL) {
+        return true;
+    }
+    {
+        std::lock_guard<rtos::Mutex> lock(stateMutex_);
+        if (streamingWorkerStarted_) {
+            return true;
+        }
+        if (streamingWorkerStarting_) {
+            return false;
+        }
+        if (streamingLimits_.maxContentLength == 0 ||
+            streamingLimits_.idleTimeoutMs == 0 ||
+            streamingLimits_.totalTimeoutMs < streamingLimits_.idleTimeoutMs ||
+            (&operations_ == &streamingOperations_ &&
+             !operations_.supportsConcurrentSockets())) {
+            state_.error = ACCEPT_ERROR;
+            return false;
+        }
+        if (streamingWorkerAttempted_ &&
+            now - lastStreamingWorkerAttempt_ < startRetryIntervalMs_) {
+            return false;
+        }
+        streamingWorkerStarting_ = true;
+        streamingWorkerAttempted_ = true;
+    }
+
+    osStatus result =
+        streamingWorker_.start(mbed::callback(this, &LocalWebServer::runStreaming));
+    {
+        std::lock_guard<rtos::Mutex> lock(stateMutex_);
+        streamingWorkerStarting_ = false;
+        streamingWorkerStarted_ = result == osOK;
+        if (result != osOK) {
+            state_.error = static_cast<int>(result);
+            lastStreamingWorkerAttempt_ = operations_.currentTime();
+        }
+    }
+    if (result != osOK) {
+        Serial.println("Local HTTP streaming worker start failed");
+    }
+    return result == osOK;
+}
+
 void LocalWebServer::update(bool wifiConnected, uint32_t address) {
     uint32_t now = operations_.currentTime();
     uint32_t startupGeneration;
+    uint32_t requestedAddress = wifiConnected ? address : 0;
     {
         std::lock_guard<rtos::Mutex> lock(stateMutex_);
-        uint32_t requestedAddress = wifiConnected ? address : 0;
         if (requested_.address != requestedAddress) {
             requested_.address = requestedAddress;
             ++requested_.generation;
@@ -234,8 +525,19 @@ void LocalWebServer::update(bool wifiConnected, uint32_t address) {
             state_.error = 0;
             workerAttempted_ = false;
         }
-        if (requested_.shutdown || state_.workerStarted || workerStarting_ ||
-            requestedAddress == 0 || port_ == 0 ||
+        if (requested_.shutdown || requestedAddress == 0 || port_ == 0) {
+            return;
+        }
+    }
+
+    if (!startStreamingWorker(now)) {
+        return;
+    }
+
+    {
+        std::lock_guard<rtos::Mutex> lock(stateMutex_);
+        if (requested_.shutdown || requested_.address != requestedAddress ||
+            state_.workerStarted || workerStarting_ ||
             (workerAttempted_ && now - lastWorkerAttempt_ < startRetryIntervalMs_)) {
             return;
         }
@@ -276,6 +578,26 @@ bool LocalWebServer::isCurrent(uint32_t generation) const {
     RequestedState snapshot = requestedState();
     return !snapshot.shutdown && snapshot.address != 0 &&
         snapshot.generation == generation;
+}
+
+bool LocalWebServer::isStreamingCurrent(uint32_t generation) const {
+    if (!isCurrent(generation)) {
+        return false;
+    }
+    std::lock_guard<rtos::Mutex> lock(streamingMutex_);
+    return (streamingJob_.pending || streamingJob_.active) &&
+        streamingJob_.generation == generation && !streamingJob_.cancelled;
+}
+
+bool LocalWebServer::cancelStreamingRequest(uint32_t generation) {
+    std::lock_guard<rtos::Mutex> lock(streamingMutex_);
+    if ((!streamingJob_.pending && !streamingJob_.active) ||
+        streamingJob_.generation != generation) {
+        return false;
+    }
+    streamingJob_.cancelled = true;
+    streamingSignal_.release();
+    return true;
 }
 
 bool LocalWebServer::publishState(uint32_t generation, uint32_t address, int error) {
@@ -337,7 +659,7 @@ void LocalWebServer::run() {
             notifyService(true, requested.address);
             LocalHttpSocket client(operations_, operations_.acceptClient(listener.get()));
             if (client) {
-                serveClient(client.get(), generation);
+                serveClient(client, generation);
             } else if (client.get() == ACCEPT_ERROR) {
                 notifyService(false, 0);
                 listener.reset();
@@ -353,38 +675,126 @@ void LocalWebServer::run() {
     notifyService(false, 0);
 }
 
-void LocalWebServer::serveClient(int client, uint32_t generation) {
-    char requestLine[REQUEST_LINE_SIZE];
+void LocalWebServer::runStreaming() {
+    for (;;) {
+        streamingSignal_.wait(20);
+
+        RequestedState requested = requestedState();
+        int client = -1;
+        uint32_t generation = 0;
+        size_t contentLength = 0;
+        size_t prefetchedLength = 0;
+        char requestLine[REQUEST_LINE_SIZE];
+        char prefetched[MAX_PREFETCH_BYTES];
+        {
+            std::lock_guard<rtos::Mutex> lock(streamingMutex_);
+            if (!streamingJob_.pending) {
+                if (requested.shutdown && !streamingJob_.active) {
+                    break;
+                }
+                continue;
+            }
+            streamingJob_.pending = false;
+            streamingJob_.active = true;
+            client = streamingJob_.client;
+            streamingJob_.client = -1;
+            generation = streamingJob_.generation;
+            contentLength = streamingJob_.contentLength;
+            prefetchedLength = streamingJob_.prefetchedLength;
+            memcpy(requestLine, streamingJob_.requestLine, sizeof(requestLine));
+            memcpy(prefetched, streamingJob_.prefetched, prefetchedLength);
+        }
+
+        LocalHttpSocket socket(streamingOperations_, client);
+        if (isStreamingCurrent(generation)) {
+            LocalHttpBodyStreamImpl body(
+                *this, streamingOperations_, socket.get(), generation,
+                contentLength, prefetched, prefetchedLength, streamingLimits_);
+            LocalHttpStreamingRequest request = {
+                requestLine, contentLength, generation
+            };
+            char responseBody[RESPONSE_BODY_SIZE] = {};
+            LocalHttpResponse response = streamingHandler_->handle(
+                request, body, responseBody, sizeof(responseBody));
+            if (body.remaining() != 0) {
+                strcpy(responseBody, "{\"error\":\"incomplete request body\"}");
+                response = {
+                    "400 Bad Request", "application/json", strlen(responseBody)
+                };
+            } else if (response.bodyLength > sizeof(responseBody) ||
+                       response.status == NULL || response.contentType == NULL) {
+                strcpy(responseBody, "{\"error\":\"invalid response\"}");
+                response = {
+                    "500 Internal Server Error", "application/json",
+                    strlen(responseBody)
+                };
+            }
+            bool sent = sendResponse(
+                streamingOperations_, socket.get(), response, responseBody,
+                generation, true);
+            Serial.print("Local HTTP streaming response: ");
+            Serial.println(sent ? response.status : "send failed or session changed");
+        }
+
+        {
+            std::lock_guard<rtos::Mutex> lock(streamingMutex_);
+            if (streamingJob_.generation == generation) {
+                streamingJob_.active = false;
+                streamingJob_.cancelled = false;
+                streamingJob_.generation = 0;
+            }
+        }
+    }
+}
+
+void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
+    ParsedRequest request = {};
     char body[RESPONSE_BODY_SIZE] = {};
     LocalHttpResponse response;
-    if (!readRequest(client, requestLine, sizeof(requestLine), generation)) {
+    if (!readRequest(client.get(), request, generation)) {
         strcpy(body, "{\"error\":\"bad request\"}");
         response = {"400 Bad Request", "application/json", strlen(body)};
+    } else if (streamingHandler_ != NULL &&
+               streamingHandler_->handles(request.requestLine)) {
+        if (!request.bodyFramingValid || request.hasTransferEncoding ||
+            !request.hasContentLength ||
+            request.contentLength > streamingLimits_.maxContentLength ||
+            request.prefetchedLength > request.contentLength) {
+            strcpy(body, "{\"error\":\"invalid content length\"}");
+            response = {"400 Bad Request", "application/json", strlen(body)};
+        } else if (transferStreamingRequest(client, request, generation)) {
+            return;
+        } else {
+            strcpy(body, "{\"error\":\"streaming request busy\"}");
+            response = {
+                "503 Service Unavailable", "application/json", strlen(body)
+            };
+        }
     } else {
-        response = handler_.handle(requestLine, body, sizeof(body));
+        response = handler_.handle(request.requestLine, body, sizeof(body));
         if (response.bodyLength > sizeof(body) || response.status == NULL ||
             response.contentType == NULL) {
             strcpy(body, "{\"error\":\"invalid response\"}");
             response = {"500 Internal Server Error", "application/json", strlen(body)};
         }
     }
-    bool sent = sendResponse(client, response, body, generation);
+    bool sent = sendResponse(
+        operations_, client.get(), response, body, generation, false);
     Serial.print("Local HTTP response: ");
     Serial.println(sent ? response.status : "send failed or session changed");
 }
 
 bool LocalWebServer::readRequest(
     int client,
-    char *requestLine,
-    size_t requestLineSize,
+    ParsedRequest &request,
     uint32_t generation) {
     uint32_t requestStart = operations_.currentTime();
-    size_t requestLength = 0;
-    size_t headerBytes = 0;
-    bool readingRequestLine = true;
-    bool currentLineIsBlank = true;
-
-    requestLine[0] = '\0';
+    char receivedBytes[MAX_HEADER_BYTES + MAX_PREFETCH_BYTES];
+    size_t receivedLength = 0;
+    size_t headerLength = 0;
+    size_t requestLineLength = 0;
+    bool requestLineComplete = false;
+    bool requestLineCarriageReturn = false;
 
     while (isCurrent(generation) &&
            operations_.currentTime() - requestStart < IO_TIMEOUT_MS) {
@@ -396,42 +806,153 @@ bool LocalWebServer::readRequest(
 
         for (int offset = 0; offset < received; ++offset) {
             char current = buffer[offset];
-            if (++headerBytes > MAX_HEADER_BYTES || current == '\0') {
+            if (current == '\0' || receivedLength >= sizeof(receivedBytes)) {
                 return false;
             }
-            if (readingRequestLine) {
-                if (current == '\n') {
-                    requestLine[requestLength] = '\0';
-                    readingRequestLine = false;
-                } else if (current != '\r') {
-                    if (requestLength + 1 >= requestLineSize) {
+            receivedBytes[receivedLength++] = current;
+            if (!requestLineComplete) {
+                if (requestLineCarriageReturn) {
+                    if (current != '\n') {
                         return false;
                     }
-                    requestLine[requestLength++] = current;
+                    requestLineComplete = true;
+                } else if (current == '\r') {
+                    requestLineCarriageReturn = true;
+                } else if (current == '\n' ||
+                           requestLineLength + 1 >= REQUEST_LINE_SIZE) {
+                    return false;
+                } else {
+                    ++requestLineLength;
                 }
             }
-
-            if (current == '\n' && currentLineIsBlank) {
-                return requestLength > 0;
+            if (receivedLength >= 4 &&
+                memcmp(receivedBytes + receivedLength - 4, "\r\n\r\n", 4) == 0) {
+                headerLength = receivedLength;
+                size_t trailing = static_cast<size_t>(received - offset - 1);
+                if (trailing > MAX_PREFETCH_BYTES) {
+                    return false;
+                }
+                memcpy(request.prefetched, buffer + offset + 1, trailing);
+                request.prefetchedLength = trailing;
+                break;
             }
-
-            if (current == '\n') {
-                currentLineIsBlank = true;
-            } else if (current != '\r') {
-                currentLineIsBlank = false;
-            }
+        }
+        if (headerLength != 0) {
+            break;
+        }
+        if (receivedLength > MAX_HEADER_BYTES) {
+            return false;
         }
         rtos::Thread::wait(1);
     }
 
-    return false;
+    if (headerLength == 0 || headerLength > MAX_HEADER_BYTES) {
+        return false;
+    }
+
+    const char *firstLineEnd = NULL;
+    for (size_t index = 0; index + 1 < headerLength; ++index) {
+        if (receivedBytes[index] == '\r' && receivedBytes[index + 1] == '\n') {
+            firstLineEnd = receivedBytes + index;
+            break;
+        }
+    }
+    if (firstLineEnd == NULL) {
+        return false;
+    }
+    requestLineLength =
+        static_cast<size_t>(firstLineEnd - receivedBytes);
+    if (requestLineLength == 0 || requestLineLength >= sizeof(request.requestLine)) {
+        return false;
+    }
+    memcpy(request.requestLine, receivedBytes, requestLineLength);
+    request.requestLine[requestLineLength] = '\0';
+
+    request.bodyFramingValid = true;
+    request.hasContentLength = false;
+    request.hasTransferEncoding = false;
+    request.contentLength = 0;
+    size_t position = requestLineLength + 2;
+    size_t headersEnd = headerLength - 2;
+    while (position < headersEnd) {
+        size_t lineEnd = position;
+        while (lineEnd + 1 < headerLength &&
+               !(receivedBytes[lineEnd] == '\r' &&
+                 receivedBytes[lineEnd + 1] == '\n')) {
+            ++lineEnd;
+        }
+        if (lineEnd + 1 >= headerLength || lineEnd == position) {
+            request.bodyFramingValid = false;
+            break;
+        }
+
+        size_t colon = position;
+        while (colon < lineEnd && receivedBytes[colon] != ':') {
+            unsigned char current =
+                static_cast<unsigned char>(receivedBytes[colon]);
+            if (current <= 32 || current >= 127) {
+                request.bodyFramingValid = false;
+            }
+            ++colon;
+        }
+        if (colon == position || colon == lineEnd) {
+            request.bodyFramingValid = false;
+            position = lineEnd + 2;
+            continue;
+        }
+        const char *name = receivedBytes + position;
+        size_t nameLength = colon - position;
+        const char *value = receivedBytes + colon + 1;
+        size_t valueLength = lineEnd - colon - 1;
+        if (asciiEqualIgnoreCase(name, nameLength, "transfer-encoding")) {
+            request.hasTransferEncoding = true;
+        }
+        if (asciiEqualIgnoreCase(name, nameLength, "content-length")) {
+            if (request.hasContentLength ||
+                !parseContentLength(value, valueLength, request.contentLength)) {
+                request.bodyFramingValid = false;
+            }
+            request.hasContentLength = true;
+        }
+        position = lineEnd + 2;
+    }
+    return position == headersEnd;
+}
+
+bool LocalWebServer::transferStreamingRequest(
+    LocalHttpSocket &client,
+    const ParsedRequest &request,
+    uint32_t generation) {
+    if (!isCurrent(generation)) {
+        return false;
+    }
+    {
+        std::lock_guard<rtos::Mutex> lock(streamingMutex_);
+        if (streamingJob_.pending || streamingJob_.active) {
+            return false;
+        }
+        streamingJob_.pending = true;
+        streamingJob_.cancelled = false;
+        streamingJob_.client = client.release();
+        streamingJob_.generation = generation;
+        streamingJob_.contentLength = request.contentLength;
+        streamingJob_.prefetchedLength = request.prefetchedLength;
+        memcpy(streamingJob_.requestLine, request.requestLine,
+               sizeof(streamingJob_.requestLine));
+        memcpy(streamingJob_.prefetched, request.prefetched,
+               request.prefetchedLength);
+    }
+    streamingSignal_.release();
+    return true;
 }
 
 bool LocalWebServer::sendResponse(
+    LocalWebServerOperations &operations,
     int client,
     const LocalHttpResponse &response,
     const char *body,
-    uint32_t generation) {
+    uint32_t generation,
+    bool streaming) {
     char header[256];
     int length = snprintf(
         header, sizeof(header),
@@ -442,18 +963,22 @@ bool LocalWebServer::sendResponse(
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(header)) {
         return false;
     }
-    uint32_t started = operations_.currentTime();
-    return sendAll(client, header, static_cast<size_t>(length), generation, started) &&
-        sendAll(client, body, response.bodyLength, generation, started);
+    uint32_t started = operations.currentTime();
+    return sendAll(operations, client, header, static_cast<size_t>(length),
+                   generation, started, streaming) &&
+        sendAll(operations, client, body, response.bodyLength,
+                generation, started, streaming);
 }
 
 bool LocalWebServer::sendAll(
+    LocalWebServerOperations &operations,
     int client, const char *buffer, size_t size,
-    uint32_t generation, uint32_t started) {
+    uint32_t generation, uint32_t started, bool streaming) {
     size_t sent = 0;
-    while (sent < size && isCurrent(generation) &&
-           operations_.currentTime() - started < IO_TIMEOUT_MS) {
-        int count = operations_.sendBytes(client, buffer + sent, size - sent);
+    while (sent < size &&
+           (streaming ? isStreamingCurrent(generation) : isCurrent(generation)) &&
+           operations.currentTime() - started < IO_TIMEOUT_MS) {
+        int count = operations.sendBytes(client, buffer + sent, size - sent);
         if (count < 0 || static_cast<size_t>(count) > size - sent) {
             return false;
         }

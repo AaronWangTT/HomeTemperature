@@ -290,26 +290,39 @@ struct FakeHttpPlatform {
     int invalidAdvertisements;
     int handlerCount;
     int handlerMode;
+    int streamingHandlerCount;
+    int streamingReadStatus;
     int receiveStep;
+    int receiveDuration;
+    size_t receiveDurationStartOffset;
     int sendStep;
+    size_t receiveChunkSize;
+    size_t streamedLength;
+    uint32_t streamingGeneration;
     bool listenerOpen;
     bool advertised;
     bool clientQueued;
     bool acceptError;
     bool holdOpen;
+    bool holdStreamingResponse;
     bool blockSend;
+    bool disconnectWhenDrained;
+    bool errorWhenDrained;
     size_t inputLength;
     size_t inputOffset;
     size_t outputLength;
     osThreadId handlerThread;
+    osThreadId streamingThread;
     char input[2300];
     char output[1024];
+    char streamedBody[128];
 };
 
 FakeHttpPlatform fake = {};
 rtos::Mutex fakeMutex;
 rtos::Semaphore progress(0);
 rtos::Semaphore openGate(0);
+rtos::Semaphore streamingGate(0);
 
 class FakeLocalWebServerOperations : public LocalWebServerOperations {
 public:
@@ -317,9 +330,10 @@ public:
         FakeHttpPlatform &state,
         rtos::Mutex &mutex,
         rtos::Semaphore &progressSignal,
-        rtos::Semaphore &startupGate)
+        rtos::Semaphore &startupGate,
+        bool concurrentSockets = true)
         : fake(state), fakeMutex(mutex), progress(progressSignal),
-          openGate(startupGate) {
+          openGate(startupGate), concurrentSockets_(concurrentSockets) {
     }
 
     uint32_t currentTime() override;
@@ -328,6 +342,9 @@ public:
     int receiveBytes(int client, char *buffer, size_t size) override;
     int sendBytes(int client, const char *buffer, size_t size) override;
     void closeSocket(int descriptor) override;
+    bool supportsConcurrentSockets() const override {
+        return concurrentSockets_;
+    }
     void updateService(bool available, uint32_t address);
 
 private:
@@ -335,15 +352,19 @@ private:
     rtos::Mutex &fakeMutex;
     rtos::Semaphore &progress;
     rtos::Semaphore &openGate;
+    bool concurrentSockets_;
 };
 
 void resetHttpPlatform() {
     fakeMutex.lock();
     memset(&fake, 0, sizeof(fake));
     fake.openResult = 10;
+    fake.receiveChunkSize = 7;
+    fake.receiveDurationStartOffset = SIZE_MAX;
     fakeMutex.unlock();
     while (progress.wait(0) > 0) {}
     while (openGate.wait(0) > 0) {}
+    while (streamingGate.wait(0) > 0) {}
 }
 
 int fakeCount(int FakeHttpPlatform::*counter) {
@@ -413,15 +434,26 @@ int FakeLocalWebServerOperations::acceptClient(int) {
 
 int FakeLocalWebServerOperations::receiveBytes(int, char *buffer, size_t size) {
     fakeMutex.lock();
+    if (fake.inputOffset >= fake.receiveDurationStartOffset) {
+        fake.now += fake.receiveDuration;
+    }
     size_t remaining = fake.inputLength - fake.inputOffset;
     size_t received = remaining < size ? remaining : size;
-    if (received > 7) {
-        received = 7;
+    if (received > fake.receiveChunkSize) {
+        received = fake.receiveChunkSize;
     }
     memcpy(buffer, fake.input + fake.inputOffset, received);
     fake.inputOffset += received;
     if (received == 0) {
         fake.now += fake.receiveStep;
+        if (fake.disconnectWhenDrained) {
+            fakeMutex.unlock();
+            return LocalWebServer::RECEIVE_DISCONNECTED;
+        }
+        if (fake.errorWhenDrained) {
+            fakeMutex.unlock();
+            return LocalWebServer::RECEIVE_ERROR;
+        }
     }
     fakeMutex.unlock();
     return static_cast<int>(received);
@@ -668,6 +700,66 @@ public:
     }
 };
 
+class ExampleStreamingHandler : public LocalHttpStreamingHandler {
+public:
+    bool handles(const char *requestLine) override {
+        return strncmp(requestLine, "POST /stream ", 13) == 0;
+    }
+
+    LocalHttpResponse handle(
+        const LocalHttpStreamingRequest &request,
+        LocalHttpBodyStream &body,
+        char *responseBody,
+        size_t responseBodySize) override {
+        fakeMutex.lock();
+        ++fake.streamingHandlerCount;
+        fake.streamingThread = osThreadGetId();
+        fake.streamingGeneration = request.generation;
+        fake.streamingReadStatus = LOCAL_HTTP_BODY_DATA;
+        fake.streamedLength = 0;
+        fakeMutex.unlock();
+        progress.release();
+
+        for (;;) {
+            char chunk[5];
+            size_t received = 0;
+            LocalHttpBodyReadStatus status =
+                body.read(chunk, sizeof(chunk), received);
+            if (received > 0) {
+                fakeMutex.lock();
+                size_t available = sizeof(fake.streamedBody) - fake.streamedLength;
+                size_t copied = received < available ? received : available;
+                memcpy(fake.streamedBody + fake.streamedLength, chunk, copied);
+                fake.streamedLength += copied;
+                fakeMutex.unlock();
+            }
+            if (status == LOCAL_HTTP_BODY_DATA) {
+                continue;
+            }
+            fakeMutex.lock();
+            fake.streamingReadStatus = status;
+            bool hold = fake.holdStreamingResponse;
+            fakeMutex.unlock();
+            progress.release();
+            if (status != LOCAL_HTTP_BODY_COMPLETE) {
+                strcpy(responseBody, "stream failed");
+                return {"400 Bad Request", "text/plain", 13};
+            }
+            while (hold && !body.cancelled()) {
+                streamingGate.wait(20);
+                fakeMutex.lock();
+                hold = fake.holdStreamingResponse;
+                fakeMutex.unlock();
+            }
+            if (responseBodySize < 2) {
+                return {"500 Internal Server Error", "text/plain", 0};
+            }
+            memcpy(responseBody, "ok", 2);
+            return {"200 OK", "text/plain", 2};
+        }
+    }
+};
+
 void queueRequest(const char *request, size_t length) {
     fakeMutex.lock();
     memcpy(fake.input, request, length);
@@ -683,6 +775,23 @@ bool outputContains(const char *text) {
     bool found = strstr(fake.output, text) != NULL;
     fakeMutex.unlock();
     return found;
+}
+
+bool waitForStreamingStatus(LocalHttpBodyReadStatus expected) {
+    uint32_t started = millis();
+    do {
+        fakeMutex.lock();
+        bool matched = fake.streamingReadStatus == expected;
+        fakeMutex.unlock();
+        if (matched) {
+            return true;
+        }
+        progress.wait(20);
+    } while (millis() - started < 1000UL);
+    fakeMutex.lock();
+    bool matched = fake.streamingReadStatus == expected;
+    fakeMutex.unlock();
+    return matched;
 }
 
 void testWorkerProgressDuringStartup() {
@@ -902,6 +1011,31 @@ void testWorkerRequests() {
     expect(binary, "binary response bytes are preserved");
 }
 
+void testRequestLineBoundary() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    LocalWebServer server(handler, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+
+    char maximumRequest[100];
+    memset(maximumRequest, 'x', 95);
+    memcpy(maximumRequest + 95, "\r\n\r\n", 4);
+    queueRequest(maximumRequest, sizeof(maximumRequest) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+               outputContains("HTTP/1.1 200 OK") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 1,
+           "a 95-character request line fits with its CRLF terminator");
+
+    char oversizedRequest[101];
+    memset(oversizedRequest, 'x', 96);
+    memcpy(oversizedRequest + 96, "\r\n\r\n", 4);
+    queueRequest(oversizedRequest, sizeof(oversizedRequest) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 2) &&
+               outputContains("HTTP/1.1 400 Bad Request") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 1,
+           "a 96-character request line is rejected before dispatch");
+}
+
 void testRequestBoundsAndDisconnect() {
     resetHttpPlatform();
     ExampleHandler handler;
@@ -952,6 +1086,307 @@ void testRequestBoundsAndDisconnect() {
     bool noStaleResponse = fake.outputLength == 0;
     fakeMutex.unlock();
     expect(noStaleResponse, "old-session responses are not sent after disconnect");
+}
+
+void testStreamingFramingAndPrefetchedBody() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    ExampleStreamingHandler streamingHandler;
+    LocalHttpStreamingLimits limits = {64, 2000, 10000};
+    LocalWebServer server(
+        handler, streamingHandler, limits, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+
+    fakeMutex.lock();
+    fake.receiveChunkSize = 128;
+    fakeMutex.unlock();
+    const char prefetched[] =
+        "POST /stream HTTP/1.1\r\nHost: example\r\n"
+        "Content-Length: 6\r\n\r\nabcdef";
+    queueRequest(prefetched, sizeof(prefetched) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+           "streaming worker owns and closes a transferred request socket");
+    fakeMutex.lock();
+    bool preserved = fake.streamingHandlerCount == 1 &&
+        fake.streamingReadStatus == LOCAL_HTTP_BODY_COMPLETE &&
+        fake.streamedLength == 6 &&
+        memcmp(fake.streamedBody, "abcdef", 6) == 0;
+    fakeMutex.unlock();
+    expect(preserved,
+           "body bytes prefetched with the header are delivered before socket reads");
+
+    const char *invalidRequests[] = {
+        "POST /stream HTTP/1.1\r\nHost: example\r\n\r\n",
+        "POST /stream HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 3\r\n\r\nabc",
+        "POST /stream HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc",
+        "POST /stream HTTP/1.1\r\nContent-Length: +3\r\n\r\nabc",
+        "POST /stream HTTP/1.1\r\nContent-Length: 3, 3\r\n\r\nabc",
+        "POST /stream HTTP/1.1\r\nContent-Length: 999999999999999999999999\r\n\r\n",
+        "POST /stream HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\nabc",
+        "POST /stream HTTP/1.1\r\nContent-Length: 65\r\n\r\n",
+        "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\nabcd"
+    };
+    bool allRejected = true;
+    int expectedClosed = 1;
+    for (const char *invalid : invalidRequests) {
+        queueRequest(invalid, strlen(invalid));
+        ++expectedClosed;
+        allRejected &= waitForCount(
+            &FakeHttpPlatform::closeClientCount, expectedClosed);
+        allRejected &= outputContains("HTTP/1.1 400 Bad Request");
+        allRejected &= fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 1;
+    }
+    expect(allRejected,
+           "missing, duplicate, malformed, overflowing, oversized, ambiguous, and extra-byte bodies fail before transfer");
+
+    const char canonical[] =
+        "POST /stream HTTP/1.1\r\ncontent-length:\t6 \r\n\r\n123456";
+    queueRequest(canonical, sizeof(canonical) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, expectedClosed + 1) &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 2,
+           "one canonical decimal Content-Length accepts surrounding HTTP whitespace");
+
+    const char binary[] =
+        "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\na\0b";
+    queueRequest(binary, sizeof(binary) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, expectedClosed + 2) &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 3,
+           "streaming accepts binary body bytes including NUL");
+    fakeMutex.lock();
+    bool binaryPreserved = fake.streamedLength == 3 &&
+        memcmp(fake.streamedBody, "a\0b", 3) == 0;
+    fakeMutex.unlock();
+    expect(binaryPreserved, "binary body bytes retain their exact values");
+}
+
+void testLegacyRouteFramingCompatibility() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    ExampleStreamingHandler streamingHandler;
+    LocalHttpStreamingLimits limits = {64, 2000, 10000};
+    LocalWebServer server(
+        handler, streamingHandler, limits, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+
+    const char transferEncoding[] =
+        "GET /example HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+    queueRequest(transferEncoding, sizeof(transferEncoding) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+               outputContains("HTTP/1.1 200 OK"),
+           "legacy request-line routes retain Transfer-Encoding compatibility");
+
+    const char duplicateLength[] =
+        "GET /example HTTP/1.1\r\nContent-Length: bad\r\n"
+        "Content-Length: 3\r\n\r\n";
+    queueRequest(duplicateLength, sizeof(duplicateLength) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 2) &&
+               outputContains("HTTP/1.1 200 OK") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 2 &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 0,
+           "legacy handlers remain isolated from streaming-only framing rules");
+}
+
+void testStreamingFaultsAndGenerationCancellation() {
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 2000, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        fakeMutex.lock();
+        fake.disconnectWhenDrained = true;
+        fakeMutex.unlock();
+        const char truncated[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 6\r\n\r\nabc";
+        queueRequest(truncated, sizeof(truncated) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_DISCONNECTED) &&
+                   waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+               "a truncated body reports disconnect and closes on the streaming worker");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 2000, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        fakeMutex.lock();
+        fake.errorWhenDrained = true;
+        fakeMutex.unlock();
+        const char failed[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 6\r\n\r\nabc";
+        queueRequest(failed, sizeof(failed) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_ERROR) &&
+                   waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+               "a socket backend failure remains distinct from peer disconnect");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 1500, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        fakeMutex.lock();
+        fake.receiveStep = 1000;
+        fakeMutex.unlock();
+        const char stalled[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\n";
+        queueRequest(stalled, sizeof(stalled) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_TIMEOUT) &&
+                   waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+               "body reads enforce an idle deadline without buffering the request");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 1000, 1500};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        fakeMutex.lock();
+        fake.receiveDuration = 600;
+        fakeMutex.unlock();
+        const char slow[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 20\r\n\r\n"
+            "abcdefghijklmnopqrst";
+        fakeMutex.lock();
+        fake.receiveChunkSize =
+            static_cast<size_t>(strstr(slow, "\r\n\r\n") + 4 - slow);
+        fake.receiveDurationStartOffset = fake.receiveChunkSize;
+        fakeMutex.unlock();
+        queueRequest(slow, sizeof(slow) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_TIMEOUT) &&
+                   waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+               "body reads enforce a total deadline despite steady progress");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 2000, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        const char pending[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\n";
+        queueRequest(pending, sizeof(pending) - 1);
+        expect(waitForCount(&FakeHttpPlatform::streamingHandlerCount, 1),
+               "generation cancellation test transfers the socket");
+        fakeMutex.lock();
+        uint32_t generation = fake.streamingGeneration;
+        fakeMutex.unlock();
+        expect(!server.cancelStreamingRequest(generation + 1),
+               "a stale generation cannot cancel the current body stream");
+        expect(server.cancelStreamingRequest(generation) &&
+                   waitForStreamingStatus(LOCAL_HTTP_BODY_CANCELLED) &&
+                   waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+               "the matching generation cooperatively cancels its worker-owned socket");
+    }
+}
+
+void testStreamingListenerResponsiveness() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    ExampleStreamingHandler streamingHandler;
+    LocalHttpStreamingLimits limits = {64, 2000, 10000};
+    LocalWebServer server(
+        handler, streamingHandler, limits, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+    fakeMutex.lock();
+    fake.holdStreamingResponse = true;
+    fake.receiveChunkSize = 128;
+    fakeMutex.unlock();
+    const char upload[] =
+        "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc";
+    queueRequest(upload, sizeof(upload) - 1);
+    expect(waitForStreamingStatus(LOCAL_HTTP_BODY_COMPLETE),
+           "streaming worker reaches its bounded long-running handler");
+
+    const char status[] = "GET /example HTTP/1.1\r\n\r\n";
+    queueRequest(status, sizeof(status) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+               outputContains("HTTP/1.1 200 OK") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 1,
+           "listener serves a bounded status request while streaming remains active");
+    const char competing[] =
+        "POST /stream HTTP/1.1\r\nContent-Length: 1\r\n\r\nx";
+    queueRequest(competing, sizeof(competing) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 2) &&
+               outputContains("HTTP/1.1 503 Service Unavailable") &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 1,
+           "a competing body request is rejected without blocking the listener");
+    fakeMutex.lock();
+    bool concurrentWorkers = fake.streamingThread != NULL &&
+        fake.handlerThread != NULL && fake.streamingThread != fake.handlerThread;
+    fake.holdStreamingResponse = false;
+    fakeMutex.unlock();
+    streamingGate.release();
+    expect(concurrentWorkers &&
+               waitForCount(&FakeHttpPlatform::closeClientCount, 3),
+           "listener and streaming handlers execute on separate joinable workers");
+}
+
+void testStreamingBackendAndShutdownBounds() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    ExampleStreamingHandler streamingHandler;
+    LocalHttpStreamingLimits limits = {64, 2000, 10000};
+    FakeLocalWebServerOperations unsafeShared(
+        fake, fakeMutex, progress, openGate, false);
+    {
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, unsafeShared);
+        server.update(true, 0xC0000201UL);
+        expect(!server.state().workerStarted &&
+                   server.state().error == LocalWebServer::ACCEPT_ERROR,
+               "streaming rejects a shared backend without concurrent-socket semantics");
+    }
+
+    resetHttpPlatform();
+    FakeLocalWebServerOperations listenerOperations(
+        fake, fakeMutex, progress, openGate, false);
+    FakeLocalWebServerOperations bodyOperations(
+        fake, fakeMutex, progress, openGate, false);
+    {
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000,
+            listenerOperations, bodyOperations);
+        server.update(true, 0xC0000201UL);
+        const char request[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc";
+        queueRequest(request, sizeof(request) - 1);
+        expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+                   fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 1,
+               "independent backend instances permit listener and body-worker sockets");
+    }
+
+    resetHttpPlatform();
+    uint32_t shutdownStarted;
+    {
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        const char stalled[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\n";
+        queueRequest(stalled, sizeof(stalled) - 1);
+        expect(waitForCount(&FakeHttpPlatform::streamingHandlerCount, 1),
+               "shutdown test starts a real body worker");
+        shutdownStarted = millis();
+    }
+    expect(millis() - shutdownStarted < 500UL &&
+               fake.streamingReadStatus == LOCAL_HTTP_BODY_CANCELLED &&
+               fake.closeClientCount == 1 && fake.closeListenerCount == 1,
+           "shutdown cancels, closes, and joins both real workers within a bounded interval");
 }
 
 void testResponseDeadline() {
@@ -1069,7 +1504,13 @@ void setup() {
     testTransientAcceptFailures();
     testAddressChangesDuringStartup();
     testWorkerRequests();
+    testRequestLineBoundary();
     testRequestBoundsAndDisconnect();
+    testStreamingFramingAndPrefetchedBody();
+    testLegacyRouteFramingCompatibility();
+    testStreamingFaultsAndGenerationCancellation();
+    testStreamingListenerResponsiveness();
+    testStreamingBackendAndShutdownBounds();
     testResponseDeadline();
     testSocketCleanupDuringShutdown();
 }

@@ -135,15 +135,31 @@ high-octet-first `uint32_t` (`192.0.2.1` is `0xC0000201`), or zero when unavaila
 `http.state()` returns a synchronized snapshot of worker startup, actual listener
 readiness, bound address, and the last lifecycle error. Calling
 `http.update(false, 0)` requests shutdown of the listener; the worker remains
-available for a later reconnect. Destroying the server joins its worker.
+available for a later reconnect. Destroying the server joins every worker it
+started.
+
+For a bounded request-body route, implement `LocalHttpStreamingHandler` and use
+the streaming constructor with explicit maximum length, idle timeout, and total
+timeout values. The listener validates a single decimal `Content-Length`,
+rejects every `Transfer-Encoding`, preserves body bytes received with the
+headers, and transfers the socket to a separate joinable worker. Existing
+`LocalHttpHandler` routes remain compatible and can serve bounded status or
+cancellation requests while that worker owns the body stream.
 
 To substitute the clock and socket implementation, derive from
 `LocalWebServerOperations` and pass the implementation by reference to the
 injected constructor. The server borrows this backend rather than copying or
 owning it, so it must outlive the server and its worker shutdown. Keep socket
 operations nonblocking and synchronize shared backend state: `currentTime()`
-can run on the main loop as well as the HTTP worker. The default constructor
+can run on the main loop and either HTTP worker. The default constructor
 continues to use the internal process-lifetime AZ3166 backend.
+
+Streaming can share a backend only when
+`supportsConcurrentSockets()` explicitly guarantees thread-safe operations on
+independent descriptors. Otherwise supply separate listener and streaming
+backend instances. Generation-scoped cancellation and destruction wake the body
+worker; streaming handlers must keep callbacks bounded and observe
+`LocalHttpBodyStream::cancelled()` while waiting outside body reads.
 
 HTTP sockets are owned by move-only `LocalHttpSocket` objects. A successful
 `openListener()` or `acceptClient()` transfers its nonnegative descriptor to the
