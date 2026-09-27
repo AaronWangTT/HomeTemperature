@@ -389,6 +389,15 @@ Exact names are not prescribed, but the Core implementation should own:
 - progress counters that do not depend on a network transport; and
 - injectable Flash operations for host-side fault tests.
 
+Erase, write, read-back, and hashing proceed in bounded sector/chunk steps and
+check a cancellation callback between steps. Each platform primitive has a
+measured worst-case duration and a Core-enforced timeout; a timeout closes the
+session as a Flash failure. Signature verification has its own measured upper
+bound. The boot-table update/restore critical section is not cancellable between
+its write and verification, but must have a hardware-validated hard maximum.
+Core APIs publish these bounds so the server shutdown budget covers the longest
+single primitive plus cleanup rather than only socket I/O.
+
 The Core API must not:
 
 - open HTTP connections or require an image URL;
@@ -459,8 +468,16 @@ Cancellation sets a generation-bound flag under the controller mutex; only the
 OTA worker observes that flag and calls `abort()`. After `finish()` verifies
 staging and publishes `Ready`, the joinable OTA worker remains alive, owns the
 Core session, and waits on a bounded command signal. An authorized apply request
-queues the expected generation and digest; that same worker calls `activate()`,
-publishes success, failure, or uncertain state, and only then exits. An
+queues the expected capability generation and digest plus a one-shot completion
+object; it does not change the state to `Applying`. When the worker receives the
+command, it reacquires the controller mutex and atomically revalidates the live
+capability bytes, source address, generation, deadline, cancellation state, and
+`Ready` digest immediately before claiming `Applying`. Expiry, cancellation, or
+network-generation invalidation clears or supersedes queued apply state and
+always wins that ordering.
+
+The worker then calls `activate()`, publishes success, verified failure, or
+uncertain state, signals the completion object, and only then exits. An
 authorized cancel request wakes it to abort and exit. HTTP handlers never call
 Core session methods.
 
@@ -470,6 +487,16 @@ generation-bound cancellation signal, including while the worker waits in
 capability material, releases the exclusive network lease, and exits. Stale
 timeout or network events from an older generation cannot cancel a newer
 session.
+
+The apply handler waits outside all mutexes on the completion object with a
+documented activation deadline. Verified success produces `202 Accepted`, then
+the handler attempts that response and posts reboot. A verified failure after
+the old boot entry is restored produces `500 Internal Server Error` and requires
+a new upload. `OTA_ACTIVATION_UNCERTAIN`, completion timeout, or loss of the
+worker produces `503 Service Unavailable`, enters fatal maintenance, and does
+not claim that no pending boot entry exists. The completion object is owned
+until both the handler and worker release their references, so timeout cannot
+leave the worker signaling freed memory.
 
 Cloud scheduling reads the same synchronized snapshot and skips new uploads
 while OTA is busy. No mutex is held during socket I/O, Flash operations,
@@ -562,8 +589,12 @@ from another thread.
 Server shutdown stops accepting requests, records cancellation, wakes the upload
 worker, waits for it to abort the Core session and close any socket, and joins
 it before destroying handlers or the borrowed `LocalWebServerOperations`
-backend. The same bounded I/O deadlines used during upload bound this shutdown
-barrier. No upload worker is detached or allowed to outlive the server.
+backend. The shutdown barrier is the maximum of the socket deadline and one
+Core primitive bound, plus explicit cleanup and join margin. If a platform
+Flash/crypto primitive cannot satisfy a measured hard bound, OTA remains
+disabled on that platform; the implementation must not advertise bounded
+shutdown based only on socket deadlines. No upload worker is detached or
+allowed to outlive the server.
 
 The listener and OTA worker may perform socket operations concurrently.
 Production must therefore use a backend explicitly documented and tested as
@@ -631,6 +662,10 @@ separate recovery and manufacturing review.
 - disagreement between signed package metadata and the embedded firmware
   descriptor;
 - repeated begin, abort, finish, and activation calls;
+- apply queued immediately before expiry, cancellation, and address-generation
+  changes, proving invalidation wins before `Applying`;
+- apply completion success, verified failure, uncertain result, timeout, and
+  handler-timeout lifetime;
 - `finish()` reaches `Ready` without touching boot metadata, while only
   `activate()` writes and verifies that metadata;
 - exact read-back of the new boot-table entry and restoration of the previous
@@ -670,6 +705,8 @@ separate recovery and manufacturing review.
   `Ready`, executes apply/cancel commands, and exits only at a terminal state;
 - concurrent listener and OTA socket operations pass with the production
   thread-safe backend and independent fake backends;
+- shutdown during every Flash, hash, signature, Ready-wait, and activation step
+  completes within the published primitive and join bounds;
 - normal connection close after a completed upload preserves the capability
   through the separate apply or cancel request;
 - the response completes before reboot;
