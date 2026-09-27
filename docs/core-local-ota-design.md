@@ -343,8 +343,11 @@ Exact names are not prescribed, but the Core implementation should own:
 - streaming bootloader-compatible CRC16;
 - streaming SHA-256;
 - signature verification using the application-supplied trust anchor;
-- mandatory full read-back from external Flash with independently recomputed
-  CRC16 and SHA-256 before the image can become staged;
+- mandatory full read-back from external Flash before the image can become
+  staged: the streamed and read-back SHA-256 values must both equal the digest
+  authenticated by the package header, the read-back CRC16 must equal the
+  streaming CRC16, and only that verified read-back CRC16 may be passed to the
+  bootloader activation contract;
 - extraction and exact comparison of the embedded firmware descriptor against
   the authenticated package metadata;
 - deterministic begin/write/finish/abort state transitions;
