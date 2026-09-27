@@ -391,7 +391,10 @@ The Core API must not:
 - contain HomeTemperature routes, credentials, or UI;
 - store a private signing key;
 - reboot automatically before the caller can send a final response; or
-- report success before Flash and activation metadata are verified.
+- report staging success before package, payload, and external-Flash read-back
+  verification succeeds;
+- report activation success before the new boot-table entry is read back and
+  verified.
 
 The existing `OTADownloadFirmware()` accepts a raw application image, not this
 signed package. Preserve it only as a separately named legacy raw-image path so
@@ -422,8 +425,8 @@ and coordinates an exclusive network-maintenance lease shared with
 Button handling and the main loop may only publish authorization or lifecycle
 commands and read snapshots. HTTP handlers may only reserve a job, transfer an
 upload request to its worker, query a snapshot, or enqueue cancel/apply
-commands. The dedicated upload worker is the sole caller of the Core package
-session and the sole writer to OTA Flash.
+commands. The dedicated OTA worker is the sole caller of the Core package
+session and the sole writer to OTA Flash and boot metadata.
 
 One pending session request is allowed. The HTTP side records its generation
 and source address, then waits outside the mutex for the main loop's physical
@@ -448,11 +451,17 @@ package or erase Flash before that grant. Timeout or disconnect while waiting
 cancels the reservation without touching Flash.
 
 Cancellation sets a generation-bound flag under the controller mutex; only the
-upload worker observes that flag and calls `abort()`. Activation is accepted
-only after that worker has completed and published `Ready`. Cloud scheduling
-reads the same synchronized snapshot and skips new uploads while OTA is busy.
-No mutex is held during socket I/O, Flash operations, hashing, signature
-verification, callbacks, or reboot.
+OTA worker observes that flag and calls `abort()`. After `finish()` verifies
+staging and publishes `Ready`, the joinable OTA worker remains alive, owns the
+Core session, and waits on a bounded command signal. An authorized apply request
+queues the expected generation and digest; that same worker calls `activate()`,
+publishes success, failure, or uncertain state, and only then exits. An
+authorized cancel request wakes it to abort and exit. HTTP handlers never call
+Core session methods.
+
+Cloud scheduling reads the same synchronized snapshot and skips new uploads
+while OTA is busy. No mutex is held during socket I/O, Flash operations,
+hashing, signature verification, callbacks, command waits, or reboot.
 
 After activation succeeds, a bootable pending update intentionally exists while
 the old application is still running. The HTTP handler makes one bounded
@@ -524,18 +533,29 @@ request/socket ownership transfer; do not introduce a second listener. A future
 Core HTTP server can replace this layer independently without changing the Core
 OTA staging API.
 
-`LocalWebServer` owns one separate, joinable upload worker and every socket
-transferred to it. The listener resumes accepting short status and cancellation
-requests while the upload proceeds. Only one upload worker may be active, and
+`LocalWebServer` owns one separate, joinable OTA worker and every socket
+transferred to it. The listener resumes accepting short status, apply, and
+cancellation requests while the OTA worker proceeds or waits in `Ready`. Only
+one OTA worker may be active, and
 all other request handlers remain bounded. Status polling is read-only;
 cancellation signals the upload owner rather than closing or writing its socket
 from another thread.
 
 Server shutdown stops accepting requests, records cancellation, wakes the upload
-worker, waits for it to abort the Core session and close its socket, and joins
+worker, waits for it to abort the Core session and close any socket, and joins
 it before destroying handlers or the borrowed `LocalWebServerOperations`
 backend. The same bounded I/O deadlines used during upload bound this shutdown
 barrier. No upload worker is detached or allowed to outlive the server.
+
+The listener and OTA worker may perform socket operations concurrently.
+Production must therefore use a backend explicitly documented and tested as
+thread-safe for independent descriptors. A custom backend must provide the same
+guarantee, or the server must construct a separate backend instance for the OTA
+worker. A single global serialization lock around blocking or readiness socket
+operations is not acceptable because it could prevent status or cancellation.
+Shutdown tests must exercise concurrent listener and upload operations while
+proving that both backend instances or the shared thread-safe backend outlive
+all descriptors.
 
 The body API streams directly to the Core OTA session and never buffers an
 application image in RAM.
@@ -591,6 +611,8 @@ separate recovery and manufacturing review.
 - disagreement between signed package metadata and the embedded firmware
   descriptor;
 - repeated begin, abort, finish, and activation calls;
+- `finish()` reaches `Ready` without touching boot metadata, while only
+  `activate()` writes and verifies that metadata;
 - exact read-back of the new boot-table entry and restoration of the previous
   entry after every injected activation failure;
 - power-loss simulation after each persistent state transition; and
@@ -618,6 +640,10 @@ separate recovery and manufacturing review.
 - status and cancellation requests remain responsive during upload;
 - disconnect and cancellation are handled by the upload worker without
   cross-thread Core session calls;
+- the joinable OTA worker retains Core session ownership while waiting in
+  `Ready`, executes apply/cancel commands, and exits only at a terminal state;
+- concurrent listener and OTA socket operations pass with the production
+  thread-safe backend and independent fake backends;
 - normal connection close after a completed upload preserves the capability
   through the separate apply or cancel request;
 - the response completes before reboot;
