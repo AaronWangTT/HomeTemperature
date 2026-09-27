@@ -339,12 +339,69 @@ separate recovery and manufacturing review.
 
 ## 12. Delivery Plan
 
-1. Add the transport-independent staging API and fault-injection tests to the
-   maintained Core.
-2. Preserve the existing URL downloader as a wrapper over that API.
-3. Publish and checksum-pin a new Core release.
-4. Add the signed package builder and local uploader to HomeTemperature tooling.
-5. Extend the selected HTTP server with bounded streaming request bodies.
-6. Add physical authorization and OTA state coordination to the firmware.
-7. Run compile, hardware, power-loss, and ST-Link recovery validation.
-8. Enable the local upload page only after all acceptance checks pass.
+### Phase 1: Establish the bootloader baseline
+
+1. Record the exact `.bin` format, linked address, size, SHA-256, CRC16, source
+   revision, and Core version.
+2. Exercise the existing staging and bootloader path on a recoverable test
+   board.
+3. Test interruption during staging, activation metadata persistence, and the
+   bootloader copy.
+4. Record which failures recover automatically and which require ST-Link.
+
+### Phase 2: Add the Core staging engine
+
+1. Add the transport-independent begin/write/finish/abort/activate API.
+2. Add partition discovery, erase, bounds checks, CRC16, SHA-256, read-back,
+   image-shape checks, typed errors, and exclusive session ownership.
+3. Add Flash and clock injection with fault tests.
+4. Preserve `OTADownloadFirmware()` as a compatibility wrapper.
+
+### Phase 3: Add signed artifact tooling
+
+1. Define and version the package envelope.
+2. Add a host tool that validates the raw `.bin`, records provenance, computes
+   its digest, signs the canonical metadata, and emits the OTA package.
+3. Keep development and production trust roots separate.
+4. Preserve the raw `.bin` and complete Flash image needed for ST-Link
+   recovery.
+
+The first OTA-capable HomeTemperature release must be installed through the
+wired ST-Link workflow. That trusted bootstrap installs the public key and local
+OTA implementation used to authenticate subsequent uploads.
+
+### Phase 4: Add bounded HTTP body streaming
+
+1. Add request-body streaming, length validation, idle and total deadlines, and
+   disconnect cancellation to the selected HTTP server.
+2. Reject chunked transfer, multipart bodies, ranges, and extra bytes in the
+   first version.
+3. Keep the HTTP worker responsive without buffering a complete image in RAM.
+
+### Phase 5: Integrate HomeTemperature
+
+1. Add the OTA controller, status model, and exact routes.
+2. Add the physical authorization gesture and expiration window.
+3. Coordinate OTA with cloud uploads, discovery, and reboot.
+4. Add the command-line uploader before enabling the optional browser page.
+5. Keep activation separate from upload and require the job ID plus staged
+   digest.
+
+### Phase 6: Validate and release
+
+1. Run Core unit and hardware tests.
+2. Run all HomeTemperature firmware compile suites.
+3. Execute valid, invalid, interrupted, downgrade, and wrong-board uploads.
+4. Exercise power interruption at every destructive phase.
+5. Restore through ST-Link after every intentionally failed scenario.
+6. Publish and checksum-pin the enhanced Core only after those gates pass.
+
+### Recommended pull-request sequence
+
+1. Core staging API and fault-injection tests.
+2. Core HTTP request-body streaming and lifecycle hardening.
+3. Core release and HomeTemperature version-pin update.
+4. HomeTemperature OTA controller and HTTP API.
+5. Host package builder and command-line uploader.
+6. Browser upload page.
+7. Hardware acceptance evidence and final enablement.
