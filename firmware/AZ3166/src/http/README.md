@@ -126,7 +126,9 @@ constructor argument to connect an existing discovery object. See the
   Both instances must outlive the server and all socket owners.
 - Custom operations must use bounded/nonblocking I/O. Their clock can be called
   from the main loop and both HTTP workers; keep referenced state valid and
-  synchronized.
+  synchronized. `receiveBytes()` returns a positive byte count, zero for
+  would-block, `LocalWebServer::RECEIVE_DISCONNECTED` for an orderly peer close,
+  or `LocalWebServer::RECEIVE_ERROR` for a backend failure.
 
 ## Limits and Dependencies
 

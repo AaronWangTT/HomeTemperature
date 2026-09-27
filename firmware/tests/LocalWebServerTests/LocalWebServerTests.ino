@@ -307,6 +307,7 @@ struct FakeHttpPlatform {
     bool holdStreamingResponse;
     bool blockSend;
     bool disconnectWhenDrained;
+    bool errorWhenDrained;
     size_t inputLength;
     size_t inputOffset;
     size_t outputLength;
@@ -447,7 +448,11 @@ int FakeLocalWebServerOperations::receiveBytes(int, char *buffer, size_t size) {
         fake.now += fake.receiveStep;
         if (fake.disconnectWhenDrained) {
             fakeMutex.unlock();
-            return -1;
+            return LocalWebServer::RECEIVE_DISCONNECTED;
+        }
+        if (fake.errorWhenDrained) {
+            fakeMutex.unlock();
+            return LocalWebServer::RECEIVE_ERROR;
         }
     }
     fakeMutex.unlock();
@@ -1135,6 +1140,25 @@ void testStreamingFaultsAndGenerationCancellation() {
         expect(waitForStreamingStatus(LOCAL_HTTP_BODY_DISCONNECTED) &&
                    waitForCount(&FakeHttpPlatform::closeClientCount, 1),
                "a truncated body reports disconnect and closes on the streaming worker");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 2000, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        fakeMutex.lock();
+        fake.errorWhenDrained = true;
+        fakeMutex.unlock();
+        const char failed[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 6\r\n\r\nabc";
+        queueRequest(failed, sizeof(failed) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_ERROR) &&
+                   waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+               "a socket backend failure remains distinct from peer disconnect");
     }
 
     {

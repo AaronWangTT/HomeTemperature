@@ -154,11 +154,24 @@ int Az3166LocalWebServerOperations::acceptClient(int listener) {
 
 int Az3166LocalWebServerOperations::receiveBytes(int client, char *buffer, size_t size) {
     int ready = socketReady(client, false);
-    if (ready <= 0) {
-        return ready;
+    if (ready == 0) {
+        return 0;
+    }
+    if (ready < 0) {
+        return LocalWebServer::RECEIVE_ERROR;
     }
     int received = lwip_recv(client, buffer, size, MSG_DONTWAIT);
-    return received > 0 ? received : -1;
+    if (received > 0) {
+        return received;
+    }
+    if (received == 0) {
+        return LocalWebServer::RECEIVE_DISCONNECTED;
+    }
+    if (errno == LWIP_EAGAIN || errno == LWIP_EWOULDBLOCK ||
+        errno == LWIP_EINTR) {
+        return 0;
+    }
+    return LocalWebServer::RECEIVE_ERROR;
 }
 
 int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, size_t size) {
@@ -261,6 +274,12 @@ public:
             return LOCAL_HTTP_BODY_COMPLETE;
         }
 
+        uint32_t now = operations_.currentTime();
+        if (now - started_ >= limits_.totalTimeoutMs ||
+            now - lastProgress_ >= limits_.idleTimeoutMs) {
+            return LOCAL_HTTP_BODY_TIMEOUT;
+        }
+
         if (prefetchedOffset_ < prefetchedLength_) {
             size_t available = prefetchedLength_ - prefetchedOffset_;
             received = available < capacity ? available : capacity;
@@ -274,15 +293,13 @@ public:
             return LOCAL_HTTP_BODY_DATA;
         }
 
-        uint32_t now = operations_.currentTime();
-        if (now - started_ >= limits_.totalTimeoutMs ||
-            now - lastProgress_ >= limits_.idleTimeoutMs) {
-            return LOCAL_HTTP_BODY_TIMEOUT;
-        }
         int count = operations_.receiveBytes(
             client_, buffer, capacity < remaining_ ? capacity : remaining_);
-        if (count < 0) {
+        if (count == LocalWebServer::RECEIVE_DISCONNECTED) {
             return LOCAL_HTTP_BODY_DISCONNECTED;
+        }
+        if (count < 0) {
+            return LOCAL_HTTP_BODY_ERROR;
         }
         if (count == 0) {
             rtos::Thread::wait(1);
@@ -294,9 +311,14 @@ public:
             static_cast<size_t>(count) > remaining_) {
             return LOCAL_HTTP_BODY_ERROR;
         }
+        uint32_t completed = operations_.currentTime();
+        if (completed - started_ >= limits_.totalTimeoutMs ||
+            completed - lastProgress_ >= limits_.idleTimeoutMs) {
+            return LOCAL_HTTP_BODY_TIMEOUT;
+        }
         received = static_cast<size_t>(count);
         remaining_ -= received;
-        lastProgress_ = operations_.currentTime();
+        lastProgress_ = completed;
         return LOCAL_HTTP_BODY_DATA;
     }
 
@@ -355,7 +377,9 @@ LocalWebServer::LocalWebServer(
       workerAttempted_(false),
       workerStarting_(false),
       streamingWorkerStarted_(false),
-      streamingWorkerStarting_(false) {
+      streamingWorkerStarting_(false),
+      streamingWorkerAttempted_(false),
+      lastStreamingWorkerAttempt_(0) {
 }
 
 LocalWebServer::LocalWebServer(
@@ -410,7 +434,9 @@ LocalWebServer::LocalWebServer(
       workerAttempted_(false),
       workerStarting_(false),
       streamingWorkerStarted_(false),
-      streamingWorkerStarting_(false) {
+      streamingWorkerStarting_(false),
+      streamingWorkerAttempted_(false),
+      lastStreamingWorkerAttempt_(0) {
 }
 
 LocalWebServer::~LocalWebServer() {
@@ -440,7 +466,7 @@ LocalWebServerOperations &LocalWebServer::defaultOperations() {
     return operations;
 }
 
-bool LocalWebServer::startStreamingWorker() {
+bool LocalWebServer::startStreamingWorker(uint32_t now) {
     if (streamingHandler_ == NULL) {
         return true;
     }
@@ -460,7 +486,12 @@ bool LocalWebServer::startStreamingWorker() {
             state_.error = ACCEPT_ERROR;
             return false;
         }
+        if (streamingWorkerAttempted_ &&
+            now - lastStreamingWorkerAttempt_ < startRetryIntervalMs_) {
+            return false;
+        }
         streamingWorkerStarting_ = true;
+        streamingWorkerAttempted_ = true;
     }
 
     osStatus result =
@@ -471,6 +502,7 @@ bool LocalWebServer::startStreamingWorker() {
         streamingWorkerStarted_ = result == osOK;
         if (result != osOK) {
             state_.error = static_cast<int>(result);
+            lastStreamingWorkerAttempt_ = operations_.currentTime();
         }
     }
     if (result != osOK) {
@@ -498,7 +530,7 @@ void LocalWebServer::update(bool wifiConnected, uint32_t address) {
         }
     }
 
-    if (!startStreamingWorker()) {
+    if (!startStreamingWorker(now)) {
         return;
     }
 

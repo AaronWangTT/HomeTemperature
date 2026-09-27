@@ -53,6 +53,8 @@ class LocalWebServer {
 public:
     static const int ACCEPT_IDLE = -1;
     static const int ACCEPT_ERROR = -2;
+    static const int RECEIVE_DISCONNECTED = -1;
+    static const int RECEIVE_ERROR = -2;
     static const size_t MAX_PREFETCH_BYTES = 128;
 
     static int classifyAcceptError(int socketError);
@@ -135,7 +137,7 @@ private:
     LocalWebServer(const LocalWebServer &) = delete;
     LocalWebServer &operator=(const LocalWebServer &) = delete;
     static LocalWebServerOperations &defaultOperations();
-    bool startStreamingWorker();
+    bool startStreamingWorker(uint32_t now);
     RequestedState requestedState() const;
     bool isCurrent(uint32_t generation) const;
     bool isStreamingCurrent(uint32_t generation) const;
@@ -184,6 +186,8 @@ private:
     bool workerStarting_;
     bool streamingWorkerStarted_;
     bool streamingWorkerStarting_;
+    bool streamingWorkerAttempted_;
+    uint32_t lastStreamingWorkerAttempt_;
 };
 
 #endif
