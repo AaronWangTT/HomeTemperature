@@ -149,6 +149,7 @@ HTTP headers:
 +-------------------------+
 | 256-byte package header |
 | - magic and format      |
+| - product ID            |
 | - target board ID       |
 | - firmware version      |
 | - payload length        |
@@ -162,10 +163,17 @@ HTTP headers:
 +-------------------------+
 ```
 
-The signature covers the canonical header fields and payload SHA-256. The
-device parses the envelope while streaming but writes only the raw application
-payload at offset zero of the OTA partition, preserving the existing bootloader
-format.
+The signature covers the canonical header fields, including product and board
+IDs, and the payload SHA-256. The raw application also contains a fixed,
+read-only compatibility descriptor with the same product ID, board ID, firmware
+version, and package-format generation. After read-back, the Core extracts that
+descriptor and requires exact agreement with the signed envelope. This prevents
+a correctly signed image for another product using the same signing authority
+from being accepted solely because it targets AZ3166 hardware.
+
+The device parses the envelope while streaming but writes only the raw
+application payload at offset zero of the OTA partition, preserving the existing
+bootloader format.
 
 The first format uses an exactly 256-byte header and an exactly 64-byte raw
 ECDSA P-256 signature containing fixed-width `r` and `s` values. Header strings
@@ -187,7 +195,8 @@ Before staging, validate that the payload:
 - is nonempty and no larger than the runtime OTA partition capacity;
 - fits the internal application partition;
 - has a plausible STM32 vector table for the configured application region; and
-- targets the expected AZ3166 board and firmware product.
+- contains a valid embedded compatibility descriptor matching the signed
+  product, board, version, and format-generation metadata.
 
 ## 7. Core Responsibilities
 
@@ -232,6 +241,8 @@ Exact names are not prescribed, but the Core implementation should own:
 - signature verification using the application-supplied trust anchor;
 - mandatory full read-back from external Flash with independently recomputed
   CRC16 and SHA-256 before the image can become staged;
+- extraction and exact comparison of the embedded firmware descriptor against
+  the authenticated package metadata;
 - deterministic begin/write/finish/abort state transitions;
 - exclusive ownership of one active staging session;
 - clearing incomplete state without marking an image bootable;
@@ -341,7 +352,9 @@ separate recovery and manufacturing review.
 - arbitrary chunk boundaries, including one-byte chunks;
 - zero-length, oversized, truncated, and extra-byte packages;
 - CRC16 and SHA-256 known-answer vectors;
-- invalid header, board ID, version, hash, and signature;
+- invalid header, product, board ID, version, hash, and signature;
+- disagreement between signed package metadata and the embedded firmware
+  descriptor;
 - repeated begin, abort, finish, and activation calls;
 - power-loss simulation after each persistent state transition; and
 - compatibility of the URL downloader wrapper.
@@ -390,9 +403,11 @@ separate recovery and manufacturing review.
 
 ### Phase 3: Add signed artifact tooling
 
-1. Define and version the package envelope.
-2. Add a host tool that validates the raw `.bin`, records provenance, computes
-   its digest, signs the canonical metadata, and emits the OTA package.
+1. Define and version the package envelope and the firmware's embedded
+   compatibility descriptor.
+2. Add a host tool that validates the raw `.bin`, verifies its embedded
+   descriptor, records provenance, computes its digest, signs the matching
+   canonical metadata, and emits the OTA package.
 3. Keep development and production trust roots separate.
 4. Preserve the raw `.bin` and complete Flash image needed for ST-Link
    recovery.
