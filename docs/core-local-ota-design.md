@@ -204,7 +204,7 @@ The application image places its compatibility descriptor at raw-image offset
 | `0` | 8 | Magic `AZOTA001` |
 | `8` | 2 | Descriptor format version |
 | `10` | 2 | Descriptor size, exactly 256 |
-| `12` | 4 | Security profile |
+| `12` | 4 | Security profile, value 1 |
 | `16` | 32 | NUL-terminated product ID |
 | `48` | 32 | NUL-terminated board ID |
 | `80` | 32 | NUL-terminated firmware version |
@@ -221,6 +221,12 @@ exactly 40 lowercase hexadecimal bytes without a terminator. The descriptor and
 package format versions are independent and both are checked. The build fails
 unless the linker map places exactly one 256-byte descriptor at raw-image offset
 `0x200`.
+
+Security profile 1 means an ECDSA P-256 signature over the 320-byte package
+header using SHA-256, a 64-byte raw big-endian `r || s` encoding, and a trusted
+key supplied as DER RFC 5480 SubjectPublicKeyInfo. The envelope signature
+algorithm must be 1 and the descriptor security profile must be 1. Unknown or
+mismatched values are rejected before admission or Flash erase.
 
 After read-back, the Core extracts the embedded descriptor and requires it to be
 byte-for-byte identical to the descriptor copied into the signed package
@@ -354,12 +360,23 @@ HomeTemperature should own:
 - scheduling reboot only after the final response is sent; and
 - reporting startup confirmation after the updated image boots.
 
-`LocalOtaController` owns the complete application OTA state behind one mutex.
+`LocalOtaController` owns the complete application OTA state behind one mutex
+and coordinates an exclusive network-maintenance lease shared with
+`CloudUploadController`.
 Button handling and the main loop may only publish authorization or lifecycle
 commands and read snapshots. HTTP handlers may only reserve a job, transfer an
 upload request to its worker, query a snapshot, or enqueue cancel/apply
 commands. The dedicated upload worker is the sole caller of the Core package
 session and the sole writer to OTA Flash.
+
+Before a cloud upload starts, the main loop atomically acquires a shared
+coordinator lease and marks the cloud operation in flight; it releases that
+lease only after the synchronous upload returns. OTA reservation first enters a
+bounded `WaitingForNetworkLease` state. The main loop grants the exclusive OTA
+lease only after any current cloud upload finishes, and rejects all new cloud
+leases until OTA reaches a terminal state. The upload worker must not parse the
+package or erase Flash before that grant. Timeout or disconnect while waiting
+cancels the reservation without touching Flash.
 
 Cancellation sets a generation-bound flag under the controller mutex; only the
 upload worker observes that flag and calls `abort()`. Activation is accepted
@@ -388,9 +405,10 @@ automation.
 Suggested application states:
 
 ```text
-Disabled -> Armed -> Receiving -> Verifying -> Ready -> Applying
-                         |             |          |
-                         +-----------> Error <----+
+Disabled -> Armed -> WaitingForNetworkLease -> Receiving
+                                           -> Verifying -> Ready -> Applying
+                                                 |          |
+                                                 +-> Error <-+
 ```
 
 Only `Ready` may transition to `Applying`. Timeout, disconnect, overflow,
@@ -425,8 +443,10 @@ prefetched bytes first, then continue reading the socket under the same length
 and deadline accounting.
 
 The HTTP layer owns network deadlines and disconnect handling. The OTA session
-owns Flash consistency. A dropped connection calls `abort()` and never calls
-the session's `activate()` method.
+owns Flash consistency. A dropped connection signals generation-bound
+cancellation to `LocalOtaController`; the dedicated upload worker observes it
+and calls `abort()`. The HTTP thread never calls session methods directly, and a
+dropped connection never leads to the session's `activate()` method.
 
 ## 10. Boot and Recovery Limitations
 
@@ -458,6 +478,10 @@ separate recovery and manufacturing review.
 - arbitrary chunk boundaries, including one-byte chunks;
 - zero-length, oversized, truncated, and extra-byte packages;
 - CRC16 and SHA-256 known-answer vectors;
+- ECDSA signatures whose `r` or `s` value requires leading zero padding;
+- malformed DER keys and signing-key identifier mismatches;
+- unknown or mismatched signature algorithms and security profiles rejected
+  before erase;
 - invalid header, product, board ID, version, hash, and signature;
 - disagreement between signed package metadata and the embedded firmware
   descriptor;
@@ -471,7 +495,11 @@ separate recovery and manufacturing review.
 - the window expires and permits only one update;
 - malformed HTTP requests and unsupported transfer encodings are rejected;
 - upload progress and typed failures are reported accurately;
-- cloud uploads do not run during staging or activation;
+- an in-flight cloud upload completes before the OTA lease is granted, and no
+  new cloud upload starts until OTA reaches a terminal state;
+- status and cancellation requests remain responsive during upload;
+- disconnect and cancellation are handled by the upload worker without
+  cross-thread Core session calls;
 - the response completes before reboot;
 - mDNS and telemetry behavior recover after a cancelled upload; and
 - downgrade policy requires explicit maintenance authorization.
