@@ -481,8 +481,20 @@ Suggested endpoints:
 | `POST /api/ota/apply` | With the capability, activate a completely verified staged image. |
 | `DELETE /api/ota` | With the capability, request cancellation before activation. |
 
-The first version should require `Content-Length` and reject chunked transfer,
-multipart form data, ranges, resume, compression, and concurrent uploads. A
+The first version requires exactly one `Content-Length` header. After trimming
+optional surrounding HTTP whitespace, its value must be a nonempty sequence of
+decimal digits with no sign, comma, or internal whitespace, must fit `size_t`,
+and must be within the package bounds implied by both runtime partitions.
+Duplicate `Content-Length` fields are rejected even when their values agree.
+Any `Transfer-Encoding` header, including one combined with `Content-Length`,
+is rejected before the request is transferred to the upload worker.
+
+After the fixed package header is available, its payload length must equal the
+validated HTTP length minus 384 before signature verification, admission, or
+Flash erase. Prefetched body data exceeding the declared HTTP length is rejected;
+after exactly that many bytes the server closes the connection and does not
+interpret trailing bytes or pipelined requests. Multipart bodies, ranges,
+resume, compression, and concurrent uploads are not supported initially. A
 browser page can use `fetch()` to send the selected package as a raw body. A
 repository-owned command-line uploader should provide the same operation for
 automation.
@@ -596,6 +608,10 @@ separate recovery and manufacturing review.
   duplicate, or malformed authorization headers fail before body reads;
 - the authorization window expires and permits only one update;
 - malformed HTTP requests and unsupported transfer encodings are rejected;
+- missing, duplicate, conflicting, malformed, overflowing, undersized, and
+  oversized `Content-Length` fields fail before request ownership transfer;
+- package payload length and HTTP body length mismatches fail before Flash
+  erase;
 - upload progress and typed failures are reported accurately;
 - an in-flight cloud upload completes before the OTA lease is granted, and no
   new cloud upload starts until OTA reaches a terminal state;
