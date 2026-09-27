@@ -429,10 +429,18 @@ commands. The dedicated OTA worker is the sole caller of the Core package
 session and the sole writer to OTA Flash and boot metadata.
 
 One pending session request is allowed. The HTTP side records its generation
-and source address, then waits outside the mutex for the main loop's physical
-confirmation. Confirmation creates the capability and closes the claim window;
-it never authorizes an arbitrary later caller. An unconfirmed request expires
-without reserving Flash or blocking cloud work.
+and source address and immediately returns `202 Accepted` with a random,
+nonsecret request ID and a 30-second expiry. It never waits for physical
+confirmation on the HTTP worker. Confirmation creates the capability and closes
+the claim window; it never authorizes an arbitrary later caller. An unconfirmed
+request expires without reserving Flash or blocking cloud work.
+
+The same source polls `GET /api/ota/session?id=<request-id>`. Before
+confirmation it receives only pending/expired state. After confirmation, exactly
+one successful poll atomically consumes the request and returns the capability;
+later polls return not found. Request IDs carry no authority, may appear in a
+query string, are rate limited, and cannot retrieve a capability from a
+different source address.
 
 The input layer adds a distinct simultaneous-button hold event for OTA
 confirmation. While a session request is awaiting confirmation, that chord is
@@ -478,8 +486,9 @@ follows the same bootloader path and applies the already authenticated staged
 image.
 
 A verified activation failure restores and confirms the previous boot-table
-entry, does not schedule reboot, and may leave the staged image available for a
-new activation attempt. `OTA_ACTIVATION_UNCERTAIN` instead enters a fatal
+entry, clears the staged image/session and capability, releases the lease, does
+not schedule reboot, and requires a new upload before another activation
+attempt. `OTA_ACTIVATION_UNCERTAIN` instead enters a fatal
 maintenance state: cloud and OTA mutations remain disabled, no success or
 ordinary retry response is emitted, and the operator is instructed not to power
 cycle and to restore the device through ST-Link. The feature cannot ship unless
@@ -491,7 +500,8 @@ Suggested endpoints:
 | Method and path | Purpose |
 | --- | --- |
 | `GET /ota` | Serve the upload page; mutations remain disabled until physical confirmation. |
-| `POST /api/ota/session` | Create one pending request and wait for physical confirmation before returning a capability. |
+| `POST /api/ota/session` | Create one pending physical-confirmation request and immediately return its nonsecret request ID. |
+| `GET /api/ota/session?id=...` | Poll pending state and atomically claim the capability once from the same source after confirmation. |
 | `POST /api/ota` | With the capability, stream one signed OTA package using `application/octet-stream`. |
 | `GET /api/ota/status` | With the capability, return state, accepted bytes, total bytes, and last error. |
 | `POST /api/ota/apply` | With the capability, activate a completely verified staged image. |
@@ -527,9 +537,11 @@ Disabled -> AwaitingPhysicalConfirmation -> Armed
                                       +-----------> Error <----+
 ```
 
-Only `Ready` may transition to `Applying`. Timeout, disconnect, overflow,
-signature failure, hash mismatch, Flash failure, or cancellation must leave no
-bootable pending update. The job ID and digest returned by `finish()` identify
+Only `Ready` may transition to `Applying`. Before activation begins, timeout,
+disconnect, overflow, signature failure, hash mismatch, Flash failure, or
+cancellation must leave no bootable pending update. Activation failure follows
+the verified-restore or fatal-uncertain rules above. The job ID and digest
+returned by `finish()` identify
 only the Core's current in-memory `Ready` state; they are not caller-authoritative
 image metadata. Activation must fail after cancellation, another successful
 staging session, activation, or reboot.
@@ -632,6 +644,10 @@ separate recovery and manufacturing review.
 
 - OTA routes are unavailable outside the physical authorization window;
 - only the pending requester can claim a physical confirmation;
+- creating a pending request returns immediately and cannot occupy the sole
+  listener while confirmation is pending;
+- request-ID polling is source-bound, rate limited, and returns the capability
+  at most once;
 - an OTA confirmation chord is consumed before cloud button actions;
 - TRNG initialization, generation, and short-output failures fail closed;
 - capability expiry, source binding, constant-time comparison, and replay
@@ -662,8 +678,9 @@ separate recovery and manufacturing review.
 - the response completes before reboot;
 - successful activation schedules reboot after the response attempt even when
   that response fails or the client disconnects;
-- verified activation failure leaves no pending update, while an uncertain
-  activation enters fatal maintenance and blocks release;
+- verified activation failure restores the prior boot entry and clears the
+  staged session before permitting a new upload, while an uncertain activation
+  enters fatal maintenance and blocks release;
 - mDNS and telemetry behavior recover after a cancelled upload; and
 - downgrade policy requires explicit maintenance authorization.
 
