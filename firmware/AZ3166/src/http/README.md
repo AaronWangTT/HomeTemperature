@@ -121,3 +121,6 @@ production afterward. Do not treat a compile-only result as a runtime pass.
 See [LocalWebServer.cpp](LocalWebServer.cpp), the
 [telemetry guide](../telemetry/README.md), and the
 [firmware design](../../../../docs/firmware-design.md#9-local-http-interface).
+The [Core HTTP server proposal](../../../../docs/core-http-server-design.md)
+describes how a future Core could absorb the reusable HTTP transport and
+lifecycle behavior without weakening this service contract.

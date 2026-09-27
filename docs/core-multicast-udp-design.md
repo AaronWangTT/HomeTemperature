@@ -2,6 +2,8 @@
 
 Status: implemented in AZ3166 Core 3.0.0
 
+Core component: `AZ3166MulticastUDP`
+
 Initial consumer: HomeTemperature local mDNS discovery
 
 ## 1. Decision
