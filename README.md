@@ -34,7 +34,7 @@ installs the pinned ArduinoMDNS dependency into a repository-local sketchbook;
 | Capability | Components | What They Encapsulate |
 | --- | --- | --- |
 | [Wi-Fi and time](firmware/AZ3166/src/connectivity/README.md) | `ConnectivityManager` | Connection state, reconnect backoff, IPv4 address changes, and NTP synchronization retries. |
-| [Local discovery](firmware/AZ3166/src/discovery/README.md) | `LocalDiscovery`, `MdnsUdpTransport` | Caller-supplied mDNS service metadata, address-aware restarts, and background query handling, coordinated with HTTP listener readiness. |
+| [Local discovery](firmware/AZ3166/src/discovery/README.md) | `LocalDiscovery`, Core `AZ3166MulticastUDP` | Caller-supplied mDNS service metadata, address-aware restarts, and background query handling, coordinated with HTTP listener readiness. |
 | [Sensor telemetry](firmware/AZ3166/src/telemetry/README.md) | `TelemetryService` | Serialized HTS221/LPS22HB acquisition, range validation, and bounded JSON formatting shared by local HTTP and cloud uploads. |
 | [Local HTTP](firmware/AZ3166/src/http/README.md) | `LocalWebServer`, `LocalHttpHandler` | A dedicated HTTP worker, verified listener startup, bounded request/response I/O, and an injectable application handler. `TelemetryHttpHandler` supplies this application's telemetry route. |
 | [HTTPS delivery](firmware/AZ3166/src/cloud/README.md#cloudtelemetry) | `CloudTelemetry`, `TelemetryUploader` | Authenticated HTTPS transport, payload delivery, and typed sensor, network, and HTTP outcomes. |
@@ -74,8 +74,8 @@ mDNS-capable LAN client, the running device is accessible at
 `http://az3166.local/api/telemetry`.
 
 These are reusable source components, not a separately packaged or
-board-independent SDK. Hardware adapters target AZ3166 Core 2.0.2 and
-ArduinoMDNS 1.1.0, and the telemetry schema, routes, and fixed hostname reflect
+board-independent SDK. Hardware adapters target AZ3166 Core 3.0.0 and
+ArduinoMDNS 1.1.1, and the telemetry schema, routes, and fixed hostname reflect
 this application. Adapt those choices for your project and review
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including ArduinoMDNS's LGPL
 terms.
@@ -168,8 +168,8 @@ Key design boundaries:
 
 ## Firmware Quick Start
 
-The verified Windows toolchain is Arduino IDE 1.8.19 with AZ3166 Core 2.0.2,
-ArduinoMDNS 1.1.0, and board `AZ3166:stm32f4:MXCHIP_AZ3166`.
+The verified Windows toolchain is Arduino IDE 1.8.19 with AZ3166 Core 3.0.0,
+ArduinoMDNS 1.1.1, and board `AZ3166:stm32f4:MXCHIP_AZ3166`.
 
 ```powershell
 & .\firmware\tools\Install-Az3166Toolchain.ps1

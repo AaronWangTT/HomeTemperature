@@ -36,7 +36,7 @@ flowchart LR
         Local[LocalWebServer HTTP worker]
         Handler[TelemetryHttpHandler]
         Discovery[LocalDiscovery]
-        Mdns[ArduinoMDNS and MdnsUdpTransport]
+        Mdns[ArduinoMDNS and AZ3166MulticastUDP]
         Controller[CloudUploadController]
         Scheduler[UploadScheduler]
         Uploader[TelemetryUploader]
@@ -117,7 +117,7 @@ Headers stay beside their implementations. `http/` contains only the reusable
 HTTP engine and handler interface; the application-specific HTTP adapter lives
 in `telemetry/`. `cloud/` owns transport and upload coordination. `platform/`
 holds device identity and watchdog support. ArduinoMDNS is installed into the
-repository-local sketchbook; `discovery/` retains the AZ3166 raw-lwIP adapter.
+repository-local sketchbook; the Core supplies the AZ3166 multicast transport.
 `config/` holds `AppConfig.h`, the cloud configuration loader, the public root
 certificate, deployment templates, and ignored local overrides. These remain
 separate from the reusable implementation in `cloud/`. The Arduino sketch stays
@@ -140,7 +140,7 @@ Focused test sketches and staging scripts live separately under `firmware/tests/
 | Sensor and JSON | `firmware/AZ3166/src/telemetry/TelemetryService.h/.cpp` | Stores an injected device ID pointer, owns and reads sensor objects, and formats the shared telemetry payload. |
 | Local HTTP | `firmware/AZ3166/src/http/LocalWebServer.h/.cpp`, `LocalHttpHandler.h` | Owns the nonblocking lwIP listener, dedicated worker, bounded HTTP protocol, synchronized status, and optional service-lifecycle callback. |
 | Telemetry HTTP adapter | `firmware/AZ3166/src/telemetry/TelemetryHttpHandler.h/.cpp` | Implements the application route and JSON/status mapping using its injected payload builder. |
-| Local discovery | `firmware/AZ3166/src/discovery/`: `LocalDiscovery`, `MdnsUdpTransport`; installed ArduinoMDNS 1.1.0 | Owns discovery lifecycle, the bounded AZ3166 multicast transport, and the synchronized background responder. |
+| Local discovery | `firmware/AZ3166/src/discovery/`: `LocalDiscovery`; Core `AZ3166MulticastUDP`; installed ArduinoMDNS 1.1.1 | Owns discovery lifecycle and the synchronized background responder. |
 | Upload workflow | `firmware/AZ3166/src/cloud/CloudUploadController.h/.cpp` | Gates attempts, translates upload outcomes into scheduling policy, and records completion-time results. |
 | Upload coordination | `firmware/AZ3166/src/cloud/TelemetryUploader.h/.cpp` | Builds one payload and forwards its exact bytes and length to cloud transport. |
 | Upload policy | `firmware/AZ3166/src/cloud/UploadScheduler.h/.cpp` | Decides when scheduled, retry, and manual uploads are due. |
@@ -183,7 +183,7 @@ Single-function hooks remain callbacks, including upload clocks, payload
 builders, cloud response handlers, and the typed HTTP service notification.
 `LocalHttpHandler` remains an abstract interface. ArduinoMDNS accepts the local
 transport through a borrowed, type-erased template adapter, so
-`MdnsUdpTransport` does not inherit from a library or application base class.
+`AZ3166MulticastUDP` does not inherit from a library or application base class.
 
 ## 5. Startup and Main Loop
 
@@ -348,7 +348,7 @@ callback must outlive that server's worker shutdown and join. Access to each
 controller must remain serialized; the atomic lease protects backend ownership,
 not the controller's cached state or a backend's clock implementation.
 
-ArduinoMDNS 1.1.0 supplies DNS encoding, query handling, service registration,
+ArduinoMDNS 1.1.1 supplies DNS encoding, query handling, service registration,
 explicit announcements, and responder cleanup. The checksum-pinned release is
 installed separately into the repository-local sketchbook. Its custom transport
 constructor borrows the AZ3166 raw-lwIP adapter through type erasure; the
@@ -732,7 +732,7 @@ internally.
 
 The AZ3166 C library does not reliably support `%f` in the `printf` family, so
 Arduino uses `dtostrf` for float-to-text conversion. The maintained AZ3166 Core
-2.0.2 carries forward the correction introduced in Core 2.0.1 for the
+3.0.0 carries forward the correction introduced in Core 2.0.1 for the
 fractional-digit defect in Core 2.0.0, which could format `45.0` at precision 1
 as `45.00`. The Core implementation preserves expected Arduino behavior for:
 
@@ -743,13 +743,13 @@ as `45.00`. The Core implementation preserves expected Arduino behavior for:
 - left alignment for negative width.
 
 Core code such as `String(float)` also uses the corrected implementation,
-although the telemetry path avoids `String`. Core 2.0.2 also reports the
+although the telemetry path avoids `String`. Core 3.0.0 also reports the
 maintained version from `getDevkitVersion()`. No project-local symbol override
 is linked.
 
 ### 13.2 SDK System Telemetry
 
-AZ3166 Core 2.0.2 keeps the bundled SDK system telemetry hooks disabled by default.
+AZ3166 Core 3.0.0 keeps the bundled SDK system telemetry hooks disabled by default.
 Defining `ENABLETRACE=1` in the platform build flags opts back into the vendor
 behavior. This Core-level default leaves the application's cloud uploader under
 explicit firmware control and removes the need for project-local no-op symbols.

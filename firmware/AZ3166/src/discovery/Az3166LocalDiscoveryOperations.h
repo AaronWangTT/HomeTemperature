@@ -1,9 +1,9 @@
 #ifndef AZ3166_LOCAL_DISCOVERY_OPERATIONS_H
 #define AZ3166_LOCAL_DISCOVERY_OPERATIONS_H
 
+#include <AZ3166MulticastUdp.h>
 #include <ArduinoMDNS.h>
 #include "LocalDiscovery.h"
-#include "MdnsUdpTransport.h"
 #include "rtos.h"
 
 class Az3166LocalDiscoveryOperations : public LocalDiscoveryOperations {
@@ -26,7 +26,7 @@ protected:
 private:
     void serviceDiscovery();
 
-    MdnsUdpTransport transport_;
+    AZ3166MulticastUDP transport_;
     MDNS responder_;
     rtos::Mutex responderMutex_;
     alignas(8) unsigned char workerStack_[4096];
