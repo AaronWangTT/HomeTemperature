@@ -146,43 +146,69 @@ Use one signed binary package rather than multipart form data or long custom
 HTTP headers:
 
 ```text
-+-------------------------+
-| 256-byte package header |
-| - magic and format      |
-| - product ID            |
-| - target board ID       |
-| - firmware version      |
-| - payload length        |
-| - SHA-256 payload hash  |
-| - algorithm identifier  |
-+-------------------------+
-| 64-byte ECDSA signature |
-| raw P-256 r || s        |
-+-------------------------+
-| Raw application .bin    |
-+-------------------------+
++------------------------------+
+| 64-byte envelope prefix      |
+| - magic and format           |
+| - payload length and SHA-256 |
+| - signature algorithm/size   |
++------------------------------+
+| 256-byte descriptor copy     |
++------------------------------+
+| 64-byte ECDSA signature      |
+| raw P-256 r || s             |
++------------------------------+
+| Raw application .bin         |
++------------------------------+
 ```
 
-The signature covers the canonical header fields, including product and board
-IDs, and the payload SHA-256. The raw application also contains a fixed,
-read-only compatibility descriptor with the same product ID, board ID, firmware
-version, and package-format generation. After read-back, the Core extracts that
-descriptor and requires exact agreement with the signed envelope. This prevents
-a correctly signed image for another product using the same signing authority
-from being accepted solely because it targets AZ3166 hardware.
+The fixed package header is 320 bytes: a 64-byte envelope prefix followed by an
+exact copy of the firmware's 256-byte compatibility descriptor. The signature
+covers all 320 header bytes. The prefix contains an 8-byte magic, 16-bit format
+and header sizes, 16-bit signature algorithm and size, 32-bit payload length,
+the 32-byte payload SHA-256, and zero-filled reserved bytes. Integers use little
+endian. Format version 1 permits only the fixed sizes above.
+
+The application image places its compatibility descriptor at raw-image offset
+`0x200` in a dedicated, retained linker section. Its versioned layout is:
+
+| Offset | Size | Field |
+| ---: | ---: | --- |
+| `0` | 8 | Magic `AZOTA001` |
+| `8` | 2 | Descriptor format version |
+| `10` | 2 | Descriptor size, exactly 256 |
+| `12` | 4 | Security profile |
+| `16` | 32 | NUL-terminated product ID |
+| `48` | 32 | NUL-terminated board ID |
+| `80` | 32 | NUL-terminated firmware version |
+| `112` | 40 | Lowercase hexadecimal source commit |
+| `152` | 4 | Application address |
+| `156` | 4 | Application capacity |
+| `160` | 4 | Package-format version |
+| `164` | 32 | Trusted signing-key SHA-256 identifier |
+| `196` | 60 | Zero-filled reserved bytes |
+
+Strings must contain a NUL within their field and all bytes after it must be
+zero. The descriptor and package format versions are independent and both are
+checked. The build fails unless the linker map places exactly one 256-byte
+descriptor at raw-image offset `0x200`.
+
+After read-back, the Core extracts the embedded descriptor and requires it to be
+byte-for-byte identical to the descriptor copied into the signed package
+header. This prevents a correctly signed image for another product using the
+same signing authority from being accepted solely because it targets AZ3166
+hardware.
 
 The device parses the envelope while streaming but writes only the raw
 application payload at offset zero of the OTA partition, preserving the existing
 bootloader format.
 
-The first format uses an exactly 256-byte header and an exactly 64-byte raw
-ECDSA P-256 signature containing fixed-width `r` and `s` values. Header strings
-have fixed capacities, require termination, and leave unused bytes zero. No
+The first format uses an exactly 320-byte header and an exactly 64-byte raw
+ECDSA P-256 signature containing fixed-width `r` and `s` values. No
 variable-sized header or signature allocation is permitted. Payload length and
 total HTTP `Content-Length` must be checked for overflow and must satisfy:
 
 ```text
-package length = 256 + 64 + payload length
+package length = 320 + 64 + payload length
 ```
 
 All integers have specified widths and byte order. Unknown format versions,
@@ -259,8 +285,13 @@ The Core API must not:
 - reboot automatically before the caller can send a final response; or
 - report success before Flash and activation metadata are verified.
 
-The existing `OTADownloadFirmware()` can be retained as a compatibility wrapper
-that feeds downloaded chunks into the new staging API.
+The existing `OTADownloadFirmware()` accepts a raw application image, not this
+signed package. Preserve it only as a separately named legacy raw-image path so
+existing sketches retain their behavior; deprecate it and document that it
+does not provide the package authenticity guarantees above. It must not call
+the signed package-session API or be used by HomeTemperature. A new URL-based
+signed-package helper, if needed, can feed complete package bytes into the same
+session API used by local upload.
 
 ## 8. Application Responsibilities
 
@@ -317,6 +348,13 @@ request bodies. Local OTA therefore depends on one of these implementations:
 The second option is preferred because OTA should not introduce another
 application-owned HTTP parser. In either case, the body API must stream directly
 to the Core OTA session. It must never buffer an application image in RAM.
+
+The parser-to-body transition must preserve bytes already received after the
+header terminator. `LocalWebServer::readRequest()` currently reads blocks and
+returns immediately at the blank line, so a POST body arriving in that same
+socket read would otherwise be discarded. The streaming API must deliver those
+prefetched bytes first, then continue reading the socket under the same length
+and deadline accounting.
 
 The HTTP layer owns network deadlines and disconnect handling. The OTA session
 owns Flash consistency. A dropped connection calls `abort()` and never calls
@@ -403,13 +441,17 @@ separate recovery and manufacturing review.
 
 ### Phase 3: Add signed artifact tooling
 
-1. Define and version the package envelope and the firmware's embedded
-   compatibility descriptor.
-2. Add a host tool that validates the raw `.bin`, verifies its embedded
-   descriptor, records provenance, computes its digest, signs the matching
-   canonical metadata, and emits the OTA package.
-3. Keep development and production trust roots separate.
-4. Preserve the raw `.bin` and complete Flash image needed for ST-Link
+1. Define and version the package envelope and 256-byte embedded descriptor.
+2. Add a retained linker section at application-image offset `0x200`, populate
+   it from build-generated product, board, version, source, layout, and signing
+   key identifiers, and fail the build when the map or extracted bytes differ.
+3. Add compile and host tests that locate and parse the descriptor in the final
+   `.bin`, not only in an object file.
+4. Add a host tool that validates the raw `.bin`, verifies its embedded
+   descriptor, records provenance, computes its digest, copies the descriptor
+   into the package header, signs that header, and emits the OTA package.
+5. Keep development and production trust roots separate.
+6. Preserve the raw `.bin` and complete Flash image needed for ST-Link
    recovery.
 
 The first OTA-capable HomeTemperature release must be installed through the
