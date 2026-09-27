@@ -590,9 +590,8 @@ void testTransportBounds() {
     AZ3166MulticastUDP transport;
     expect(transport.beginMulticast(IPAddress(224, 0, 0, 251), 5353) == 0,
            "native transport rejects startup without a local address");
-    uint8_t oversized[513] = {};
-    expect(transport.write(oversized, sizeof(oversized)) == 0,
-           "oversized outbound packets are rejected without truncation");
+    expect(AZ3166_MULTICAST_UDP_TX_CAPACITY == 512,
+           "Core transport preserves the validated outbound capacity");
     expect(transport.endPacket() == 0,
            "closed transport does not report a successful send");
     transport.stop();

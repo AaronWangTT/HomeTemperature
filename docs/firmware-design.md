@@ -351,7 +351,7 @@ not the controller's cached state or a backend's clock implementation.
 ArduinoMDNS 1.1.1 supplies DNS encoding, query handling, service registration,
 explicit announcements, and responder cleanup. The checksum-pinned release is
 installed separately into the repository-local sketchbook. Its custom transport
-constructor borrows the AZ3166 raw-lwIP adapter through type erasure; the
+constructor borrows the Core-provided `AZ3166MulticastUDP` through type erasure; the
 firmware does not modify the installed library or board package.
 
 `LocalDiscoveryService` supplies borrowed, process-lifetime hostname, service

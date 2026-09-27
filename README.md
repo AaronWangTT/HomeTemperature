@@ -29,7 +29,7 @@ Sources are grouped by capability under `firmware/AZ3166/src/`: `config/`,
 `connectivity/`, `http/`, `discovery/`, `telemetry/`, `cloud/`, `input/`, and
 `platform/`. Headers stay beside their implementations. The build tooling
 installs the pinned ArduinoMDNS dependency into a repository-local sketchbook;
-`discovery/` retains only the AZ3166-specific raw-lwIP transport adapter.
+`discovery/` uses the Core-provided `AZ3166MulticastUDP` transport.
 
 | Capability | Components | What They Encapsulate |
 | --- | --- | --- |
