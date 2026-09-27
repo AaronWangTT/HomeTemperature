@@ -11,6 +11,7 @@ credentials, or mDNS.
 | --- | --- |
 | [LocalWebServer.h](LocalWebServer.h) | Worker lifecycle, listener readiness, connectivity reconciliation, and bounded HTTP I/O. |
 | [LocalHttpHandler.h](LocalHttpHandler.h) | Application request handler and response contract: status, content type, and exact body length. |
+| [LocalHttpStreamingHandler.h](LocalHttpStreamingHandler.h) | Optional request-body routing, bounded pull-stream API, and streaming limits. |
 | `LocalWebServerOperations` | Replaceable clock and socket operations for focused tests or another transport adapter. |
 | `LocalHttpServiceUpdate` | Optional typed callback for listener availability, independent of the application handler. |
 
@@ -18,14 +19,18 @@ credentials, or mDNS.
 flowchart LR
     Loop[Main loop] -->|Wi-Fi and IPv4 snapshot| Worker[HTTP worker]
     Worker -->|request line and response buffer| Handler[Application handler]
+    Worker -->|validated request and socket ownership| BodyWorker[Streaming worker]
+    BodyWorker -->|bounded body chunks| StreamHandler[Streaming handler]
     Handler -->|status, type, byte count| Worker
     Worker -->|listener availability| Callback[Optional service callback]
 ```
 
 `update(wifiConnected, address)` publishes desired connectivity; it does not
-handle a request on the calling thread. One worker owns the listener and client
-sockets. It checks actual socket open/bind/listen results, retries failures, and
-uses a connection generation to discard outdated startup and I/O work.
+handle a request on the calling thread. One worker owns the listener and
+ordinary client sockets; the optional streaming worker owns each socket
+transferred to it. The listener worker checks actual socket open/bind/listen
+results, retries failures, and uses a connection generation to discard outdated
+startup and I/O work.
 `state()` returns a synchronized readiness/address/error snapshot.
 
 ## Reuse in Another Sketch
@@ -67,6 +72,33 @@ The existing [TelemetryHttpHandler.h](../telemetry/TelemetryHttpHandler.h) is on
 application adapter, not part of the HTTP engine. Another handler can expose a
 different route, payload, or content type using the same server.
 
+## Optional Request-Body Streaming
+
+Existing `LocalHttpHandler` implementations remain request-line handlers. To
+accept a bounded body without buffering it in RAM, also implement
+`LocalHttpStreamingHandler` and use a streaming constructor with explicit
+`LocalHttpStreamingLimits`. `handles()` selects body routes on the listener
+worker. A selected request requires exactly one canonical decimal
+`Content-Length`; duplicate or malformed lengths, any `Transfer-Encoding`,
+lengths over `maxContentLength`, and prefetched bytes beyond the declared length
+are rejected before ownership transfer.
+
+The listener transfers the accepted socket and all bytes already read after
+`\r\n\r\n` to one joinable streaming worker. `LocalHttpBodyStream::read()`
+delivers those prefetched bytes first and then reads bounded chunks from the
+socket under both idle and total deadlines. It reports completion, disconnect,
+timeout, cancellation, and backend errors explicitly. The streaming handler
+must consume exactly the declared length before returning a successful response.
+Only one streaming request can be active; another receives `503` while ordinary
+bounded handlers continue on the listener worker.
+
+Each request carries the current connectivity generation.
+`cancelStreamingRequest(generation)` affects only the matching active request,
+and disconnect, address change, or server shutdown also makes its body stream
+observe cancellation. Cancellation is cooperative: streaming handlers must keep
+their own work bounded and check `LocalHttpBodyStream::cancelled()` while waiting
+outside `read()`.
+
 ## Advertisement and Ownership
 
 Pass `mbed::callback(&discovery, &LocalDiscovery::update)` as the optional final
@@ -81,26 +113,35 @@ constructor argument to connect an existing discovery object. See the
   must remain valid until transmission finishes.
 - Shared application state needs its own synchronization. Keep sensor locks
   short and release them before network operations.
-- Destroying the server requests worker shutdown and joins it. Handlers and
-  callbacks must finish; neither may destroy the server from its own worker.
+- Destroying the server requests both workers to stop, wakes and cancels the
+  streaming worker, and joins both. Handlers and callbacks must finish within
+  their documented bounds; neither may destroy the server from its own worker.
 - Derive from `LocalWebServerOperations` to replace the clock and socket backend.
   The injection constructor borrows it by reference: it must outlive the server,
   including worker shutdown and join. The default backend has process lifetime.
+- A backend shared by listener and streaming workers must return `true` from
+  `supportsConcurrentSockets()` and support concurrent operations on independent
+  descriptors without a global blocking lock. Otherwise pass independent
+  listener and streaming backend instances that share the descriptor namespace.
+  Both instances must outlive the server and all socket owners.
 - Custom operations must use bounded/nonblocking I/O. Their clock can be called
-  from both the main loop and the HTTP worker; keep referenced state valid and
-  synchronized. An interface does not provide thread safety by itself.
+  from the main loop and both HTTP workers; keep referenced state valid and
+  synchronized.
 
 ## Limits and Dependencies
 
 - AZ3166 Core 3.0.0, Mbed RTOS, and lwIP are required by the default backend.
-- One client is handled at a time. The worker uses a 6144-byte stack allocated
-  at startup, plus RTOS and socket resources.
+- Ordinary clients are handled one at a time. Configuring streaming adds one
+  6144-byte worker stack and permits one body request concurrently with bounded
+  listener requests; it does not permit concurrent body uploads.
 - Request line: 96 bytes; total request headers: 2048 bytes; response body:
-  512 bytes. Header reads and response writes each have a two-second deadline.
+  512 bytes; prefetched body: at most 128 bytes. Header reads and response writes
+  each have a two-second deadline. Body size, idle deadline, and total deadline
+  are explicit constructor limits.
 - Responses include `Content-Length` and `Connection: close`; partial writes are
   handled. Bodies may contain binary data within the supplied buffer limit.
-- Request bodies, persistent connections, WebSockets, TLS, and authentication
-  are not implemented. Use this service only on a trusted LAN.
+- Persistent connections, chunked transfer coding, WebSockets, TLS, and
+  authentication are not implemented. Use this service only on a trusted LAN.
 - A slow client can delay another client. Threads do not remove network limits
   or bound arbitrary handler execution. The main-loop watchdog does not provide
   a separate HTTP-worker health check.

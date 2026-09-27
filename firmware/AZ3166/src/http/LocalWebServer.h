@@ -5,6 +5,7 @@
 #include "platform/Callback.h"
 #include "rtos.h"
 #include "LocalHttpHandler.h"
+#include "LocalHttpStreamingHandler.h"
 
 class LocalWebServerOperations {
 public:
@@ -16,6 +17,7 @@ public:
     virtual int receiveBytes(int client, char *buffer, size_t size) = 0;
     virtual int sendBytes(int client, const char *buffer, size_t size) = 0;
     virtual void closeSocket(int descriptor) = 0;
+    virtual bool supportsConcurrentSockets() const { return false; }
 };
 
 class LocalHttpSocket {
@@ -51,6 +53,7 @@ class LocalWebServer {
 public:
     static const int ACCEPT_IDLE = -1;
     static const int ACCEPT_ERROR = -2;
+    static const size_t MAX_PREFETCH_BYTES = 128;
 
     static int classifyAcceptError(int socketError);
 
@@ -67,52 +70,120 @@ public:
         LocalWebServerOperations &operations,
         LocalHttpServiceUpdate serviceUpdate = LocalHttpServiceUpdate());
 
+    LocalWebServer(
+        LocalHttpHandler &handler,
+        LocalHttpStreamingHandler &streamingHandler,
+        const LocalHttpStreamingLimits &streamingLimits,
+        uint16_t port,
+        uint32_t startRetryIntervalMs,
+        LocalHttpServiceUpdate serviceUpdate = LocalHttpServiceUpdate());
+
+    LocalWebServer(
+        LocalHttpHandler &handler,
+        LocalHttpStreamingHandler &streamingHandler,
+        const LocalHttpStreamingLimits &streamingLimits,
+        uint16_t port,
+        uint32_t startRetryIntervalMs,
+        LocalWebServerOperations &operations,
+        LocalHttpServiceUpdate serviceUpdate = LocalHttpServiceUpdate());
+
+    LocalWebServer(
+        LocalHttpHandler &handler,
+        LocalHttpStreamingHandler &streamingHandler,
+        const LocalHttpStreamingLimits &streamingLimits,
+        uint16_t port,
+        uint32_t startRetryIntervalMs,
+        LocalWebServerOperations &listenerOperations,
+        LocalWebServerOperations &streamingOperations,
+        LocalHttpServiceUpdate serviceUpdate = LocalHttpServiceUpdate());
+
     ~LocalWebServer();
 
     void update(bool wifiConnected, uint32_t address);
     LocalWebServerState state() const;
+    bool cancelStreamingRequest(uint32_t generation);
 
 private:
+    friend class LocalHttpBodyStreamImpl;
+
     struct RequestedState {
         uint32_t address;
         uint32_t generation;
         bool shutdown;
     };
 
+    struct ParsedRequest {
+        char requestLine[96];
+        bool hasContentLength;
+        size_t contentLength;
+        size_t prefetchedLength;
+        char prefetched[MAX_PREFETCH_BYTES];
+    };
+
+    struct StreamingJob {
+        bool pending;
+        bool active;
+        bool cancelled;
+        int client;
+        uint32_t generation;
+        size_t contentLength;
+        size_t prefetchedLength;
+        char requestLine[96];
+        char prefetched[MAX_PREFETCH_BYTES];
+    };
+
     LocalWebServer(const LocalWebServer &) = delete;
     LocalWebServer &operator=(const LocalWebServer &) = delete;
     static LocalWebServerOperations &defaultOperations();
+    bool startStreamingWorker();
     RequestedState requestedState() const;
     bool isCurrent(uint32_t generation) const;
+    bool isStreamingCurrent(uint32_t generation) const;
     bool publishState(uint32_t generation, uint32_t address, int error);
     void notifyService(bool available, uint32_t address);
     void run();
-    void serveClient(int client, uint32_t generation);
+    void runStreaming();
+    void serveClient(LocalHttpSocket &client, uint32_t generation);
     bool readRequest(
         int client,
-        char *requestLine,
-        size_t requestLineSize,
+        ParsedRequest &request,
+        uint32_t generation);
+    bool transferStreamingRequest(
+        LocalHttpSocket &client,
+        const ParsedRequest &request,
         uint32_t generation);
     bool sendResponse(
+        LocalWebServerOperations &operations,
         int client,
         const LocalHttpResponse &response,
         const char *body,
-        uint32_t generation);
-    bool sendAll(int client, const char *buffer, size_t size,
-                 uint32_t generation, uint32_t started);
+        uint32_t generation,
+        bool streaming);
+    bool sendAll(LocalWebServerOperations &operations,
+                 int client, const char *buffer, size_t size,
+                 uint32_t generation, uint32_t started, bool streaming);
 
     LocalHttpHandler &handler_;
+    LocalHttpStreamingHandler *streamingHandler_;
+    LocalHttpStreamingLimits streamingLimits_;
     uint16_t port_;
     uint32_t startRetryIntervalMs_;
     LocalWebServerOperations &operations_;
+    LocalWebServerOperations &streamingOperations_;
     LocalHttpServiceUpdate serviceUpdate_;
     mutable rtos::Mutex stateMutex_;
+    mutable rtos::Mutex streamingMutex_;
     rtos::Thread worker_;
+    rtos::Thread streamingWorker_;
+    rtos::Semaphore streamingSignal_;
     RequestedState requested_;
     LocalWebServerState state_;
+    StreamingJob streamingJob_;
     uint32_t lastWorkerAttempt_;
     bool workerAttempted_;
     bool workerStarting_;
+    bool streamingWorkerStarted_;
+    bool streamingWorkerStarting_;
 };
 
 #endif
