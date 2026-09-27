@@ -233,9 +233,10 @@ application payload at offset zero of the OTA partition, preserving the existing
 bootloader format.
 
 The first format uses an exactly 320-byte header and an exactly 64-byte raw
-ECDSA P-256 signature containing fixed-width `r` and `s` values. No
-variable-sized header or signature allocation is permitted. Payload length and
-total HTTP `Content-Length` must be checked for overflow and must satisfy:
+ECDSA P-256 signature containing `r || s`. Each scalar is an unsigned,
+big-endian, exactly 32-byte value, left-padded with zero bytes when necessary.
+No variable-sized header or signature allocation is permitted. Payload length
+and total HTTP `Content-Length` must be checked for overflow and must satisfy:
 
 ```text
 package length = 320 + 64 + payload length
@@ -353,6 +354,21 @@ HomeTemperature should own:
 - scheduling reboot only after the final response is sent; and
 - reporting startup confirmation after the updated image boots.
 
+`LocalOtaController` owns the complete application OTA state behind one mutex.
+Button handling and the main loop may only publish authorization or lifecycle
+commands and read snapshots. HTTP handlers may only reserve a job, transfer an
+upload request to its worker, query a snapshot, or enqueue cancel/apply
+commands. The dedicated upload worker is the sole caller of the Core package
+session and the sole writer to OTA Flash.
+
+Cancellation sets a generation-bound flag under the controller mutex; only the
+upload worker observes that flag and calls `abort()`. Activation is accepted
+only after that worker has completed and published `Ready`. Cloud scheduling
+reads the same synchronized snapshot and skips new uploads while OTA is busy.
+No mutex is held during socket I/O, Flash operations, hashing, signature
+verification, callbacks, or reboot. Reboot is posted to the main loop only
+after activation succeeds and the HTTP response has completed.
+
 Suggested endpoints:
 
 | Method and path | Purpose |
@@ -387,15 +403,19 @@ staging session, activation, or reboot.
 ## 9. HTTP Server Dependency
 
 The current HomeTemperature `LocalWebServer` intentionally does not accept
-request bodies. Local OTA therefore depends on one of these implementations:
+request bodies and synchronously serves one client on its only worker. Local OTA
+therefore requires the proposed Core HTTP server improvements rather than a
+simple body callback added to the current server.
 
-1. extend it with a bounded streaming-body callback; or
-2. first complete the proposed Core HTTP server improvements and use its
-   bounded request-body stream.
+The enhanced Core HTTP server must allow an accepted OTA request and its socket
+to be transferred to one dedicated upload worker. The listener then resumes
+accepting short status and cancellation requests while the upload proceeds.
+Only one detached upload is allowed, and all other request handlers remain
+bounded. Status polling is read-only; cancellation signals the upload owner
+rather than closing or writing its socket from another thread.
 
-The second option is preferred because OTA should not introduce another
-application-owned HTTP parser. In either case, the body API must stream directly
-to the Core OTA session. It must never buffer an application image in RAM.
+The body API streams directly to the Core OTA session and never buffers an
+application image in RAM.
 
 The parser-to-body transition must preserve bytes already received after the
 header terminator. `LocalWebServer::readRequest()` currently reads blocks and
@@ -406,7 +426,7 @@ and deadline accounting.
 
 The HTTP layer owns network deadlines and disconnect handling. The OTA session
 owns Flash consistency. A dropped connection calls `abort()` and never calls
-`OTAActivate()`.
+the session's `activate()` method.
 
 ## 10. Boot and Recovery Limitations
 
@@ -512,9 +532,11 @@ OTA implementation used to authenticate subsequent uploads.
 
 1. Add request-body streaming, length validation, idle and total deadlines, and
    disconnect cancellation to the selected HTTP server.
-2. Reject chunked transfer, multipart bodies, ranges, and extra bytes in the
+2. Add explicit request/socket ownership transfer to a dedicated upload worker
+   so the listener remains available for status and cancellation.
+3. Reject chunked transfer, multipart bodies, ranges, and extra bytes in the
    first version.
-3. Keep the HTTP worker responsive without buffering a complete image in RAM.
+4. Keep the HTTP listener responsive without buffering a complete image in RAM.
 
 ### Phase 5: Integrate HomeTemperature
 
