@@ -188,6 +188,10 @@ responder and worker; stopping a session leaves the worker idle for reuse.
 - This is a small request-line handler API, not a full HTTP framework: request
   bodies, persistent connections, and WebSockets are not supported. Discovery's
   current platform backend supports one advertised service per device.
+- The current firmware does not expose an OTA endpoint. The
+  [local OTA design](../docs/core-local-ota-design.md) proposes signed,
+  physically authorized firmware uploads backed by a transport-independent Core
+  staging API.
 - Cloud uploads, NTP, and Wi-Fi maintenance remain synchronous in the main loop.
   The watchdog still monitors that loop; threads do not remove Wi-Fi bandwidth
   limits or make an arbitrary blocking handler safe.
