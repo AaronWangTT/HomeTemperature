@@ -239,7 +239,7 @@ Suggested endpoints:
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /update` | Serve a small upload page while the OTA window is open. |
+| `GET /ota` | Serve a small upload page while the OTA window is open. |
 | `POST /api/ota` | Stream one signed OTA package using `application/octet-stream`. |
 | `GET /api/ota/status` | Return state, accepted bytes, total bytes, and last error. |
 | `POST /api/ota/apply` | Activate a completely verified staged image. |
