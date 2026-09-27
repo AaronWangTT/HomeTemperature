@@ -459,6 +459,13 @@ publishes success, failure, or uncertain state, and only then exits. An
 authorized cancel request wakes it to abort and exit. HTTP handlers never call
 Core session methods.
 
+Capability expiry and Wi-Fi/address generation changes enqueue the same
+generation-bound cancellation signal, including while the worker waits in
+`Ready`. The worker wakes, calls `abort()`, clears staged `Ready` state and
+capability material, releases the exclusive network lease, and exits. Stale
+timeout or network events from an older generation cannot cancel a newer
+session.
+
 Cloud scheduling reads the same synchronized snapshot and skips new uploads
 while OTA is busy. No mutex is held during socket I/O, Flash operations,
 hashing, signature verification, callbacks, command waits, or reboot.
@@ -498,9 +505,12 @@ Duplicate `Content-Length` fields are rejected even when their values agree.
 Any `Transfer-Encoding` header, including one combined with `Content-Length`,
 is rejected before the request is transferred to the upload worker.
 
-After the fixed package header is available, its payload length must equal the
-validated HTTP length minus 384 before signature verification, admission, or
-Flash erase. Prefetched body data exceeding the declared HTTP length is rejected;
+Before worker transfer or any subtraction, the validated HTTP length must be at
+least 385 bytes: the fixed 384-byte header/signature plus a nonempty payload.
+After the fixed package header is available, its payload length must equal
+`validated_http_length - 384`, using checked arithmetic, before signature
+verification, admission, or Flash erase. Prefetched body data exceeding the
+declared HTTP length is rejected;
 after exactly that many bytes the server closes the connection and does not
 interpret trailing bytes or pipelined requests. Multipart bodies, ranges,
 resume, compression, and concurrent uploads are not supported initially. A
@@ -626,12 +636,15 @@ separate recovery and manufacturing review.
 - TRNG initialization, generation, and short-output failures fail closed;
 - capability expiry, source binding, constant-time comparison, and replay
   rejection work as specified;
+- expiry and Wi-Fi/address generation changes wake a `Ready` worker, clear the
+  staged session, release the lease, and cannot cancel a newer generation;
 - capabilities are rejected in query strings, cookies, and bodies, and missing,
   duplicate, or malformed authorization headers fail before body reads;
 - the authorization window expires and permits only one update;
 - malformed HTTP requests and unsupported transfer encodings are rejected;
 - missing, duplicate, conflicting, malformed, overflowing, undersized, and
   oversized `Content-Length` fields fail before request ownership transfer;
+- lengths below 385 bytes fail before subtracting the fixed 384-byte overhead;
 - package payload length and HTTP body length mismatches fail before Flash
   erase;
 - upload progress and typed failures are reported accurately;
