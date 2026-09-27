@@ -116,7 +116,9 @@ private:
 
     struct ParsedRequest {
         char requestLine[96];
+        bool bodyFramingValid;
         bool hasContentLength;
+        bool hasTransferEncoding;
         size_t contentLength;
         size_t prefetchedLength;
         char prefetched[MAX_PREFETCH_BYTES];

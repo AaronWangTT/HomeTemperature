@@ -1145,6 +1145,45 @@ void testStreamingFramingAndPrefetchedBody() {
     expect(waitForCount(&FakeHttpPlatform::closeClientCount, expectedClosed + 1) &&
                fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 2,
            "one canonical decimal Content-Length accepts surrounding HTTP whitespace");
+
+    const char binary[] =
+        "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\na\0b";
+    queueRequest(binary, sizeof(binary) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, expectedClosed + 2) &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 3,
+           "streaming accepts binary body bytes including NUL");
+    fakeMutex.lock();
+    bool binaryPreserved = fake.streamedLength == 3 &&
+        memcmp(fake.streamedBody, "a\0b", 3) == 0;
+    fakeMutex.unlock();
+    expect(binaryPreserved, "binary body bytes retain their exact values");
+}
+
+void testLegacyRouteFramingCompatibility() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    ExampleStreamingHandler streamingHandler;
+    LocalHttpStreamingLimits limits = {64, 2000, 10000};
+    LocalWebServer server(
+        handler, streamingHandler, limits, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+
+    const char transferEncoding[] =
+        "GET /example HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+    queueRequest(transferEncoding, sizeof(transferEncoding) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+               outputContains("HTTP/1.1 200 OK"),
+           "legacy request-line routes retain Transfer-Encoding compatibility");
+
+    const char duplicateLength[] =
+        "GET /example HTTP/1.1\r\nContent-Length: bad\r\n"
+        "Content-Length: 3\r\n\r\n";
+    queueRequest(duplicateLength, sizeof(duplicateLength) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 2) &&
+               outputContains("HTTP/1.1 200 OK") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 2 &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 0,
+           "legacy handlers remain isolated from streaming-only framing rules");
 }
 
 void testStreamingFaultsAndGenerationCancellation() {
@@ -1468,6 +1507,7 @@ void setup() {
     testRequestLineBoundary();
     testRequestBoundsAndDisconnect();
     testStreamingFramingAndPrefetchedBody();
+    testLegacyRouteFramingCompatibility();
     testStreamingFaultsAndGenerationCancellation();
     testStreamingListenerResponsiveness();
     testStreamingBackendAndShutdownBounds();

@@ -756,7 +756,8 @@ void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
         response = {"400 Bad Request", "application/json", strlen(body)};
     } else if (streamingHandler_ != NULL &&
                streamingHandler_->handles(request.requestLine)) {
-        if (!request.hasContentLength ||
+        if (!request.bodyFramingValid || request.hasTransferEncoding ||
+            !request.hasContentLength ||
             request.contentLength > streamingLimits_.maxContentLength ||
             request.prefetchedLength > request.contentLength) {
             strcpy(body, "{\"error\":\"invalid content length\"}");
@@ -867,7 +868,9 @@ bool LocalWebServer::readRequest(
     memcpy(request.requestLine, receivedBytes, requestLineLength);
     request.requestLine[requestLineLength] = '\0';
 
+    request.bodyFramingValid = true;
     request.hasContentLength = false;
+    request.hasTransferEncoding = false;
     request.contentLength = 0;
     size_t position = requestLineLength + 2;
     size_t headersEnd = headerLength - 2;
@@ -879,7 +882,8 @@ bool LocalWebServer::readRequest(
             ++lineEnd;
         }
         if (lineEnd + 1 >= headerLength || lineEnd == position) {
-            return false;
+            request.bodyFramingValid = false;
+            break;
         }
 
         size_t colon = position;
@@ -887,24 +891,26 @@ bool LocalWebServer::readRequest(
             unsigned char current =
                 static_cast<unsigned char>(receivedBytes[colon]);
             if (current <= 32 || current >= 127) {
-                return false;
+                request.bodyFramingValid = false;
             }
             ++colon;
         }
         if (colon == position || colon == lineEnd) {
-            return false;
+            request.bodyFramingValid = false;
+            position = lineEnd + 2;
+            continue;
         }
         const char *name = receivedBytes + position;
         size_t nameLength = colon - position;
         const char *value = receivedBytes + colon + 1;
         size_t valueLength = lineEnd - colon - 1;
         if (asciiEqualIgnoreCase(name, nameLength, "transfer-encoding")) {
-            return false;
+            request.hasTransferEncoding = true;
         }
         if (asciiEqualIgnoreCase(name, nameLength, "content-length")) {
             if (request.hasContentLength ||
                 !parseContentLength(value, valueLength, request.contentLength)) {
-                return false;
+                request.bodyFramingValid = false;
             }
             request.hasContentLength = true;
         }
