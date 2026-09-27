@@ -280,9 +280,20 @@ Before staging, validate that the payload:
 - fits the internal application partition;
 - declares an application address and capacity exactly equal to the values
   returned for `MICO_PARTITION_APPLICATION`;
-- has a plausible STM32 vector table for the configured application region; and
+- contains at least the first two 32-bit little-endian vector entries;
+- has an initial stack pointer aligned to 8 bytes and inside
+  `(0x200001C4, 0x20040000]`, the RAM region from the pinned linker script;
+- has a reset-vector Thumb bit equal to one and, after clearing that bit, a
+  reset-handler address inside
+  `[application_start, application_start + payload_length)` with checked
+  addition;
+- uses an application start aligned to 512 bytes; and
 - contains a valid embedded compatibility descriptor matching the signed
   product, board, version, and format-generation metadata.
+
+The host package builder applies these same vector predicates before signing,
+and Core tests reject each invalid boundary, misalignment, cleared Thumb bit,
+and reset address outside the uploaded image.
 
 ## 7. Core Responsibilities
 
@@ -416,8 +427,12 @@ upload worker observes that flag and calls `abort()`. Activation is accepted
 only after that worker has completed and published `Ready`. Cloud scheduling
 reads the same synchronized snapshot and skips new uploads while OTA is busy.
 No mutex is held during socket I/O, Flash operations, hashing, signature
-verification, callbacks, or reboot. Reboot is posted to the main loop only
-after activation succeeds and the HTTP response has completed.
+verification, callbacks, or reboot. After activation succeeds, the HTTP handler makes one bounded attempt to send
+the final response and then posts reboot to the main loop regardless of whether
+that send succeeds. A lost response may leave the operator uncertain, but it
+must not leave a bootable pending update on the old application with a consumed
+capability. Activation failure does not schedule reboot and leaves an explicit
+error state.
 
 Suggested endpoints:
 
@@ -550,6 +565,8 @@ separate recovery and manufacturing review.
 - normal connection close after a completed upload preserves the capability
   through the separate apply or cancel request;
 - the response completes before reboot;
+- successful activation schedules reboot after the response attempt even when
+  that response fails or the client disconnects;
 - mDNS and telemetry behavior recover after a cancelled upload; and
 - downgrade policy requires explicit maintenance authorization.
 
