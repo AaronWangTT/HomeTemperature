@@ -127,19 +127,20 @@ prove that an uploaded image was authorized.
 
 The proposed design requires both:
 
-1. **Physical presence:** a client first requests an OTA session, then the
-   operator confirms that specific pending request by holding both device
-   buttons within 30 seconds. Confirmation consumes the pending request and
-   grants one five-minute OTA capability.
+1. **Physical presence:** the operator first holds both device buttons to open
+   a 30-second claim window. The device generates and displays an eight-digit
+   hexadecimal challenge on its OLED. The intended browser submits that
+   challenge and receives one five-minute OTA capability.
 2. **Signed firmware:** each package is signed offline. The firmware contains
    only the public verification key; the private key must never be stored in
    this repository or on the device.
 
-The confirmed session receives a random 128-bit capability generated through
+The challenge and confirmed session capability are generated through
 the Core's Mbed HAL `trng_init()`, `trng_get_bytes()`, and `trng_free()` API.
-Generation succeeds only when `trng_get_bytes()` returns zero and reports all
-16 requested bytes. Initialization failure, a short result, or any generator
-error rejects authorization and leaves OTA disabled; time values,
+The challenge uses 4 random bytes and the capability uses a separate 16 random
+bytes. Generation succeeds only when `trng_get_bytes()` returns zero and reports
+the complete requested length. Initialization failure, a short result, or any
+generator error rejects authorization and leaves OTA disabled; time values,
 `Arduino::random()`, device IDs, and partially filled output must never be used
 as fallback entropy.
 
@@ -165,8 +166,11 @@ all bytes with the active capability in constant time. It rejects missing,
 duplicate, malformed, expired, wrong-address, or wrong-generation credentials
 with `401 Unauthorized` before reading an upload body or mutating OTA state.
 Capabilities are forbidden in URLs, cookies, request bodies, response bodies
-other than the initial successful claim, and logs. The browser retains the
-capability only in memory.
+other than the successful claim, and logs. The browser retains the capability
+only in memory. The challenge is not a capability: it is displayed only after
+device-side physical initiation, accepted once from the first matching local
+request, hidden immediately after claim/expiry, and rate limited to three
+failed attempts per window.
 
 Core 3.0.0 includes the Mbed TLS sources for SHA-256, ECDSA, secp256r1, and
 public-key parsing, but its effective `mbed_config.h` enables only SHA-256.
@@ -303,9 +307,9 @@ Before staging, validate that the payload:
 - has an initial stack pointer aligned to 8 bytes and inside
   `(0x200001C4, 0x20040000]`, the RAM region from the pinned linker script;
 - has a reset-vector Thumb bit equal to one and, after clearing that bit, a
-  reset-handler address inside
-  `[application_start, application_start + payload_length)` with checked
-  addition;
+  reset-handler address at or above `application_start` with checked
+  `reset_handler + 2 <= application_start + payload_length`, guaranteeing one
+  complete 16-bit Thumb instruction lies inside the image;
 - uses an application start aligned to 512 bytes; and
 - contains a valid embedded compatibility descriptor matching the signed
   product, board, version, and format-generation metadata.
@@ -428,26 +432,19 @@ upload request to its worker, query a snapshot, or enqueue cancel/apply
 commands. The dedicated OTA worker is the sole caller of the Core package
 session and the sole writer to OTA Flash and boot metadata.
 
-One pending session request is allowed. The HTTP side records its generation
-and source address and immediately returns `202 Accepted` with a random,
-nonsecret request ID and a 30-second expiry. It never waits for physical
-confirmation on the HTTP worker. Confirmation creates the capability and closes
-the claim window; it never authorizes an arbitrary later caller. An unconfirmed
-request expires without reserving Flash or blocking cloud work.
-
-The same source polls `GET /api/ota/session?id=<request-id>`. Before
-confirmation it receives only pending/expired state. After confirmation, exactly
-one successful poll atomically consumes the request and returns the capability;
-later polls return not found. Request IDs carry no authority, may appear in a
-query string, are rate limited, and cannot retrieve a capability from a
-different source address.
+Only device-side initiation can open a claim window. The HTTP server cannot
+create or extend it. During that window, `POST /api/ota/session` accepts an exact
+JSON object containing the displayed challenge, subject to request-size and
+attempt limits. The first correct submission atomically closes the window,
+clears the display, binds the new capability to that request's source address
+and generation, and returns it. Wrong submissions reveal only authorization
+failure; no endpoint reports the challenge or whether another value was closer.
 
 The input layer adds a distinct simultaneous-button hold event for OTA
-confirmation. While a session request is awaiting confirmation, that chord is
-consumed before the existing `uploadRequested` and `toggleUploadPause` events
-reach their cloud handlers. A chord that is too short or occurs without a
-pending request does not authorize OTA and follows an explicitly tested normal
-button policy.
+initiation. That chord is consumed before the existing `uploadRequested` and
+`toggleUploadPause` events reach their cloud handlers. It opens a new challenge
+window only when OTA is idle; otherwise it follows an explicitly tested
+maintenance policy. A chord that is too short follows the normal button policy.
 
 Before a cloud upload starts, the main loop atomically acquires a shared
 coordinator lease and marks the cloud operation in flight; it releases that
@@ -499,9 +496,8 @@ Suggested endpoints:
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /ota` | Serve the upload page; mutations remain disabled until physical confirmation. |
-| `POST /api/ota/session` | Create one pending physical-confirmation request and immediately return its nonsecret request ID. |
-| `GET /api/ota/session?id=...` | Poll pending state and atomically claim the capability once from the same source after confirmation. |
+| `GET /ota` | Serve the upload page; mutations remain disabled until a displayed challenge is claimed. |
+| `POST /api/ota/session` | Submit the physically initiated, OLED-displayed challenge and atomically receive a capability. |
 | `POST /api/ota` | With the capability, stream one signed OTA package using `application/octet-stream`. |
 | `GET /api/ota/status` | With the capability, return state, accepted bytes, total bytes, and last error. |
 | `POST /api/ota/apply` | With the capability, activate a completely verified staged image. |
@@ -531,10 +527,10 @@ automation.
 Suggested application states:
 
 ```text
-Disabled -> AwaitingPhysicalConfirmation -> Armed
-    -> WaitingForNetworkLease -> Receiving -> Verifying -> Ready -> Applying
-                                      |             |          |
-                                      +-----------> Error <----+
+Disabled -> ChallengeDisplayed -> Armed -> WaitingForNetworkLease
+    -> Receiving -> Verifying -> Ready -> Applying
+            |             |          |
+            +-----------> Error <----+
 ```
 
 Only `Ready` may transition to `Applying`. Before activation begins, timeout,
@@ -630,6 +626,8 @@ separate recovery and manufacturing review.
 - unknown or mismatched signature algorithms and security profiles rejected
   before erase;
 - invalid header, product, board ID, version, hash, and signature;
+- reset vectors at the final byte, outside the image, without Thumb state, and
+  with invalid stack pointers;
 - disagreement between signed package metadata and the embedded firmware
   descriptor;
 - repeated begin, abort, finish, and activation calls;
@@ -643,12 +641,11 @@ separate recovery and manufacturing review.
 ### HomeTemperature tests
 
 - OTA routes are unavailable outside the physical authorization window;
-- only the pending requester can claim a physical confirmation;
-- creating a pending request returns immediately and cannot occupy the sole
-  listener while confirmation is pending;
-- request-ID polling is source-bound, rate limited, and returns the capability
-  at most once;
-- an OTA confirmation chord is consumed before cloud button actions;
+- only a device-side button chord opens a challenge window;
+- the OLED challenge is random, time limited, rate limited, single use, and
+  never exposed by another endpoint or log;
+- the first correct challenge submission receives a source-bound capability;
+- the OTA initiation chord is consumed before cloud button actions;
 - TRNG initialization, generation, and short-output failures fail closed;
 - capability expiry, source binding, constant-time comparison, and replay
   rejection work as specified;
@@ -683,6 +680,8 @@ separate recovery and manufacturing review.
   enters fatal maintenance and blocks release;
 - mDNS and telemetry behavior recover after a cancelled upload; and
 - downgrade policy requires explicit maintenance authorization.
+- production build, package, and wired-install paths reject development or
+  unallowlisted signing-key identifiers.
 
 ### Hardware acceptance
 
@@ -728,13 +727,21 @@ separate recovery and manufacturing review.
 4. Add a host tool that validates the raw `.bin`, verifies its embedded
    descriptor, records provenance, computes its digest, copies the descriptor
    into the package header, signs that header, and emits the OTA package.
-5. Keep development and production trust roots separate.
+5. Define an immutable production signing-key identifier allowlist in reviewed
+   source. Production firmware builds fail unless their embedded descriptor uses
+   an allowlisted production identifier, and production package generation
+   rejects every other key. Development builds use a distinct security/build
+   profile and cannot produce artifacts labeled as production.
 6. Preserve the raw `.bin` and complete Flash image needed for ST-Link
    recovery.
 
 The first OTA-capable HomeTemperature release must be installed through the
 wired ST-Link workflow. That trusted bootstrap installs the public key and local
-OTA implementation used to authenticate subsequent uploads.
+OTA implementation used to authenticate subsequent uploads. The wired release
+installer independently verifies that the embedded key identifier is on the
+same production allowlist before writing the bootstrap image, then reads back
+the descriptor and key material. A build-time flag or package-supplied manifest
+cannot override this production gate.
 
 ### Phase 4: Enhance HomeTemperature HTTP body streaming
 
