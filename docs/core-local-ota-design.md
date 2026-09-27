@@ -63,7 +63,12 @@ partition address, image length, application/upgrade markers, and CRC16 into the
 MICO boot table. Its return path does not reliably propagate the result of
 persisting that boot table. This behavior must be corrected or wrapped with
 independent verification before an application reports that activation is
-ready.
+ready. The enhanced Core must snapshot the previous boot-table entry, write and
+read back the candidate entry, and return success only after exact verification.
+On failure it restores and verifies the previous entry. If neither committed
+state can be established, it returns `OTA_ACTIVATION_UNCERTAIN`; this state
+cannot be reported as an ordinary failure or released back to normal operation.
+Shipping remains blocked until hardware tests prove this recovery contract.
 
 ## 3. ESP32-S3 Reference
 
@@ -148,6 +153,20 @@ capability. The server emits no CORS permission for these routes and rejects
 conflicting `Host` or `Origin` values. Plain HTTP cannot prevent a local passive
 observer from stealing a capability, so the feature remains restricted to a
 trusted LAN.
+
+The wire representation is exactly:
+
+```http
+Authorization: OTA <32 lowercase hexadecimal characters>
+```
+
+The server accepts exactly one such header, decodes it to 16 bytes, and compares
+all bytes with the active capability in constant time. It rejects missing,
+duplicate, malformed, expired, wrong-address, or wrong-generation credentials
+with `401 Unauthorized` before reading an upload body or mutating OTA state.
+Capabilities are forbidden in URLs, cookies, request bodies, response bodies
+other than the initial successful claim, and logs. The browser retains the
+capability only in memory.
 
 Core 3.0.0 includes the Mbed TLS sources for SHA-256, ECDSA, secp256r1, and
 public-key parsing, but its effective `mbed_config.h` enables only SHA-256.
@@ -359,6 +378,9 @@ Exact names are not prescribed, but the Core implementation should own:
   Core's current `Ready` state, then consuming that capability so it cannot be
   replayed;
 - writing and verifying boot-table activation metadata;
+- restoring and verifying the previous boot-table entry after any failed
+  activation write, with a distinct uncertain result if restoration cannot be
+  proven;
 - stable, typed error codes;
 - progress counters that do not depend on a network transport; and
 - injectable Flash operations for host-side fault tests.
@@ -430,12 +452,23 @@ upload worker observes that flag and calls `abort()`. Activation is accepted
 only after that worker has completed and published `Ready`. Cloud scheduling
 reads the same synchronized snapshot and skips new uploads while OTA is busy.
 No mutex is held during socket I/O, Flash operations, hashing, signature
-verification, callbacks, or reboot. After activation succeeds, the HTTP handler makes one bounded attempt to send
-the final response and then posts reboot to the main loop regardless of whether
-that send succeeds. A lost response may leave the operator uncertain, but it
-must not leave a bootable pending update on the old application with a consumed
-capability. Activation failure does not schedule reboot and leaves an explicit
-error state.
+verification, callbacks, or reboot.
+
+After activation succeeds, a bootable pending update intentionally exists while
+the old application is still running. The HTTP handler makes one bounded
+attempt to send the final response and then posts reboot to the main loop
+regardless of whether that send succeeds. A reset or power loss in this window
+follows the same bootloader path and applies the already authenticated staged
+image.
+
+A verified activation failure restores and confirms the previous boot-table
+entry, does not schedule reboot, and may leave the staged image available for a
+new activation attempt. `OTA_ACTIVATION_UNCERTAIN` instead enters a fatal
+maintenance state: cloud and OTA mutations remain disabled, no success or
+ordinary retry response is emitted, and the operator is instructed not to power
+cycle and to restore the device through ST-Link. The feature cannot ship unless
+hardware tests demonstrate that this state is either unreachable through an
+atomic metadata update or reliably detectable and recoverable.
 
 Suggested endpoints:
 
@@ -546,6 +579,8 @@ separate recovery and manufacturing review.
 - disagreement between signed package metadata and the embedded firmware
   descriptor;
 - repeated begin, abort, finish, and activation calls;
+- exact read-back of the new boot-table entry and restoration of the previous
+  entry after every injected activation failure;
 - power-loss simulation after each persistent state transition; and
 - compatibility of the URL downloader wrapper.
 
@@ -557,6 +592,8 @@ separate recovery and manufacturing review.
 - TRNG initialization, generation, and short-output failures fail closed;
 - capability expiry, source binding, constant-time comparison, and replay
   rejection work as specified;
+- capabilities are rejected in query strings, cookies, and bodies, and missing,
+  duplicate, or malformed authorization headers fail before body reads;
 - the authorization window expires and permits only one update;
 - malformed HTTP requests and unsupported transfer encodings are rejected;
 - upload progress and typed failures are reported accurately;
@@ -570,6 +607,8 @@ separate recovery and manufacturing review.
 - the response completes before reboot;
 - successful activation schedules reboot after the response attempt even when
   that response fails or the client disconnects;
+- verified activation failure leaves no pending update, while an uncertain
+  activation enters fatal maintenance and blocks release;
 - mDNS and telemetry behavior recover after a cancelled upload; and
 - downgrade policy requires explicit maintenance authorization.
 
