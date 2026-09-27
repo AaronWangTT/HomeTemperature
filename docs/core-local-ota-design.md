@@ -108,7 +108,11 @@ adding account management solely for OTA would be a separate product decision.
 The Core owns cryptographic implementation but not trust policy: it may verify
 an image with a caller-supplied public key, while the application decides which
 key, product, board, and version are acceptable. The private key exists only in
-the release environment.
+the release environment. Format version 1 accepts the public key only as a
+DER-encoded RFC 5480 SubjectPublicKeyInfo for the named secp256r1 curve. The
+32-byte signing-key identifier is SHA-256 over those exact DER bytes. The host
+tool and Core reject other key encodings and require the descriptor identifier
+to equal the digest of the configured trust anchor before admission.
 
 ## 5. Security Model
 
@@ -185,7 +189,12 @@ covers all 320 header bytes. Format version 1 defines the prefix as:
 | `64` | 256 | Exact copy of the compatibility descriptor |
 
 All integers are unsigned and little endian. The signature begins at package
-offset 320, and the raw application begins at package offset 384.
+offset 320, and the raw application begins at package offset 384. The parser
+must validate the magic, all fixed sizes and identifiers, reserved bytes, exact
+package-length equation, descriptor encoding, runtime partition values, signing
+key identifier, and header signature before invoking application admission or
+erasing the staging partition. Only checks that depend on payload bytes are
+deferred until streaming and read-back.
 
 The application image places its compatibility descriptor at raw-image offset
 `0x200` in a dedicated, retained linker section. Its versioned layout is:
@@ -232,10 +241,11 @@ total HTTP `Content-Length` must be checked for overflow and must satisfy:
 package length = 320 + 64 + payload length
 ```
 
-All integers have specified widths and byte order. Unknown format versions,
-target board IDs, algorithms, nonzero reserved bytes, inconsistent lengths, or
-trailing bytes are rejected before activation. Tests must include oversized and
-malformed header, signature, and payload declarations.
+Unknown format versions, target board IDs, algorithms, nonzero reserved bytes,
+inconsistent lengths, or impossible payload declarations are rejected before
+Flash erase. Payload hash mismatches, embedded descriptor mismatches, and
+trailing bytes are rejected before staging completes. Tests must include
+oversized and malformed header, signature, and payload declarations.
 
 Before staging, validate that the payload:
 
@@ -263,22 +273,24 @@ class OTAUpdateSession {
 public:
     OTAResult begin(
         size_t packageSize,
-        const uint8_t *trustedPublicKey,
-        size_t trustedPublicKeySize,
+        const uint8_t *trustedPublicKeyDer,
+        size_t trustedPublicKeyDerSize,
         OTAAdmissionCallback admit,
         void *context);
     OTAResult writePackage(const uint8_t *data, size_t size);
-    OTAResult finish(OTAImageInfo *result);
+    OTAResult finish(OTAStagedImageInfo *result);
+    OTAResult activate(
+        uint32_t sessionId,
+        const uint8_t expectedSha256[32]);
     void abort();
 };
-
-OTAResult OTAActivate(const OTAImageInfo &image);
 ```
 
 Exact names are not prescribed, but the Core implementation should own:
 
 - incrementally parsing a fixed-size envelope across arbitrary input chunks;
 - buffering only the bounded header and signature, never the complete image;
+- preserving payload bytes that share the input chunk completing the signature;
 - verifying the 320-byte header signature with the supplied trust anchor before
   exposing authenticated metadata to the admission callback or erasing Flash;
 - invoking the admission callback only after signature verification and before
@@ -300,6 +312,11 @@ Exact names are not prescribed, but the Core implementation should own:
 - deterministic begin/write/finish/abort state transitions;
 - exclusive ownership of one active staging session;
 - clearing incomplete state without marking an image bootable;
+- assigning a nonzero session generation and retaining the current staged
+  generation and SHA-256 internally;
+- accepting activation only when the supplied generation and digest match the
+  Core's current `Ready` state, then consuming that capability so it cannot be
+  replayed;
 - writing and verifying boot-table activation metadata;
 - stable, typed error codes;
 - progress counters that do not depend on a network transport; and
@@ -362,7 +379,10 @@ Disabled -> Armed -> Receiving -> Verifying -> Ready -> Applying
 
 Only `Ready` may transition to `Applying`. Timeout, disconnect, overflow,
 signature failure, hash mismatch, Flash failure, or cancellation must leave no
-bootable pending update.
+bootable pending update. The job ID and digest returned by `finish()` identify
+only the Core's current in-memory `Ready` state; they are not caller-authoritative
+image metadata. Activation must fail after cancellation, another successful
+staging session, activation, or reboot.
 
 ## 9. HTTP Server Dependency
 
@@ -464,8 +484,9 @@ separate recovery and manufacturing review.
 1. Add the transport-independent begin/write/finish/abort/activate API.
 2. Add partition discovery, erase, bounds checks, CRC16, SHA-256, read-back,
    image-shape checks, typed errors, and exclusive session ownership.
-3. Add Flash and clock injection with fault tests.
-4. Preserve `OTADownloadFirmware()` as a deprecated legacy raw-image path,
+3. Add authenticated pre-erase admission and session-bound activation.
+4. Add Flash and clock injection with fault tests.
+5. Preserve `OTADownloadFirmware()` as a deprecated legacy raw-image path,
    separate from the signed package-session API.
 
 ### Phase 3: Add signed artifact tooling
