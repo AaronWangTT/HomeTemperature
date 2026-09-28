@@ -418,6 +418,10 @@ class CliTests(unittest.TestCase):
         self.assertIn("compiler.link.script.flags=-T$linkerScript", script)
         self.assertIn("compiler.cpp.extra_flags=-include $stagedOtaBuildConfig", script)
         self.assertIn('$openOcdBinaryPath = $binaryPath.Replace("\\", "/")', script)
+        self.assertIn(
+            '"program {$openOcdBinaryPath} verify reset 0x800C000; shutdown"',
+            script,
+        )
         self.assertNotIn("Uploading validated $binaryPath to $Board on $Port", script)
         self.assertIn(
             '$Action -eq "Upload" -and -not $isProductionSketch',
