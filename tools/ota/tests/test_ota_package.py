@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -24,6 +25,8 @@ from ota_package import (  # noqa: E402
     load_public_key,
     load_private_key,
     public_key_der,
+    require_production_key,
+    require_trusted_key,
     render_build_config,
     verify_package,
 )
@@ -150,7 +153,9 @@ class PackageTests(unittest.TestCase):
             load_private_key(Path(__file__))
 
     def test_renders_public_firmware_build_config(self) -> None:
-        rendered = render_build_config(self.public_der, VERSION, SOURCE)
+        key_id = hashlib.sha256(self.public_der).hexdigest()
+        with patch("ota_package.PRODUCTION_KEY_IDS", frozenset({key_id})):
+            rendered = render_build_config(self.public_der, VERSION, SOURCE)
         self.assertIn(
             f'#define HOME_TEMPERATURE_FIRMWARE_VERSION "{VERSION}"', rendered
         )
@@ -163,6 +168,26 @@ class PackageTests(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("PRIVATE", rendered)
+
+    def test_rejects_unallowlisted_production_key(self) -> None:
+        with self.assertRaisesRegex(PackageError, "production allowlist"):
+            require_production_key(self.public_der)
+
+    def test_accepts_reviewed_production_key(self) -> None:
+        key_id = hashlib.sha256(self.public_der).hexdigest()
+        with patch("ota_package.PRODUCTION_KEY_IDS", frozenset({key_id})):
+            require_production_key(self.public_der)
+
+    def test_development_profile_accepts_ephemeral_key(self) -> None:
+        require_trusted_key(self.public_der, "development")
+        rendered = render_build_config(
+            self.public_der, VERSION, SOURCE, profile="development"
+        )
+        self.assertIn("HOME_TEMPERATURE_OTA_PUBLIC_KEY_DER_BYTES", rendered)
+
+    def test_rejects_unknown_trust_profile(self) -> None:
+        with self.assertRaisesRegex(PackageError, "trust profile"):
+            require_trusted_key(self.public_der, "staging")
 
 
 if __name__ == "__main__":

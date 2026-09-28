@@ -14,6 +14,8 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
     encode_dss_signature,
 )
 
+from production_key_ids import PRODUCTION_KEY_IDS
+
 PACKAGE_MAGIC = b"AZPKG001"
 DESCRIPTOR_MAGIC = b"AZOTA001"
 PACKAGE_PREFIX_SIZE = 64
@@ -177,7 +179,29 @@ def public_key_der(private_key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
-def render_build_config(public_der: bytes, version: str, source: str) -> str:
+def require_trusted_key(public_der: bytes, profile: str) -> None:
+    if profile == "development":
+        return
+    if profile != "production":
+        raise PackageError("trust profile must be production or development")
+    key_id = hashlib.sha256(public_der).hexdigest()
+    if key_id not in PRODUCTION_KEY_IDS:
+        raise PackageError(
+            f"signing key ID {key_id} is not in the reviewed production allowlist"
+        )
+
+
+def require_production_key(public_der: bytes) -> None:
+    require_trusted_key(public_der, "production")
+
+
+def render_build_config(
+    public_der: bytes,
+    version: str,
+    source: str,
+    profile: str = "production",
+) -> str:
+    require_trusted_key(public_der, profile)
     _parse_version(version)
     if _SOURCE_PATTERN.fullmatch(source) is None:
         raise PackageError("source commit must be 40 lowercase hexadecimal characters")

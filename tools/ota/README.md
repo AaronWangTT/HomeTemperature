@@ -17,6 +17,18 @@ private-key path explicitly with `--private-key` or set
 `HOME_TEMPERATURE_OTA_PRIVATE_KEY` to that path. The CLI never prints private
 key material. Do not commit the key.
 
+Production operations are fail-closed and are the default. Add the lowercase SHA-256 of the
+canonical public-key DER to the reviewed
+`tools/ota/production_key_ids.py` allowlist before generating build
+configuration, signing, uploading, or applying. The allowlist is intentionally
+empty until the production trust anchor is approved.
+
+For isolated development hardware, pass `--profile development` to
+`build-config`, `build`, `verify`, `upload`, and `apply`. This profile permits a
+non-allowlisted key but does not relax key type, descriptor, vector, signature,
+or digest validation. A development key cannot be used accidentally when the
+option is omitted.
+
 The raw `.bin` must already contain its retained 256-byte `AZOTA001`
 compatibility descriptor at offset `0x200`. Its canonical product, board,
 version, source commit, application layout, package format, and key identifier

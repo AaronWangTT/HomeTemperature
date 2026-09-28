@@ -133,6 +133,7 @@ class CliTests(unittest.TestCase):
         self.public_key = root / "public.der"
         self.package.write_bytes(package)
         self.public_key.write_bytes(public_der)
+        self.production_key_id = hashlib.sha256(public_der).hexdigest()
         OtaHandler.package = b""
         OtaHandler.applied = False
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), OtaHandler)
@@ -168,54 +169,66 @@ class CliTests(unittest.TestCase):
             CAPABILITY,
         )
         self.assertEqual(self.run_cli("status", *common), 0)
-        self.assertEqual(
-            self.run_cli(
-                "upload",
-                *common,
-                "--package",
-                str(self.package),
-                "--public-key",
-                str(self.public_key),
-            ),
-            0,
-        )
+        with patch(
+            "ota_package.PRODUCTION_KEY_IDS",
+            frozenset({self.production_key_id}),
+        ):
+            self.assertEqual(
+                self.run_cli(
+                    "upload",
+                    *common,
+                    "--package",
+                    str(self.package),
+                    "--public-key",
+                    str(self.public_key),
+                ),
+                0,
+            )
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest()
-        self.assertEqual(
-            self.run_cli(
-                "apply",
-                *common,
-                "--package",
-                str(self.package),
-                "--public-key",
-                str(self.public_key),
-                "--generation",
-                "7",
-                "--digest",
-                digest,
-                "--reboot-timeout",
-                "2",
-            ),
-            0,
-        )
+        with patch(
+            "ota_package.PRODUCTION_KEY_IDS",
+            frozenset({self.production_key_id}),
+        ):
+            self.assertEqual(
+                self.run_cli(
+                    "apply",
+                    *common,
+                    "--package",
+                    str(self.package),
+                    "--public-key",
+                    str(self.public_key),
+                    "--generation",
+                    "7",
+                    "--digest",
+                    digest,
+                    "--reboot-timeout",
+                    "2",
+                ),
+                0,
+            )
         self.assertEqual(OtaHandler.package, self.package.read_bytes())
         self.assertTrue(OtaHandler.applied)
 
     def test_generates_public_build_configuration(self) -> None:
         output = Path(self.directory.name) / "ota-build-config.h"
-        self.assertEqual(
-            self.run_cli(
-                "build-config",
-                "--public-key",
-                str(self.public_key),
-                "--output",
-                str(output),
-                "--version",
-                VERSION,
-                "--source",
-                SOURCE,
-            ),
-            0,
-        )
+        with patch(
+            "ota_package.PRODUCTION_KEY_IDS",
+            frozenset({self.production_key_id}),
+        ):
+            self.assertEqual(
+                self.run_cli(
+                    "build-config",
+                    "--public-key",
+                    str(self.public_key),
+                    "--output",
+                    str(output),
+                    "--version",
+                    VERSION,
+                    "--source",
+                    SOURCE,
+                ),
+                0,
+            )
         rendered = output.read_text(encoding="ascii")
         self.assertIn(
             f'#define HOME_TEMPERATURE_FIRMWARE_VERSION "{VERSION}"',
@@ -232,6 +245,22 @@ class CliTests(unittest.TestCase):
                 self.base_url,
                 "--capability",
                 "f" * 32,
+            ),
+            1,
+        )
+
+    def test_rejects_unallowlisted_upload_key(self) -> None:
+        self.assertEqual(
+            self.run_cli(
+                "upload",
+                "--base-url",
+                self.base_url,
+                "--capability",
+                CAPABILITY,
+                "--package",
+                str(self.package),
+                "--public-key",
+                str(self.public_key),
             ),
             1,
         )
@@ -258,26 +287,30 @@ class CliTests(unittest.TestCase):
 
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()
-        self.assertEqual(
-            self.run_cli(
-                "apply",
-                "--base-url",
-                self.base_url,
-                "--capability",
-                CAPABILITY,
-                "--package",
-                str(self.package),
-                "--public-key",
-                str(self.public_key),
-                "--generation",
-                "7",
-                "--digest",
-                digest,
-                "--reboot-timeout",
-                "0",
-            ),
-            1,
-        )
+        with patch(
+            "ota_package.PRODUCTION_KEY_IDS",
+            frozenset({self.production_key_id}),
+        ):
+            self.assertEqual(
+                self.run_cli(
+                    "apply",
+                    "--base-url",
+                    self.base_url,
+                    "--capability",
+                    CAPABILITY,
+                    "--package",
+                    str(self.package),
+                    "--public-key",
+                    str(self.public_key),
+                    "--generation",
+                    "7",
+                    "--digest",
+                    digest,
+                    "--reboot-timeout",
+                    "0",
+                ),
+                1,
+            )
 
 
 if __name__ == "__main__":

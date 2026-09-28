@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "P-256 curve type checks are not credentials"
+condition = "AND"
+paths = ['''^tools/ota/ota_package\.py$''']
+regexTarget = "secret"
+regexes = ['''^ec\.SECP256R1$''']
