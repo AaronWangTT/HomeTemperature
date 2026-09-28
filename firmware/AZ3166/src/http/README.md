@@ -94,7 +94,12 @@ must consume exactly the declared length before returning a successful response.
 Only one streaming request can be active; another receives `503` while ordinary
 bounded handlers continue on the listener worker.
 
-Each request carries the current connectivity generation.
+Each request carries the peer IPv4 address, current connectivity generation,
+and bounded copies/counts for `Authorization`, `Content-Type`, `Host`, and
+`Origin`, plus cookie presence. This lets security-sensitive handlers reject
+duplicates and malformed credentials before reading a body. A handler may
+explicitly allow an unread body only for a final rejection response; the socket
+is then closed without draining or interpreting it.
 `cancelStreamingRequest(generation)` affects only the matching active request,
 and disconnect, address change, or server shutdown also makes its body stream
 observe cancellation. Cancellation is cooperative: streaming handlers must keep
@@ -171,8 +176,10 @@ constructor argument to connect an existing discovery object. See the
   explicit constructor limits.
 - Responses include `Content-Length` and `Connection: close`; partial writes are
   handled. Bodies may contain binary data within the supplied buffer limit.
-- Persistent connections, chunked transfer coding, WebSockets, TLS, and
-  authentication are not implemented. Use this service only on a trusted LAN.
+- Persistent connections, chunked transfer coding, WebSockets, and TLS are not
+  implemented. Authentication policy belongs to the application handler; the
+  OTA handler uses the parsed metadata for its exact capability rules. Use this
+  service only on a trusted LAN.
 - A slow client can delay another client. Threads do not remove network limits
   or bound arbitrary handler execution. The main-loop watchdog does not provide
   a separate HTTP-worker health check.

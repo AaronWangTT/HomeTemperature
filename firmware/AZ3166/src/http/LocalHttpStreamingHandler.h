@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include "LocalHttpHandler.h"
 
 enum LocalHttpBodyReadStatus {
@@ -50,6 +51,7 @@ struct LocalHttpStreamingRequest {
     LocalHttpHeaderMetadata host;
     LocalHttpHeaderMetadata origin;
     LocalHttpPeerIpv4Metadata peerIpv4;
+    LocalHttpRequest metadata;
 };
 
 class LocalHttpBodyStream {

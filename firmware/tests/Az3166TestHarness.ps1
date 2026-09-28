@@ -28,7 +28,8 @@ function Invoke-Az3166TestSuite {
     $productionSketch = Join-Path $SketchRoot "AZ3166.ino"
     $firmwareRoot = Split-Path -Parent $PSScriptRoot
     $buildUploadScript = Join-Path $firmwareRoot "tools\Invoke-Az3166Build.ps1"
-    $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) "az3166-$($SuiteName.ToLowerInvariant())"
+    $repositoryRoot = Split-Path -Parent $firmwareRoot
+    $stagingRoot = Join-Path $repositoryRoot ".test-staging\az3166-$($SuiteName.ToLowerInvariant())"
     $stagingSketch = Join-Path $stagingRoot $SuiteName
 
     if (-not (Test-Path $buildUploadScript)) {

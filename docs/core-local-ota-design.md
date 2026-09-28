@@ -1,10 +1,19 @@
 # AZ3166 Local OTA Design
 
-Status: proposed
+Status: application controller/API implemented; production provisioning and
+hardware acceptance remain gated
 
 Baseline: AZ3166 Core 3.1.2
 
 Target: HomeTemperature integration on the maintained Core staging API
+
+Implementation note (2026-09-28): `firmware/AZ3166/src/ota/` now implements the
+Phase 5 controller and routes against the exact Core 3.1.2 `OTAStaging` C API.
+The checked-in public-key configuration is intentionally empty, so production
+OTA remains disabled until a reviewed wired bootstrap provisions a trusted
+public key. Package-builder and browser-page work remain separate, and the
+hardware acceptance requirements in section 11 are not satisfied by the
+compile-only application tests.
 
 ## 1. Decision
 
@@ -20,10 +29,12 @@ product policy, progress reporting, and reboot coordination.
 The initial implementation must not replace the bootloader or claim rollback
 support. A failed update must remain recoverable through ST-Link.
 
-This Core migration adopts the staging engine only. It does not add
-HomeTemperature upload routes or browser UI, automatic reboot, A/B rollback,
-boot-attempt counters, or health-confirmation logic, and the package contains no
-private signing key.
+The earlier Core-only migration adopted the staging engine without application
+routes. Phase 5 now adds the HomeTemperature controller, API routes, physical
+authorization, and delayed reboot coordination. Browser UI, A/B rollback,
+boot-attempt counters, health-confirmation logic, and production trust
+provisioning remain out of scope, and the package contains no private signing
+key.
 
 ## 2. Core 3.1.2 Findings
 
