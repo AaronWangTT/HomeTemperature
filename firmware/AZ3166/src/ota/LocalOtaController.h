@@ -102,6 +102,8 @@ private:
     void fail(OTAStagingError error, bool fatal);
     void releaseLease(uint32_t generation);
     void clearCapabilityLocked();
+    void showChallengeIfCurrent(uint32_t generation, const char *text);
+    void clearChallengeIfCurrent(uint32_t generation);
     static bool parseVersion(
         const char *version, uint16_t &major, uint16_t &minor, uint16_t &patch);
 
@@ -118,6 +120,7 @@ private:
     LocalOtaBeforeApplyValidation beforeApplyValidation_;
     void *applyValidationContext_;
     mutable rtos::Mutex mutex_;
+    rtos::Mutex displayMutex_;
     rtos::Thread worker_;
     rtos::Semaphore commandSignal_;
     rtos::Semaphore uploadCompletion_;

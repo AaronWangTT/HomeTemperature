@@ -143,6 +143,7 @@ bool LocalOtaController::openChallenge() {
     char text[9];
     snprintf(text, sizeof(text), "%02x%02x%02x%02x",
              challenge[0], challenge[1], challenge[2], challenge[3]);
+    uint32_t generation;
     {
         std::lock_guard<rtos::Mutex> lock(mutex_);
         if (activationAwaitingResponse_ ||
@@ -159,8 +160,9 @@ bool LocalOtaController::openChallenge() {
         challengeDeadline_ = clock_() + CHALLENGE_WINDOW_MS;
         lastError_ = OTA_OK;
         state_ = LOCAL_OTA_CHALLENGE_DISPLAYED;
+        generation = generation_;
     }
-    display_.showChallenge(text);
+    showChallengeIfCurrent(generation, text);
     return true;
 }
 
@@ -187,10 +189,12 @@ bool LocalOtaController::claim(
             hexNibble(challenge[index * 2 + 1]));
     }
 
+    uint32_t attemptGeneration = 0;
     bool lockout = false;
     bool accepted = false;
     {
         std::lock_guard<rtos::Mutex> lock(mutex_);
+        attemptGeneration = generation_;
         uint8_t difference = 0;
         for (size_t index = 0; index < sizeof(challenge_); ++index) {
             difference |= static_cast<uint8_t>(challenge_[index] ^ expected[index]);
@@ -216,7 +220,7 @@ bool LocalOtaController::claim(
         lockout = false;
     } else {
         if (lockout) {
-            display_.clearChallenge();
+            clearChallengeIfCurrent(attemptGeneration);
         }
         return false;
     }
@@ -228,7 +232,7 @@ bool LocalOtaController::claim(
             state_ = LOCAL_OTA_IDLE;
             memset(challenge_, 0, sizeof(challenge_));
         }
-        display_.clearChallenge();
+        clearChallengeIfCurrent(attemptGeneration);
         return false;
     }
 
@@ -251,8 +255,37 @@ bool LocalOtaController::claim(
         capabilityHex[index * 2 + 1] = HEX[capability[index] & 0x0f];
     }
     capabilityHex[32] = '\0';
-    display_.clearChallenge();
+    clearChallengeIfCurrent(attemptGeneration);
     return true;
+}
+
+void LocalOtaController::showChallengeIfCurrent(
+    uint32_t generation, const char *text) {
+    std::lock_guard<rtos::Mutex> displayLock(displayMutex_);
+    bool current;
+    {
+        std::lock_guard<rtos::Mutex> lock(mutex_);
+        current = generation_ == generation &&
+            state_ == LOCAL_OTA_CHALLENGE_DISPLAYED;
+    }
+    if (current) {
+        display_.showChallenge(text);
+    } else {
+        display_.clearChallenge();
+    }
+}
+
+void LocalOtaController::clearChallengeIfCurrent(uint32_t generation) {
+    std::lock_guard<rtos::Mutex> displayLock(displayMutex_);
+    bool clear;
+    {
+        std::lock_guard<rtos::Mutex> lock(mutex_);
+        clear = generation_ == generation &&
+            state_ != LOCAL_OTA_CHALLENGE_DISPLAYED;
+    }
+    if (clear) {
+        display_.clearChallenge();
+    }
 }
 
 bool LocalOtaController::capabilityValidLocked(
@@ -411,7 +444,7 @@ void LocalOtaController::update(uint32_t networkGeneration) {
         }
     }
     if (clearDisplay) {
-        display_.clearChallenge();
+        clearChallengeIfCurrent(generation);
     }
     if (wake) {
         commandSignal_.release();
