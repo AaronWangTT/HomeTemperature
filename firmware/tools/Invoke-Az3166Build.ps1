@@ -115,7 +115,7 @@ if (
     throw "The checksum-pinned ArduinoMDNS $libraryVersion is not installed in $arduinoSketchbook. Run firmware/tools/Install-Az3166Toolchain.ps1."
 }
 
-if ($Action -eq "Upload") {
+if ($Action -eq "Upload" -and -not $isProductionSketch) {
     if ($Port -notmatch "^COM\d+$") {
         throw "Upload requires an explicit ST-Link port such as -Port COM3."
     }
@@ -126,6 +126,9 @@ if ($Action -eq "Upload") {
     )
     Write-Host "Uploading $resolvedSketch to $Board on $Port"
 } else {
+    if ($Action -eq "Upload" -and $Port -notmatch "^COM\d+$") {
+        throw "Upload requires an explicit ST-Link port such as -Port COM3."
+    }
     $arguments = @(
         "--verify", "--board", $Board,
         "--pref", "sketchbook.path=$arduinoSketchbook",
@@ -174,7 +177,11 @@ if ($exitCode -ne 0) {
     }
     throw "Arduino $Action failed with exit code $exitCode."
 }
-if ($Action -eq "Upload" -and $output -notmatch "\*\*\s+Verified OK\s+\*\*") {
+if (
+    $Action -eq "Upload" -and
+    -not $isProductionSketch -and
+    $output -notmatch "\*\*\s+Verified OK\s+\*\*"
+) {
     if ($temporaryBuildPath) {
         Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
     }
@@ -207,6 +214,32 @@ if ($isProductionSketch) {
             Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
         }
         throw "Production binary has no valid OTA descriptor at offset 0x200."
+    }
+    if ($Action -eq "Upload") {
+        $openOcdRoot = Split-Path -Parent (Split-Path -Parent $installedOpenOcd)
+        $interfaceConfig = Join-Path $openOcdRoot "scripts\interface\stlink-v2-1.cfg"
+        $targetConfig = Join-Path $openOcdRoot "scripts\target\stm32f4x.cfg"
+        Write-Host "Uploading validated $binaryPath to $Board on $Port"
+        $uploadOutput = (& $installedOpenOcd `
+            "-f" $interfaceConfig `
+            "-c" "transport select hla_swd" `
+            "-f" $targetConfig `
+            "-c" "program {$binaryPath} verify reset 0x800C000; shutdown" `
+            2>&1 | Out-String)
+        $uploadExitCode = $LASTEXITCODE
+        Write-Host $uploadOutput
+        if ($uploadExitCode -ne 0) {
+            if ($temporaryBuildPath) {
+                Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+            }
+            throw "OpenOCD upload failed with exit code $uploadExitCode."
+        }
+        if ($uploadOutput -notmatch "\*\*\s+Verified OK\s+\*\*") {
+            if ($temporaryBuildPath) {
+                Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+            }
+            throw "OpenOCD exited successfully, but did not report Verified OK."
+        }
     }
 }
 if ($temporaryBuildPath) {

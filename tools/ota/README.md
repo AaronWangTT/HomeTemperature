@@ -55,6 +55,9 @@ python .\tools\ota\ota_cli.py build-config `
 The build fails if the retained descriptor is absent or not exactly 256 bytes
 at image offset `0x200`. The resulting raw image is
 `artifacts\ota-build\AZ3166.ino.bin`.
+For production `-Action Upload`, the wrapper performs this compile and
+descriptor validation before invoking OpenOCD on that exact validated binary;
+an invalid image is never passed to the flashing command.
 
 Build a signed package:
 

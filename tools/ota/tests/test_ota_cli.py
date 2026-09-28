@@ -331,6 +331,23 @@ class CliTests(unittest.TestCase):
             0,
         )
 
+    def test_production_upload_validates_binary_before_openocd(self) -> None:
+        script = (
+            Path(__file__).resolve().parents[3]
+            / "firmware"
+            / "tools"
+            / "Invoke-Az3166Build.ps1"
+        ).read_text(encoding="utf-8")
+        validation = script.index(
+            "Production binary has no valid OTA descriptor at offset 0x200."
+        )
+        upload = script.index("Uploading validated $binaryPath")
+        self.assertLess(validation, upload)
+        self.assertIn(
+            '$Action -eq "Upload" -and -not $isProductionSketch',
+            script,
+        )
+
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()
         with patch(
