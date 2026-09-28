@@ -332,7 +332,7 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
         }
         if (result == OTA_OK) {
             LocalHttpResponse response = json(
-                "202 Accepted", "{\"status\":\"reboot scheduled\"}",
+                "202 Accepted", "{\"status\":\"apply queued\"}",
                 responseBody, responseBodySize);
             response.afterAttempt = LocalOtaController::responseAttempted;
             response.afterAttemptContext = responseContext;

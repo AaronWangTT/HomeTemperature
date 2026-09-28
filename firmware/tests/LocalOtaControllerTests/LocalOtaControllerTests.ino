@@ -352,8 +352,9 @@ void testLeaseUploadRoutesAndApply() {
     response = handler.handle(
         applyRequest, applyBody, responseBody, sizeof(responseBody));
     expect(strcmp(response.status, "202 Accepted") == 0 &&
+               strstr(responseBody, "\"status\":\"apply queued\"") != NULL &&
                core.activates == 0 && response.afterAttempt != NULL,
-           "apply returns 202 before boot metadata persistence begins");
+           "apply reports queued before boot metadata persistence begins");
     response.afterAttempt(false, response.afterAttemptContext);
     expect(waitForState(controller, LOCAL_OTA_IDLE) && core.activates == 1 &&
                controller.takeRebootRequest(),
