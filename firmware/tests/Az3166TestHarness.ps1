@@ -50,27 +50,16 @@ function Invoke-Az3166TestSuite {
             Sketch = $Sketch
         }
         $restoringProduction = (
-            $BuildAction -eq "Upload" -and
+            $BuildAction -eq "Restore" -and
             $Sketch -eq $productionSketch
         )
         if ($restoringProduction) {
-            $requiredRestoreEnvironment = @(
-                "HOME_TEMPERATURE_STLINK_SERIAL",
-                "HOME_TEMPERATURE_OTA_PUBLIC_KEY",
-                "HOME_TEMPERATURE_FIRMWARE_VERSION",
-                "HOME_TEMPERATURE_SOURCE_COMMIT"
-            )
-            foreach ($name in $requiredRestoreEnvironment) {
-                if ([string]::IsNullOrWhiteSpace(
-                    [Environment]::GetEnvironmentVariable($name)
-                )) {
-                    throw "Production restore requires environment variable $name."
-                }
+            if ([string]::IsNullOrWhiteSpace(
+                $env:HOME_TEMPERATURE_STLINK_SERIAL
+            )) {
+                throw "Production restore requires environment variable HOME_TEMPERATURE_STLINK_SERIAL."
             }
             $arguments.StLinkSerial = $env:HOME_TEMPERATURE_STLINK_SERIAL
-            $arguments.OtaPublicKey = $env:HOME_TEMPERATURE_OTA_PUBLIC_KEY
-            $arguments.FirmwareVersion = $env:HOME_TEMPERATURE_FIRMWARE_VERSION
-            $arguments.SourceCommit = $env:HOME_TEMPERATURE_SOURCE_COMMIT
         } elseif (-not [string]::IsNullOrWhiteSpace($Port)) {
             $arguments.Port = $Port
         }

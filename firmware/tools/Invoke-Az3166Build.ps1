@@ -107,8 +107,12 @@ trap {
 if ($OtaBuildConfig -and -not $isProductionSketch) {
     throw "-OtaBuildConfig is valid only for the production AZ3166 sketch."
 }
-if ($Action -eq "Upload" -and $isProductionSketch -and $OtaBuildConfig) {
-    throw "Production Upload generates its OTA build config; do not pass -OtaBuildConfig."
+if (
+    ($Action -eq "Upload" -or $Action -eq "Restore") -and
+    $isProductionSketch -and
+    $OtaBuildConfig
+) {
+    throw "Production Upload and Restore do not accept -OtaBuildConfig."
 }
 if ($Action -eq "Restore" -and -not $isProductionSketch) {
     throw "Restore is valid only for the production AZ3166 sketch."
@@ -155,14 +159,14 @@ if ($Action -eq "Upload" -and -not $isProductionSketch) {
     )
     Write-Host "Uploading $resolvedSketch to $Board on $Port"
 } else {
-    if ($Action -eq "Upload" -and $Port) {
-        throw "Production Upload selects the probe by -StLinkSerial, not -Port."
+    if (($Action -eq "Upload" -or $Action -eq "Restore") -and $Port) {
+        throw "Production Upload and Restore select the probe by -StLinkSerial, not -Port."
     }
     if (
-        $Action -eq "Upload" -and
+        ($Action -eq "Upload" -or $Action -eq "Restore") -and
         $StLinkSerial -notmatch "^[0-9A-Fa-f]{24}$"
     ) {
-        throw "Production Upload requires the exact 24-hex-character -StLinkSerial."
+        throw "Production Upload and Restore require the exact 24-hex-character -StLinkSerial."
     }
     $arguments = @(
         "--verify", "--board", $Board,
@@ -307,12 +311,11 @@ if ($isProductionSketch) {
         $openOcdRoot = Split-Path -Parent (Split-Path -Parent $installedOpenOcd)
         $interfaceConfig = Join-Path $openOcdRoot "scripts\interface\stlink-v2-1.cfg"
         $targetConfig = Join-Path $openOcdRoot "scripts\target\stm32f4x.cfg"
+        $probeSelection = @("-c", "hla_serial $StLinkSerial")
         if ($Action -eq "Upload") {
-            $probeSelection = @("-c", "hla_serial $StLinkSerial")
             Write-Host "Uploading validated $binaryPath to $Board through ST-Link $StLinkSerial"
         } else {
-            $probeSelection = @()
-            Write-Host "Restoring validated fail-closed production firmware through the attached ST-Link"
+            Write-Host "Restoring validated fail-closed production firmware through ST-Link $StLinkSerial"
         }
         $uploadOutput = (& $installedOpenOcd `
             "-f" $interfaceConfig `

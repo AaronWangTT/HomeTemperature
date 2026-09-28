@@ -384,7 +384,10 @@ class CliTests(unittest.TestCase):
             '$Action -eq "Upload" -and -not $isProductionSketch',
             script,
         )
-        self.assertIn("Production Upload generates its OTA build config", script)
+        self.assertIn(
+            "Production Upload and Restore do not accept -OtaBuildConfig",
+            script,
+        )
         self.assertIn(
             "Production Upload requires -OtaPublicKey, -FirmwareVersion, and -SourceCommit.",
             script,
@@ -400,6 +403,10 @@ class CliTests(unittest.TestCase):
             / "Az3166TestHarness.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn('& $invokeBuild "Restore" $productionSketch', harness)
+        self.assertIn(
+            "$arguments.StLinkSerial = $env:HOME_TEMPERATURE_STLINK_SERIAL",
+            harness,
+        )
 
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()

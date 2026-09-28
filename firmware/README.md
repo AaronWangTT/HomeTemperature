@@ -268,14 +268,12 @@ suite only when a full hardware regression is required:
 
 ```powershell
 $env:HOME_TEMPERATURE_STLINK_SERIAL = "00112233445566778899AABB"
-$env:HOME_TEMPERATURE_OTA_PUBLIC_KEY = "C:\secure\ota-public-key.der"
-$env:HOME_TEMPERATURE_FIRMWARE_VERSION = "1.2.3"
-$env:HOME_TEMPERATURE_SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 & .\firmware\tests\run-all-tests.ps1 -Action Run -Port COM3
 ```
 
-These restore inputs use the same allowlisted, descriptor-validated production
-upload path documented in [the OTA host tooling guide](../tools/ota/README.md).
+The restore action selects the exact ST-Link and compiles the repository's
+default fail-closed, OTA-disabled production image. It rejects custom OTA build
+configuration.
 
 An upload is successful only when the command exits zero and OpenOCD reports
 `Verified OK`. The AZ3166 3.1.2 build can emit a repeated four-byte `.bss`
