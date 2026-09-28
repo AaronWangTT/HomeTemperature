@@ -163,8 +163,11 @@ if ($isProductionSketch) {
             Join-Path $PSScriptRoot "..\AZ3166\linker\AZ3166-ota.ld"
         )
     ).Path
+    if (-not $env:PUBLIC -or $env:PUBLIC -match "\s") {
+        throw "The user-writable PUBLIC path must exist and contain no whitespace."
+    }
     $temporaryRecipePath = Join-Path (
-        $env:SystemDrive + "\HomeTemperatureOtaBuild"
+        Join-Path $env:PUBLIC "HomeTemperatureOtaBuild"
     ) ([Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $temporaryRecipePath | Out-Null
     $linkerScript = Join-Path $temporaryRecipePath "AZ3166-ota.ld"

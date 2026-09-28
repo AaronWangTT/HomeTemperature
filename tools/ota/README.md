@@ -53,10 +53,9 @@ at image offset `0x200`. The resulting raw image is
 For production `-Action Upload`, the wrapper performs this compile and
 descriptor validation before invoking OpenOCD on that exact validated binary;
 an invalid image is never passed to the flashing command. Production wired
-
-Production wired upload generates the build configuration itself, revalidates
-the final image against the reviewed key allowlist, and selects the exact
-ST-Link probe by its 24-hex-character serial number:
+upload generates the build configuration itself, revalidates the final image
+against the reviewed key allowlist, and selects the exact ST-Link probe by its
+24-hex-character serial number:
 
 ```powershell
 .\firmware\tools\Invoke-Az3166Build.ps1 `
