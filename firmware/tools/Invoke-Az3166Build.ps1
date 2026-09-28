@@ -317,12 +317,13 @@ if ($isProductionSketch) {
         } else {
             Write-Host "Restoring validated fail-closed production firmware through ST-Link $StLinkSerial"
         }
+        $openOcdBinaryPath = $binaryPath.Replace("\", "/")
         $uploadOutput = (& $installedOpenOcd `
             "-f" $interfaceConfig `
             "-c" "transport select hla_swd" `
             @probeSelection `
             "-f" $targetConfig `
-            "-c" "program {$binaryPath} verify reset 0x800C000; shutdown" `
+            "-c" "program {$openOcdBinaryPath} verify reset 0x800C000; shutdown" `
             2>&1 | Out-String)
         $uploadExitCode = $LASTEXITCODE
         Write-Host $uploadOutput
