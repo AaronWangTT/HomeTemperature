@@ -288,8 +288,9 @@ The local smoke test accepts a target address through PowerShell:
 
 ## Hardware Boundaries
 
-- Local HTTP is unencrypted. Telemetry remains unauthenticated; OTA mutations
-  require a Core-verified signed package.
+- Local HTTP is unencrypted. Telemetry and OTA controls are available to the
+  trusted LAN. Starting or cancelling an upload changes controller state, while
+  firmware installation and activation require a Core-verified signed package.
 - Wi-Fi, NTP, and HTTPS platform calls are synchronous.
 - Serial logs can contain device identity, network metadata, and measurements.
 - Hardware-in-loop tests are never run automatically by CI.
