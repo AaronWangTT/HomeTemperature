@@ -641,7 +641,8 @@ void LocalOtaController::processUpload() {
             break;
         }
         if (readStatus != LOCAL_HTTP_BODY_DATA) {
-            result = readStatus == LOCAL_HTTP_BODY_CANCELLED
+            result = (readStatus == LOCAL_HTTP_BODY_CANCELLED ||
+                      readStatus == LOCAL_HTTP_BODY_DISCONNECTED)
                 ? OTA_ERROR_CANCELLED : OTA_ERROR_INCOMPLETE;
             break;
         }
