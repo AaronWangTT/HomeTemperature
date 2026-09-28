@@ -6,6 +6,7 @@
 #include "src/telemetry/TelemetryService.h"
 #include "src/cloud/TelemetryUploader.h"
 #include "src/cloud/UploadScheduler.h"
+#include "src/connectivity/NetworkMaintenanceCoordinator.h"
 
 const char VALID_API_KEY[] =
     "0123456789ABCDEF0123456789ABCDEF";
@@ -107,6 +108,33 @@ void testPrerequisitesGateStartupUpload() {
            "ready state builds the startup payload");
     expect(operations.sendCallCount == 1,
            "ready state performs the startup upload");
+}
+
+void testOtaLeaseBlocksAndReleasesCloudUpload() {
+    resetFakes();
+    FakeCloudTelemetryOperations operations(fakeNow);
+    UploadScheduler scheduler = createScheduler();
+    CloudTelemetry cloudTelemetry =
+        createCloudTelemetry(VALID_API_KEY, operations);
+    TelemetryUploader uploader(cloudTelemetry, buildFakePayload);
+    NetworkMaintenanceCoordinator network;
+    CloudUploadController controller(
+        scheduler, uploader, network, readFakeClock);
+
+    expect(network.reserveOta(1),
+           "OTA reserves the shared network coordinator");
+    controller.update(true);
+    expect(operations.sendCallCount == 0 && builderCallCount == 0,
+           "OTA reservation blocks a due cloud upload");
+
+    network.releaseOta(1);
+    operations.fakeCompletionTime = 1000;
+    controller.update(true);
+    expect(operations.sendCallCount == 1 && builderCallCount == 1,
+           "releasing OTA permits the pending cloud upload");
+    expect(!network.otaBusy() && network.tryBeginCloud(),
+           "cloud controller releases its coordinator lease after upload");
+    network.endCloud();
 }
 
 void testManualUploadWaitsForPrerequisites() {
@@ -350,6 +378,7 @@ void setup() {
         AppConfig::CLOUD_RETRY_INTERVAL_MS == 15000UL,
         "retry interval is fifteen seconds");
     testPrerequisitesGateStartupUpload();
+    testOtaLeaseBlocksAndReleasesCloudUpload();
     testManualUploadWaitsForPrerequisites();
     testUnconfiguredUploadIsRejected();
     testRetryDelayStartsAtCompletion();

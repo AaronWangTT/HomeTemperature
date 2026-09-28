@@ -270,6 +270,12 @@ void testFailClosedConfigurationAndEntropy() {
            "missing public key fails closed");
 
     uint8_t key[] = {1};
+    LocalOtaController invalidVersion(
+        core, entropy, display, network, key, sizeof(key),
+        "HomeTemperature", "MXCHIP_AZ3166", "release", readClock);
+    expect(!invalidVersion.begin() && !invalidVersion.openChallenge(),
+           "malformed running firmware version fails closed");
+
     LocalOtaController controller(
         core, entropy, display, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);

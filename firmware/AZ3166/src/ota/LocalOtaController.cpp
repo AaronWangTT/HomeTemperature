@@ -99,6 +99,13 @@ LocalOtaController::LocalOtaController(
       lastError_(OTA_OK),
       applyResult_(OTA_ERROR_INVALID_STATE),
       queuedApply_{} {
+    uint16_t major;
+    uint16_t minor;
+    uint16_t patch;
+    if (state_ != LOCAL_OTA_DISABLED &&
+        !parseVersion(currentVersion_, major, minor, patch)) {
+        state_ = LOCAL_OTA_DISABLED;
+    }
 }
 
 LocalOtaController::~LocalOtaController() {
