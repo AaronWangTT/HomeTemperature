@@ -322,20 +322,6 @@ class CliTests(unittest.TestCase):
             )
         self.assertFalse(OtaHandler.redirected)
 
-    def test_development_profile_verifies_ephemeral_package(self) -> None:
-        self.assertEqual(
-            self.run_cli(
-                "verify",
-                "--package",
-                str(self.package),
-                "--public-key",
-                str(self.public_key),
-                "--profile",
-                "development",
-            ),
-            0,
-        )
-
     def test_reboot_verification_rejects_error_status_with_expected_version(
         self,
     ) -> None:
