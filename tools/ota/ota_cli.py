@@ -445,15 +445,15 @@ def _verify_rebooted_version(
             with _NO_REDIRECT_OPENER.open(request, timeout=request_timeout) as response:
                 if response.status < 200 or response.status >= 300:
                     last_error = f"version endpoint returned HTTP {response.status}"
-                    continue
-                payload = json.loads(response.read().decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise CliError("version endpoint returned non-object JSON")
-            observed = payload.get(version_field)
-            if observed == expected_version:
-                return
-            if observed is not None:
-                last_error = f"version endpoint reported {observed!r}"
+                else:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    if not isinstance(payload, dict):
+                        raise CliError("version endpoint returned non-object JSON")
+                    observed = payload.get(version_field)
+                    if observed == expected_version:
+                        return
+                    if observed is not None:
+                        last_error = f"version endpoint reported {observed!r}"
         except urllib.error.HTTPError as error:
             last_error = f"version endpoint returned HTTP {error.code}"
         except (urllib.error.URLError, TimeoutError):
