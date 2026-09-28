@@ -626,11 +626,18 @@ void LocalOtaController::processUpload() {
             }
             continue;
         }
+        if (cancelled(this)) {
+            result = OTA_ERROR_CANCELLED;
+            break;
+        }
         result = core_.write(buffer, received);
         if (result == OTA_OK) {
             std::lock_guard<rtos::Mutex> lock(mutex_);
             acceptedBytes_ += received;
         }
+    }
+    if (result == OTA_OK && cancelled(this)) {
+        result = OTA_ERROR_CANCELLED;
     }
     if (result == OTA_OK && body->remaining() == 0) {
         {
@@ -664,6 +671,7 @@ void LocalOtaController::processApply() {
     OTAStagedImageInfo staged;
     uint32_t generation;
     bool abortInstead = false;
+    bool fatalAlreadyWon = false;
     if (beforeApplyValidation_ != NULL) {
         beforeApplyValidation_(applyValidationContext_);
     }
@@ -671,6 +679,7 @@ void LocalOtaController::processApply() {
         std::lock_guard<rtos::Mutex> lock(mutex_);
         generation = generation_;
         if (!queuedApplyValidLocked(clock_())) {
+            fatalAlreadyWon = state_ == LOCAL_OTA_FATAL;
             command_ = WORKER_CANCEL;
             applyResult_ = OTA_ERROR_CANCELLED;
             applyCompleted_ = true;
@@ -684,7 +693,9 @@ void LocalOtaController::processApply() {
     }
     if (abortInstead) {
         core_.abort();
-        fail(OTA_ERROR_CANCELLED, false);
+        if (!fatalAlreadyWon) {
+            fail(OTA_ERROR_CANCELLED, false);
+        }
         applyCompletion_.release();
         return;
     }
