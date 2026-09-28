@@ -105,6 +105,14 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(PackageError, "signature"):
             self.verify(bytes(package))
 
+    def test_rejects_malformed_raw_signature_scalars(self) -> None:
+        for signature in (bytes(64), bytes([0xFF]) * 64):
+            with self.subTest(signature=signature[:1]):
+                package = bytearray(self.package)
+                package[PACKAGE_HEADER_SIZE:PAYLOAD_OFFSET] = signature
+                with self.assertRaisesRegex(PackageError, "signature"):
+                    self.verify(bytes(package))
+
     def test_rejects_payload_tampering(self) -> None:
         package = bytearray(self.package)
         package[-1] ^= 1

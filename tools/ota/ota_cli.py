@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
 import math
@@ -26,6 +27,7 @@ from ota_package import (
     public_key_der,
     require_production_key,
     render_build_config,
+    validate_image,
     verify_package,
 )
 
@@ -307,6 +309,33 @@ def _command_verify(args: argparse.Namespace) -> None:
     )
 
 
+def _command_validate_image(args: argparse.Namespace) -> None:
+    _, public_der = load_public_key(args.public_key)
+    require_production_key(public_der)
+    descriptor = validate_image(
+        args.image.read_bytes(),
+        key_id=hashlib.sha256(public_der).digest(),
+        expected_version=args.version,
+        expected_source=args.source,
+        expected_product=args.product,
+        expected_board=args.board,
+        application_address=args.address,
+        application_capacity=args.capacity,
+    )
+    print(
+        json.dumps(
+            {
+                "product": descriptor.product_id,
+                "board": descriptor.board_id,
+                "version": descriptor.firmware_version,
+                "source": descriptor.source_commit,
+                "keyId": descriptor.key_id.hex(),
+            },
+            separators=(",", ":"),
+        )
+    )
+
+
 def _command_build_config(args: argparse.Namespace) -> None:
     _, public_der = load_public_key(args.public_key)
     rendered = render_build_config(public_der, args.version, args.source)
@@ -457,6 +486,16 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--source")
     _add_layout_arguments(verify)
     verify.set_defaults(handler=_command_verify)
+
+    validate = subparsers.add_parser(
+        "validate-image", help="validate a production firmware image"
+    )
+    validate.add_argument("--image", type=Path, required=True)
+    validate.add_argument("--public-key", type=Path, required=True)
+    validate.add_argument("--version", required=True)
+    validate.add_argument("--source", required=True)
+    _add_layout_arguments(validate)
+    validate.set_defaults(handler=_command_validate_image)
 
     build_config = subparsers.add_parser(
         "build-config", help="generate public firmware build configuration"

@@ -18,7 +18,15 @@ param(
 
     [string]$OtaBuildConfig,
 
-    [string]$StLinkSerial
+    [string]$StLinkSerial,
+
+    [string]$OtaPublicKey,
+
+    [string]$FirmwareVersion,
+
+    [string]$SourceCommit,
+
+    [string]$PythonExecutable = "python"
 )
 
 Set-StrictMode -Version Latest
@@ -86,6 +94,9 @@ $resolvedBuildPath = $null
 if ($OtaBuildConfig -and -not $isProductionSketch) {
     throw "-OtaBuildConfig is valid only for the production AZ3166 sketch."
 }
+if ($Action -eq "Upload" -and $isProductionSketch -and $OtaBuildConfig) {
+    throw "Production Upload generates its OTA build config; do not pass -OtaBuildConfig."
+}
 if ($isProductionSketch -and -not $BuildPath) {
     $temporaryBuildPath = Join-Path (
         [System.IO.Path]::GetTempPath()
@@ -128,8 +139,14 @@ if ($Action -eq "Upload" -and -not $isProductionSketch) {
     )
     Write-Host "Uploading $resolvedSketch to $Board on $Port"
 } else {
-    if ($Action -eq "Upload" -and $Port -notmatch "^COM\d+$") {
-        throw "Upload requires an explicit ST-Link port such as -Port COM3."
+    if ($Action -eq "Upload" -and $Port) {
+        throw "Production Upload selects the probe by -StLinkSerial, not -Port."
+    }
+    if (
+        $Action -eq "Upload" -and
+        $StLinkSerial -notmatch "^[0-9A-Fa-f]{24}$"
+    ) {
+        throw "Production Upload requires the exact 24-hex-character -StLinkSerial."
     }
     $arguments = @(
         "--verify", "--board", $Board,
@@ -157,6 +174,36 @@ if ($BuildPath) {
     $resolvedBuildPath = [System.IO.Path]::GetFullPath($BuildPath)
     New-Item -ItemType Directory -Force -Path $resolvedBuildPath | Out-Null
     $arguments += @("--pref", "build.path=$resolvedBuildPath")
+}
+if ($Action -eq "Upload" -and $isProductionSketch) {
+    if (
+        -not $OtaPublicKey -or
+        -not $FirmwareVersion -or
+        -not $SourceCommit
+    ) {
+        throw "Production Upload requires -OtaPublicKey, -FirmwareVersion, and -SourceCommit."
+    }
+    $resolvedOtaPublicKey = (Resolve-Path -LiteralPath $OtaPublicKey).Path
+    $otaCli = (
+        Resolve-Path -LiteralPath (
+            Join-Path $PSScriptRoot "..\..\tools\ota\ota_cli.py"
+        )
+    ).Path
+    $generatedOtaBuildConfig = Join-Path $resolvedBuildPath "ota-build-config.generated.h"
+    $configOutput = (& $PythonExecutable $otaCli build-config `
+        --public-key $resolvedOtaPublicKey `
+        --output $generatedOtaBuildConfig `
+        --version $FirmwareVersion `
+        --source $SourceCommit 2>&1 | Out-String)
+    $configExitCode = $LASTEXITCODE
+    Write-Host $configOutput
+    if ($configExitCode -ne 0) {
+        if ($temporaryBuildPath) {
+            Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+        }
+        throw "OTA build configuration failed with exit code $configExitCode."
+    }
+    $OtaBuildConfig = $generatedOtaBuildConfig
 }
 if ($OtaBuildConfig) {
     $resolvedOtaBuildConfig = (Resolve-Path -LiteralPath $OtaBuildConfig).Path
@@ -218,27 +265,23 @@ if ($isProductionSketch) {
         throw "Production binary has no valid OTA descriptor at offset 0x200."
     }
     if ($Action -eq "Upload") {
-        if (-not $OtaBuildConfig) {
-            throw "Production Upload requires -OtaBuildConfig from the reviewed OTA build-config workflow."
-        }
-        if ($StLinkSerial -notmatch "^[0-9A-Fa-f]{24}$") {
-            throw "Production Upload requires the exact 24-hex-character -StLinkSerial."
-        }
-        $descriptorKeyId = [Convert]::ToHexString(
-            $binary[0x2A4..0x2C3]
-        ).ToLowerInvariant()
-        $productionKeyIdsPath = Join-Path $PSScriptRoot "..\..\tools\ota\production_key_ids.py"
-        $productionKeyIds = [regex]::Matches(
-            (Get-Content -Raw -LiteralPath $productionKeyIdsPath),
-            '(?m)^\s*"([0-9a-f]{64})",?\s*$'
-        ) | ForEach-Object { $_.Groups[1].Value }
-        if ($descriptorKeyId -notin $productionKeyIds) {
-            throw "Production descriptor key ID is not in the reviewed allowlist."
+        $validationOutput = (& $PythonExecutable $otaCli validate-image `
+            --image $binaryPath `
+            --public-key $resolvedOtaPublicKey `
+            --version $FirmwareVersion `
+            --source $SourceCommit 2>&1 | Out-String)
+        $validationExitCode = $LASTEXITCODE
+        Write-Host $validationOutput
+        if ($validationExitCode -ne 0) {
+            if ($temporaryBuildPath) {
+                Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+            }
+            throw "Production image validation failed with exit code $validationExitCode."
         }
         $openOcdRoot = Split-Path -Parent (Split-Path -Parent $installedOpenOcd)
         $interfaceConfig = Join-Path $openOcdRoot "scripts\interface\stlink-v2-1.cfg"
         $targetConfig = Join-Path $openOcdRoot "scripts\target\stm32f4x.cfg"
-        Write-Host "Uploading validated $binaryPath to $Board on $Port"
+        Write-Host "Uploading validated $binaryPath to $Board through ST-Link $StLinkSerial"
         $uploadOutput = (& $installedOpenOcd `
             "-f" $interfaceConfig `
             "-c" "transport select hla_swd" `

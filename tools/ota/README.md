@@ -53,6 +53,22 @@ at image offset `0x200`. The resulting raw image is
 For production `-Action Upload`, the wrapper performs this compile and
 descriptor validation before invoking OpenOCD on that exact validated binary;
 an invalid image is never passed to the flashing command. Production wired
+
+Production wired upload generates the build configuration itself, revalidates
+the final image against the reviewed key allowlist, and selects the exact
+ST-Link probe by its 24-hex-character serial number:
+
+```powershell
+.\firmware\tools\Invoke-Az3166Build.ps1 `
+  -Action Upload `
+  -Sketch .\firmware\AZ3166\AZ3166.ino `
+  -StLinkSerial 00112233445566778899AABB `
+  -OtaPublicKey C:\secure\ota-public-key.der `
+  -FirmwareVersion 1.2.3 `
+  -SourceCommit 0123456789abcdef0123456789abcdef01234567
+```
+
+Do not pass `-Port` or a hand-written `-OtaBuildConfig` to production Upload. Production wired
 upload also requires `-OtaBuildConfig`, an allowlisted descriptor key ID, and
 the exact 24-hex-character `-StLinkSerial`; `-Port` remains the board's virtual
 COM port, while the probe serial unambiguously selects the ST-Link used by

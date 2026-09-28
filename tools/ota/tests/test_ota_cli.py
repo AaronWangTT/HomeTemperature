@@ -250,6 +250,28 @@ class CliTests(unittest.TestCase):
         self.assertIn("HOME_TEMPERATURE_OTA_PUBLIC_KEY_DER_BYTES", rendered)
         self.assertNotIn("PRIVATE", rendered)
 
+    def test_validates_allowlisted_production_image(self) -> None:
+        image = Path(self.directory.name) / "firmware.bin"
+        image.write_bytes(self.package.read_bytes()[384:])
+        with patch(
+            "ota_package.PRODUCTION_KEY_IDS",
+            frozenset({self.production_key_id}),
+        ):
+            self.assertEqual(
+                self.run_cli(
+                    "validate-image",
+                    "--image",
+                    str(image),
+                    "--public-key",
+                    str(self.public_key),
+                    "--version",
+                    VERSION,
+                    "--source",
+                    SOURCE,
+                ),
+                0,
+            )
+
     def test_rejects_wrong_authorization(self) -> None:
         self.assertEqual(
             self.run_cli(
@@ -348,13 +370,19 @@ class CliTests(unittest.TestCase):
         )
         upload = script.index("Uploading validated $binaryPath")
         self.assertLess(validation, upload)
+        self.assertLess(script.index(" validate-image `"), upload)
+        self.assertIn(" build-config `", script)
+        self.assertIn('"hla_serial $StLinkSerial"', script)
+        self.assertNotIn("Uploading validated $binaryPath to $Board on $Port", script)
         self.assertIn(
             '$Action -eq "Upload" -and -not $isProductionSketch',
             script,
         )
-        self.assertIn("Production Upload requires -OtaBuildConfig", script)
-        self.assertIn("descriptorKeyId -notin $productionKeyIds", script)
-        self.assertIn('"hla_serial $StLinkSerial"', script)
+        self.assertIn("Production Upload generates its OTA build config", script)
+        self.assertIn(
+            "Production Upload requires -OtaPublicKey, -FirmwareVersion, and -SourceCommit.",
+            script,
+        )
 
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()
