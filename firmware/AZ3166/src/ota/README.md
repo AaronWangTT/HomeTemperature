@@ -25,6 +25,11 @@ five minutes. Mutating and detailed-status routes require exactly:
 Authorization: OTA <32 lowercase hexadecimal characters>
 ```
 
+Open `http://az3166.local/ota` for the optional command-page UI. It is a
+same-origin wrapper around the APIs below: firmware bytes still flow through
+the signed streaming endpoint, and apply still requires the staged generation
+and digest. The page does not contain or replace signing keys.
+
 The routes are `POST /api/ota/session`, `POST /api/ota`,
 `GET /api/ota/status`, `POST /api/ota/apply`, and `DELETE /api/ota`. Uploads
 must use one `Content-Length` and `application/octet-stream`; transfer encoding,

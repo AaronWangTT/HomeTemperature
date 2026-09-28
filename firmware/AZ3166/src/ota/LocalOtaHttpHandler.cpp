@@ -4,6 +4,36 @@
 #include <stdio.h>
 #include <string.h>
 
+namespace {
+
+const char OTA_PAGE[] =
+    "<!doctype html><meta charset=utf-8><meta name=viewport "
+    "content=\"width=device-width\"><title>AZ3166 OTA</title><style>"
+    "body{font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem}"
+    "input,button{font:inherit;margin:.3rem;padding:.5rem}pre{white-space:pre-wrap}"
+    "</style><h1>AZ3166 Local OTA</h1><p>Hold both device buttons, then enter "
+    "the displayed challenge.</p><input id=c maxlength=8 placeholder=challenge>"
+    "<button onclick=claim()>Claim</button><br><input id=f type=file>"
+    "<button onclick=upload()>Upload</button><button onclick=apply()>Apply</button>"
+    "<pre id=o>Idle</pre><script>let k,g,d,v;const q=(p,x={})=>fetch(p,x).then("
+    "async r=>{let j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j"
+    "}),h=()=>({Authorization:'OTA '+k});async function claim(){try{let j=await q("
+    "'/api/ota/session',{method:'POST',headers:{'Content-Type':'application/json'},"
+    "body:JSON.stringify({challenge:c.value})});k=j.capability;o.textContent='Armed'"
+    "}catch(e){o.textContent=e}}async function upload(){try{let b=await f.files[0]"
+    ".arrayBuffer(),j=await q('/api/ota',{method:'POST',headers:{...h(),"
+    "'Content-Type':'application/octet-stream'},body:b});g=j.generation;d=j.digest;"
+    "o.textContent=JSON.stringify(j,null,2)}catch(e){o.textContent=e}}async function "
+    "apply(){try{let s=await q('/api/ota/status',{headers:h()});if(s.generation!==g"
+    "||s.digest!==d)throw Error('staged image changed');await q('/api/ota/apply',"
+    "{method:'POST',headers:{...h(),'Content-Type':'application/json'},body:JSON."
+    "stringify({generation:g,digest:d})});o.textContent='Rebooting';setTimeout("
+    "check,1500)}catch(e){o.textContent=e}}async function check(){try{let j=await "
+    "q('/api/version');o.textContent='Firmware '+j.firmwareVersion}catch(e){"
+    "setTimeout(check,1500)}}</script>";
+
+}
+
 LocalOtaHttpHandler::LocalOtaHttpHandler(
     LocalHttpHandler &fallback,
     LocalOtaController &controller)
@@ -74,6 +104,18 @@ LocalHttpResponse LocalOtaHttpHandler::json(
     };
 }
 
+LocalHttpResponse LocalOtaHttpHandler::otaPage(
+    char *body, size_t bodySize) {
+    size_t length = sizeof(OTA_PAGE) - 1;
+    if (body == NULL || bodySize <= length) {
+        return json(
+            "500 Internal Server Error", "{\"error\":\"page unavailable\"}",
+            body, bodySize);
+    }
+    memcpy(body, OTA_PAGE, length + 1);
+    return {"200 OK", "text/html; charset=utf-8", length, NULL, NULL, false};
+}
+
 LocalHttpResponse LocalOtaHttpHandler::handle(
     const char *requestLine,
     char *body,
@@ -93,6 +135,9 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
     if (request.requestLine == NULL || strstr(request.requestLine, "?") != NULL) {
         return json("404 Not Found", "{\"error\":\"not found\"}",
                     body, bodySize);
+    }
+    if (exactRoute(request.requestLine, "GET", "/ota")) {
+        return otaPage(body, bodySize);
     }
     bool otaRoute =
         exactRoute(request.requestLine, "GET", "/api/ota/status") ||

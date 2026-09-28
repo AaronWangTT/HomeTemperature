@@ -10,8 +10,10 @@ The firmware is also a starting point for other AZ3166 applications, with
 reusable C++ components for connectivity, sensing, local discovery, uploads,
 buttons, and watchdog recovery.
 
-Signed local OTA release packages and trusted-LAN uploads are managed by the
-command-line-only [OTA host tooling](tools/ota/README.md).
+Signed local OTA release packages are built and verified by the
+[OTA host tooling](tools/ota/README.md).
+An optional same-origin device page is available at `http://az3166.local/ota`
+after the firmware is provisioned with an approved OTA trust key.
 
 ## Project Preview
 
