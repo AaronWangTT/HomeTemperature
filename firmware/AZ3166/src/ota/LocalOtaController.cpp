@@ -386,7 +386,7 @@ bool LocalOtaController::apply(
         command_ = WORKER_APPLY;
     }
     commandSignal_.release();
-    if (applyCompletion_.wait(APPLY_WAIT_MS) <= 0) {
+    if (applyCompletion_.wait(APPLY_WAIT_MS) != osOK) {
         fail(OTA_ERROR_ACTIVATION_UNCERTAIN, true);
         result = OTA_ERROR_ACTIVATION_UNCERTAIN;
         return true;
