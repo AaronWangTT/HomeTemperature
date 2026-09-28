@@ -134,7 +134,7 @@ constructor argument to connect an existing discovery object. See the
 
 ## Limits and Dependencies
 
-- AZ3166 Core 3.0.0, Mbed RTOS, and lwIP are required by the default backend.
+- AZ3166 Core 3.1.2, Mbed RTOS, and lwIP are required by the default backend.
 - Ordinary clients are handled one at a time. Configuring streaming adds one
   6144-byte worker stack and permits one body request concurrently with bounded
   listener requests; it does not permit concurrent body uploads.

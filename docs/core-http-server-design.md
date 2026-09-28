@@ -2,9 +2,9 @@
 
 Status: proposed
 
-Baseline: AZ3166 Core 3.0.0
+Baseline: AZ3166 Core 3.1.2
 
-Target: a future maintained AZ3166 Core release after 3.0.0
+Target: a future maintained AZ3166 Core release after 3.1.2
 
 Initial consumer: HomeTemperature local telemetry
 
@@ -21,7 +21,7 @@ consumer validation below.
 
 ## 2. Motivation
 
-Core 3.0.0 already provides HTTP parsing, method dispatch, a WSGI-style route
+Core 3.1.2 provides HTTP parsing, method dispatch, a WSGI-style route
 table, standard error responses, response-header helpers, and partial-send
 handling. Reusing those facilities would avoid maintaining a second HTTP
 protocol implementation in the application.
@@ -136,7 +136,7 @@ response behavior.
 
 ## 6. Compatibility and Resources
 
-Core 3.0.0 uses a singleton HTTPD, fixed port 80, and an 8192-byte worker stack.
+Core 3.1.2 uses a singleton HTTPD, fixed port 80, and an 8192-byte worker stack.
 HomeTemperature currently uses one configurable listener and a 6144-byte worker
 stack. Before adoption, compare linked flash, `.data`, `.bss`, heap low-water
 mark, and worker stack usage.
@@ -148,7 +148,7 @@ the local service remains restricted to a trusted LAN.
 
 ## 7. Migration Plan
 
-1. Complete the Core 3.0.0 migration without changing the current HTTP engine.
+1. Complete the Core 3.1.2 migration without changing the current HTTP engine.
 2. Record production and test firmware size and runtime behavior as a baseline.
 3. Add failing Core tests for listener readiness, timeouts, partial I/O,
    shutdown, route context, and restart.

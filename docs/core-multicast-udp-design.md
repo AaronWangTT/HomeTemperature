@@ -1,6 +1,6 @@
 # AZ3166 Core Multicast UDP Design
 
-Status: implemented in AZ3166 Core 3.0.0
+Status: implemented and retained in AZ3166 Core 3.1.2
 
 Core component: `AZ3166MulticastUDP`
 
@@ -22,7 +22,7 @@ Compatibility and memory validation favored the fallback: a generic
 behavior without an mDNS-specific name and does not depend on HomeTemperature
 or ArduinoMDNS.
 
-AZ3166 Core 3.0.0 provides that class. HomeTemperature pins the immutable Core
+AZ3166 Core 3.1.2 provides that class. HomeTemperature pins the immutable Core
 release and uses `AZ3166MulticastUDP` directly; the former local adapter has
 been removed.
 
@@ -222,7 +222,7 @@ The complete pre-test 1 MiB Flash image was restored afterward. OpenOCD reported
 
 HomeTemperature:
 
-- installs the immutable Board Manager 3.0.0 release and verifies its archive
+- installs the immutable Board Manager 3.1.2 release and verifies its archive
   checksum;
 - uses the Core transport instead of `MdnsUdpTransport`;
 - preserves mDNS TTL 255 and nonblocking operation;
@@ -239,7 +239,7 @@ checked on each deployment network.
 1. Added focused Core multicast transport tests.
 2. Implemented `AZ3166MulticastUDP` with an isolated raw-lwIP backend.
 3. Validated Core base and Azure-enabled profiles.
-4. Published immutable AZ3166 Core 3.0.0 and its base-profile archive.
+4. Published immutable AZ3166 Core 3.1.2 and its base-profile archive.
 5. Published the Board Manager entry from a reviewed immutable index commit.
 6. Upgraded HomeTemperature's Core and ArduinoMDNS pins.
 7. Replaced the local transport member with `AZ3166MulticastUDP`.
