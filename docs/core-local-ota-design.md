@@ -11,9 +11,9 @@ Implementation note (2026-09-28): `firmware/AZ3166/src/ota/` now implements the
 Phase 5 controller and routes against the exact Core 3.1.3 `OTAStaging` C API.
 The checked-in public-key configuration is intentionally empty, so production
 OTA remains disabled until a reviewed wired bootstrap provisions a trusted
-public key. Package-builder and browser-page work remain separate, and the
-hardware acceptance requirements in section 11 are not satisfied by the
-compile-only application tests.
+public key. The package builder and browser page use the same signed-package
+API, and the hardware acceptance requirements in section 11 are not satisfied
+by the compile-only application tests.
 
 ## 1. Decision
 
@@ -30,11 +30,10 @@ The initial implementation must not replace the bootloader or claim rollback
 support. A failed update must remain recoverable through ST-Link.
 
 The earlier Core-only migration adopted the staging engine without application
-routes. Phase 5 now adds the HomeTemperature controller, API routes, physical
-authorization, and delayed reboot coordination. Browser UI, A/B rollback,
-boot-attempt counters, health-confirmation logic, and production trust
-provisioning remain out of scope, and the package contains no private signing
-key.
+routes. Phase 5 now adds the HomeTemperature controller, trusted-LAN API routes,
+browser UI, and delayed reboot coordination. A/B rollback, boot-attempt
+counters, health-confirmation logic, and production trust provisioning remain
+out of scope, and the package contains no private signing key.
 
 ## 2. Core 3.1.3 Findings
 
@@ -778,7 +777,11 @@ activation request, and confirms the expected version through the read-only
 The optional `/ota` page is a same-origin client of these same endpoints. It
 does not parse, sign, buffer, or otherwise create a second firmware staging
 path; package authenticity and device-side generation/digest binding remain
-enforced by the existing API and Core staging engine.
+enforced by the existing API and Core staging engine. After apply is accepted,
+the page retries transient probe failures while polling both `/api/version` and
+`/api/ota/status`; it reports terminal `Error` or `Fatal` states immediately
+and stops with an explicit timeout if neither reboot nor a terminal failure is
+observed.
 
 ### Phase 6: Validate and release
 

@@ -14,7 +14,7 @@ const char OTA_PAGE[] =
     "</style><h1>AZ3166 Local OTA</h1><label>Signed package "
     "<input id=f type=file></label>"
     "<button onclick=upload()>Upload</button><button onclick=apply()>Apply</button>"
-    "<pre id=o>Idle</pre><script>let g,d,old;const q=(p,x={})=>fetch(p,x).then("
+    "<pre id=o>Idle</pre><script>let g,d,old,until;const q=(p,x={})=>fetch(p,x).then("
     "async r=>{let j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j"
     "});let poll;async function watch(){try{let s=await q('/api/ota/status');"
     "o.textContent=s.state+' '+s.acceptedBytes+'/'+s.totalBytes;"
@@ -30,11 +30,15 @@ const char OTA_PAGE[] =
     "'/api/ota/status');if(s.generation!==g"
     "||s.digest!==d)throw Error('staged image changed');await q('/api/ota/apply',"
     "{method:'POST',headers:{'Content-Type':'application/json'},body:JSON."
-    "stringify({generation:g,digest:d})});o.textContent='Rebooting';setTimeout("
+    "stringify({generation:g,digest:d})});until=Date.now()+180000;"
+    "o.textContent='Rebooting';setTimeout("
     "check,1500)}catch(e){o.textContent=e}}async function check(){try{let j=await "
-    "q('/api/version');if(j.firmwareVersion===old)throw Error('waiting for new "
-    "firmware');o.textContent='Firmware '+j.firmwareVersion}catch(e){setTimeout("
-    "check,1500)}}</script>";
+    "q('/api/version');if(j.firmwareVersion!==old){o.textContent='Firmware '+j."
+    "firmwareVersion;return}let s=await q('/api/ota/status');if(['Error','Fatal']"
+    ".includes(s.state)){o.textContent=s.lastError||s.state;return}}catch(e){if("
+    "Date.now()>until){o.textContent='Update check timed out: '+e;return}}if(Date."
+    "now()>until){o.textContent='Update check timed out';return}setTimeout(check,"
+    "1500)}</script>";
 
 static_assert(
     sizeof(OTA_PAGE) <= 3072,

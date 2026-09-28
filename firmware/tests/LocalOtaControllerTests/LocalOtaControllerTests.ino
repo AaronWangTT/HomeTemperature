@@ -272,7 +272,9 @@ void testLeaseUploadRoutesAndApply() {
     expect(strcmp(pageResponse.status, "200 OK") == 0 &&
                strcmp(pageResponse.contentType, "text/html; charset=utf-8") == 0 &&
                strstr(pageBody, "AZ3166 Local OTA") != NULL &&
-               strstr(pageBody, "/api/ota/apply") != NULL,
+               strstr(pageBody, "/api/ota/apply") != NULL &&
+               strstr(pageBody, "['Error','Fatal']") != NULL &&
+               strstr(pageBody, "Update check timed out") != NULL,
            "OTA page exposes the same-origin signed upload workflow");
     page.requestLine = "GET /ota?unsafe=1 HTTP/1.1";
     pageResponse = handler.handleRequest(page, pageBody, sizeof(pageBody));
