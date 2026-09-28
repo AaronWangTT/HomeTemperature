@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "TelemetryUploader.h"
+#include "../ota/NetworkMaintenanceCoordinator.h"
 
 namespace {
 
@@ -24,7 +25,19 @@ CloudUploadController::CloudUploadController(
     CloudUploadClock clock)
     : scheduler_(scheduler),
       uploader_(uploader),
-      clock_(clock) {
+      clock_(clock),
+      network_(NULL) {
+}
+
+CloudUploadController::CloudUploadController(
+    UploadScheduler &scheduler,
+    TelemetryUploader &uploader,
+    NetworkMaintenanceCoordinator &network,
+    CloudUploadClock clock)
+    : scheduler_(scheduler),
+      uploader_(uploader),
+      clock_(clock == NULL ? readMillis : clock),
+      network_(&network) {
 }
 
 bool CloudUploadController::requestManualUpload() {
@@ -64,7 +77,13 @@ void CloudUploadController::update(bool prerequisitesReady) {
         return;
     }
 
+    if (network_ != NULL && !network_->tryBeginCloud()) {
+        return;
+    }
     TelemetryUploadResult result = uploader_.upload();
+    if (network_ != NULL) {
+        network_->endCloud();
+    }
     scheduler_.recordResult(
         clock_(),
         scheduleResultFor(result.status));

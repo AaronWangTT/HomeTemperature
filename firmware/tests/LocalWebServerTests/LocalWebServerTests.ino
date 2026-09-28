@@ -774,6 +774,45 @@ public:
     }
 };
 
+class OtaFramingGuardHandler : public LocalHttpHandler {
+public:
+    int otaMutations = 0;
+    int rejected = 0;
+    int telemetryRequests = 0;
+
+    LocalHttpResponse handle(
+        const char *, char *body, size_t) override {
+        ++telemetryRequests;
+        strcpy(body, "telemetry");
+        return {"200 OK", "text/plain", 9};
+    }
+
+    LocalHttpResponse handleRequest(
+        const LocalHttpRequest &request,
+        char *body,
+        size_t bodySize) override {
+        bool ota = strncmp(request.requestLine, "GET /api/ota/status ", 20) == 0 ||
+            strncmp(request.requestLine, "POST /api/ota/apply ", 20) == 0 ||
+            strncmp(request.requestLine, "DELETE /api/ota ", 16) == 0;
+        if (!ota) {
+            return handle(request.requestLine, body, bodySize);
+        }
+        bool valid = request.bodyFramingValid &&
+            !request.hasTransferEncoding &&
+            !request.hasContentLength &&
+            request.contentLength == 0 &&
+            request.prefetchedLength == 0;
+        if (!valid) {
+            ++rejected;
+            strcpy(body, "rejected");
+            return {"400 Bad Request", "text/plain", 8};
+        }
+        ++otaMutations;
+        strcpy(body, "accepted");
+        return {"200 OK", "text/plain", 8};
+    }
+};
+
 class ExampleStreamingHandler : public LocalHttpStreamingHandler {
 public:
     bool handles(const char *requestLine) override {
@@ -906,7 +945,8 @@ void testWorkerProgressDuringStartup() {
            "the worker can publish listener readiness before startup completion returns");
     expect(operations.stateDuringStartup.workerStarted &&
                operations.stateDuringStartup.listening &&
-               operations.stateDuringStartup.address == 0xC0000201UL,
+               operations.stateDuringStartup.address == 0xC0000201UL &&
+               operations.stateDuringStartup.generation == 1,
            "early worker progress publishes a consistent started and listening snapshot");
     server.update(true, 0xC0000201UL);
     expect(fakeCount(&FakeHttpPlatform::openCount) == 1 && server.state().error == 0,
@@ -945,7 +985,10 @@ void testWorkerLifecycle() {
         server.update(true, 0xC0000201UL);
         expect(waitForCount(&FakeHttpPlatform::readyCount, 1),
                "successful listen triggers advertisement on the worker");
-        expect(server.state().listening && server.state().address == 0xC0000201UL,
+        LocalWebServerState connected = server.state();
+        expect(connected.listening &&
+                   connected.address == 0xC0000201UL &&
+                   connected.generation == 1,
                "server publishes actual listener readiness and address");
         fakeMutex.lock();
         bool configured = fake.lastPort == 8080 && fake.lastAddress == 0xC0000201UL;
@@ -957,12 +1000,19 @@ void testWorkerLifecycle() {
                    fakeCount(&FakeHttpPlatform::openCount) == 1,
                "unchanged connectivity does not reopen the listener");
         server.update(true, 0xC0000202UL);
+        expect(server.state().generation == connected.generation + 1,
+               "address change immediately publishes its new generation");
         expect(waitForCount(&FakeHttpPlatform::readyCount, 2) &&
                    fakeCount(&FakeHttpPlatform::closeListenerCount) == 1,
                "address change closes the old listener before advertising the new one");
         server.update(false, 0);
-        expect(!server.state().listening, "disconnect clears published readiness immediately");
+        LocalWebServerState disconnected = server.state();
+        expect(!disconnected.listening &&
+                   disconnected.generation == connected.generation + 2,
+               "disconnect clears readiness and publishes its generation immediately");
         server.update(true, 0xC0000202UL);
+        expect(server.state().generation == connected.generation + 3,
+               "reconnect publishes a fresh generation before listener startup");
         expect(waitForCount(&FakeHttpPlatform::readyCount, 3) &&
                    fakeCount(&FakeHttpPlatform::closeListenerCount) == 2,
                "rapid same-address reconnect still creates a fresh listener");
@@ -1505,6 +1555,60 @@ void testLegacyRouteFramingCompatibility() {
            "streaming rejects a bare carriage return split across receives");
 }
 
+void testOtaBodylessRouteFramingMetadata() {
+    resetHttpPlatform();
+    OtaFramingGuardHandler handler;
+    LocalWebServer server(handler, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+    expect(waitForCount(&FakeHttpPlatform::openCount, 1),
+           "OTA framing test listener starts");
+
+    const char legacyStatus[] =
+        "GET /api/ota/status HTTP/1.1\nHost: device\n\n";
+    queueRequest(legacyStatus, sizeof(legacyStatus) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+               outputContains("400 Bad Request"),
+           "OTA status rejects noncanonical framing");
+
+    const char transferApply[] =
+        "POST /api/ota/apply HTTP/1.1\r\nHost: device\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n";
+    queueRequest(transferApply, sizeof(transferApply) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 2) &&
+               outputContains("400 Bad Request"),
+           "OTA apply rejects Transfer-Encoding");
+
+    const char duplicateLengthCancel[] =
+        "DELETE /api/ota HTTP/1.1\r\nHost: device\r\n"
+        "Content-Length: 0\r\nContent-Length: 0\r\n\r\n";
+    queueRequest(duplicateLengthCancel, sizeof(duplicateLengthCancel) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 3) &&
+               outputContains("400 Bad Request"),
+           "OTA cancel rejects duplicate Content-Length");
+
+    const char prefetchedCancel[] =
+        "DELETE /api/ota HTTP/1.1\r\nHost: device\r\n\r\nx";
+    queueRequest(prefetchedCancel, sizeof(prefetchedCancel) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 4) &&
+               outputContains("400 Bad Request"),
+           "OTA cancel rejects prefetched body bytes without a length");
+
+    const char validStatus[] =
+        "GET /api/ota/status HTTP/1.1\r\nHost: device\r\n\r\n";
+    queueRequest(validStatus, sizeof(validStatus) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 5) &&
+               outputContains("200 OK") && handler.otaMutations == 1 &&
+               handler.rejected == 4,
+           "canonical bodyless OTA request reaches mutation handling once");
+
+    const char legacyTelemetry[] =
+        "GET /api/telemetry HTTP/1.1\nHost: device\n\n";
+    queueRequest(legacyTelemetry, sizeof(legacyTelemetry) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 6) &&
+               outputContains("200 OK") && handler.telemetryRequests == 1,
+           "legacy telemetry framing remains compatible");
+}
+
 void testStreamingFaultsAndGenerationCancellation() {
     {
         resetHttpPlatform();
@@ -1611,6 +1715,43 @@ void testStreamingFaultsAndGenerationCancellation() {
                    waitForCount(&FakeHttpPlatform::closeClientCount, 1),
                "the matching generation cooperatively cancels its worker-owned socket");
     }
+}
+
+void testPublishedConnectivityGeneration() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    ExampleStreamingHandler streamingHandler;
+    LocalHttpStreamingLimits limits = {64, 2000, 10000};
+    LocalWebServer server(
+        handler, streamingHandler, limits, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+    expect(waitForCount(&FakeHttpPlatform::readyCount, 1),
+           "generation test starts its listener");
+    LocalWebServerState initial = server.state();
+
+    fakeMutex.lock();
+    fake.holdStreamingResponse = true;
+    fakeMutex.unlock();
+    const char request[] =
+        "POST /stream HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+    queueRequest(request, sizeof(request) - 1);
+    expect(waitForCount(&FakeHttpPlatform::streamingHandlerCount, 1),
+           "generation test transfers a streaming request");
+    fakeMutex.lock();
+    uint32_t requestGeneration = fake.streamingGeneration;
+    fakeMutex.unlock();
+    expect(initial.generation == requestGeneration,
+           "published state and request metadata use the same generation");
+
+    server.update(true, 0xC0000201UL);
+    expect(server.state().generation == initial.generation &&
+               fakeCount(&FakeHttpPlatform::closeClientCount) == 0,
+           "same-address updates preserve generation and active request");
+
+    server.update(true, 0xC0000202UL);
+    expect(server.state().generation == initial.generation + 1 &&
+               waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+           "only a later address generation invalidates the old request");
 }
 
 void testStreamingListenerResponsiveness() {
@@ -1829,7 +1970,9 @@ void setup() {
     testStreamingFramingAndPrefetchedBody();
     testStreamingRequestMetadata();
     testLegacyRouteFramingCompatibility();
+    testOtaBodylessRouteFramingMetadata();
     testStreamingFaultsAndGenerationCancellation();
+    testPublishedConnectivityGeneration();
     testStreamingListenerResponsiveness();
     testStreamingBackendAndShutdownBounds();
     testResponseDeadline();

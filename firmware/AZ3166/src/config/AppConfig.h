@@ -38,6 +38,17 @@ static const unsigned long WIFI_RETRY_MAX_MS = 60000UL;
 static const unsigned long NTP_RETRY_INTERVAL_MS = 60000UL;
 
 static const unsigned long BUTTON_DEBOUNCE_INTERVAL_MS = 50UL;
+static const unsigned long OTA_BUTTON_HOLD_INTERVAL_MS = 2000UL;
+static const size_t OTA_MAX_PACKAGE_SIZE = 1000000UL;
+static const unsigned long OTA_UPLOAD_IDLE_TIMEOUT_MS = 5000UL;
+static const unsigned long OTA_UPLOAD_TOTAL_TIMEOUT_MS = 600000UL;
+static const unsigned long OTA_REBOOT_DELAY_MS = 250UL;
+static const char OTA_PRODUCT_ID[] = "HomeTemperature";
+static const char OTA_BOARD_ID[] = "MXCHIP_AZ3166";
+#ifndef HOME_TEMPERATURE_FIRMWARE_VERSION
+#define HOME_TEMPERATURE_FIRMWARE_VERSION "1.0.0"
+#endif
+static const char OTA_FIRMWARE_VERSION[] = HOME_TEMPERATURE_FIRMWARE_VERSION;
 static const float WATCHDOG_TIMEOUT_MS = 30000.0f;
 
 }  // namespace AppConfig

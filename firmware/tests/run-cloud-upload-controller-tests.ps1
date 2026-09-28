@@ -23,6 +23,8 @@ Invoke-Az3166TestSuite `
         "cloud/CloudTelemetry.cpp",
         "cloud/CloudUploadController.h",
         "cloud/CloudUploadController.cpp",
+        "ota/NetworkMaintenanceCoordinator.h",
+        "ota/NetworkMaintenanceCoordinator.cpp",
         "telemetry/TelemetryService.h",
         "telemetry/TelemetryService.cpp",
         "cloud/TelemetryUploadResult.h",

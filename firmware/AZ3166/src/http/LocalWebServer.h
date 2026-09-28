@@ -49,6 +49,7 @@ struct LocalWebServerState {
     bool workerStarted;
     bool listening;
     uint32_t address;
+    uint32_t generation;
     int error;
 };
 
@@ -127,15 +128,21 @@ private:
         size_t contentLength;
         size_t prefetchedLength;
         char prefetched[MAX_PREFETCH_BYTES];
+        uint8_t authorizationCount;
         LocalHttpRequestMetadataStatus authorizationStatus;
         size_t authorizationLength;
         char authorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
+        uint8_t contentTypeCount;
+        char contentType[48];
+        uint8_t hostCount;
         LocalHttpRequestMetadataStatus hostStatus;
         size_t hostLength;
         char host[LocalHttpStreamingRequest::HOST_CAPACITY];
+        uint8_t originCount;
         LocalHttpRequestMetadataStatus originStatus;
         size_t originLength;
         char origin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
+        bool hasCookie;
     };
 
     struct StreamingJob {
@@ -148,15 +155,21 @@ private:
         size_t prefetchedLength;
         char requestLine[96];
         char prefetched[MAX_PREFETCH_BYTES];
+        uint8_t authorizationCount;
         LocalHttpRequestMetadataStatus authorizationStatus;
         size_t authorizationLength;
         char authorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
+        uint8_t contentTypeCount;
+        char contentType[48];
+        uint8_t hostCount;
         LocalHttpRequestMetadataStatus hostStatus;
         size_t hostLength;
         char host[LocalHttpStreamingRequest::HOST_CAPACITY];
+        uint8_t originCount;
         LocalHttpRequestMetadataStatus originStatus;
         size_t originLength;
         char origin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
+        bool hasCookie;
         LocalHttpPeerIpv4Metadata peerIpv4;
     };
 

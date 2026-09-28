@@ -1,10 +1,19 @@
 # AZ3166 Local OTA Design
 
-Status: proposed
+Status: application controller/API implemented; production provisioning and
+hardware acceptance remain gated
 
 Baseline: AZ3166 Core 3.1.2
 
 Target: HomeTemperature integration on the maintained Core staging API
+
+Implementation note (2026-09-28): `firmware/AZ3166/src/ota/` now implements the
+Phase 5 controller and routes against the exact Core 3.1.2 `OTAStaging` C API.
+The checked-in public-key configuration is intentionally empty, so production
+OTA remains disabled until a reviewed wired bootstrap provisions a trusted
+public key. Package-builder and browser-page work remain separate, and the
+hardware acceptance requirements in section 11 are not satisfied by the
+compile-only application tests.
 
 ## 1. Decision
 

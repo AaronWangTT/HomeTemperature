@@ -71,6 +71,13 @@ before `AppConfig.h`, preserving deployment overrides and fallback defaults.
 Wi-Fi provisioning is owned by the AZ3166 board package and is not stored in
 this repository.
 
+Local OTA is fail-closed in a clean checkout because
+`AZ3166/src/config/ota_public_key.h` has an empty trust anchor. Provision only a
+reviewed DER RFC 5480 P-256 **public** key through the wired bootstrap release;
+never add a private signing key. See
+[the OTA component guide](AZ3166/src/ota/README.md) for its physical challenge,
+capability, routes, and recovery limitations.
+
 ## Local Discovery
 
 After Wi-Fi, IPv4 acquisition, and successful HTTP listener startup, the firmware
@@ -232,7 +239,7 @@ Compile the production sketch without touching the board:
   -Sketch .\firmware\AZ3166\AZ3166.ino
 ```
 
-Compile the production sketch and all eleven test sketches at an integration
+Compile the production sketch and all twelve test sketches at an integration
 checkpoint:
 
 ```powershell
@@ -269,7 +276,9 @@ The local smoke test accepts a target address through PowerShell:
 
 ## Hardware Boundaries
 
-- Local HTTP is unencrypted and unauthenticated.
+- Local HTTP is unencrypted. Telemetry remains unauthenticated; OTA mutations
+  require a physical challenge, a source-bound capability, and a Core-verified
+  signed package.
 - Wi-Fi, NTP, and HTTPS platform calls are synchronous.
 - Serial logs can contain device identity, network metadata, and measurements.
 - Hardware-in-loop tests are never run automatically by CI.
