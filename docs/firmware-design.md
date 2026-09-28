@@ -460,7 +460,7 @@ All measurements are JSON numbers with exactly one decimal digit. Before
 formatting, readings are checked against the ingestion contract: temperature
 must be -50 to 100 degrees Celsius, humidity 0 to 100 percent, and pressure
 300 to 1200 hPa. Cloud upload uses a fixed 160-byte payload buffer; the generic
-HTTP engine supplies its own 512-byte response buffer. Both use the same formatter.
+HTTP engine supplies its own 3072-byte response buffer. Both use the same formatter.
 `buildPayload()` returns the byte length on success and one of these negative
 errors on failure:
 
@@ -492,7 +492,7 @@ ownership of its bound object or provide synchronization for that object.
 `update(wifiConnected, address)` publishes a mutex-protected desired state and
 starts one normal-priority RTOS worker when an address first becomes available.
 It does not poll clients or perform network I/O in the main loop. The worker
-uses a 6144-byte stack allocated at startup and is reused across reconnects.
+uses an 8192-byte stack allocated at startup and is reused across reconnects.
 
 Worker startup reserves a single launch attempt under the state mutex, then
 releases the mutex before `Thread::start()` and the completion clock read.
@@ -577,7 +577,7 @@ checks and short RTOS waits when I/O cannot progress:
 - Header reading and response writing each have a two-second deadline, checked
   with wraparound-safe elapsed-time arithmetic. A slow client does not hold a
   sensor or shared state lock.
-- `LocalHttpHandler::handle()` receives the request line and a 512-byte response
+- `LocalHttpHandler::handle()` receives the request line and a 3072-byte response
   buffer, and returns status, content type, and exact body byte count. Application
   handlers can return text or binary data; returned metadata strings must remain
   valid until the response is sent. Handler work itself must be bounded.
