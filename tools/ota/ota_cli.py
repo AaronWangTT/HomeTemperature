@@ -32,7 +32,6 @@ from ota_package import (
 )
 
 PRIVATE_KEY_ENV = "HOME_TEMPERATURE_OTA_PRIVATE_KEY"
-CAPABILITY_ENV = "HOME_TEMPERATURE_OTA_CAPABILITY"
 
 
 class CliError(RuntimeError):
@@ -91,33 +90,16 @@ def _base_url(value: str) -> str:
     return value.rstrip("/")
 
 
-def _capability(value: str | None) -> str:
-    capability = value or os.environ.get(CAPABILITY_ENV)
-    if (
-        capability is None
-        or len(capability) != 32
-        or any(character not in "0123456789abcdef" for character in capability)
-    ):
-        raise CliError(
-            f"capability must be 32 lowercase hexadecimal characters; "
-            f"use --capability or {CAPABILITY_ENV}"
-        )
-    return capability
-
-
 def _request(
     base_url: str,
     method: str,
     path: str,
     *,
-    capability: str | None = None,
     body: bytes | None = None,
     content_type: str | None = None,
     timeout: float,
 ) -> tuple[int, dict[str, Any]]:
     headers = {"Accept": "application/json"}
-    if capability is not None:
-        headers["Authorization"] = f"OTA {capability}"
     if content_type is not None:
         headers["Content-Type"] = content_type
     request = urllib.request.Request(
@@ -149,44 +131,8 @@ def _request(
     return status, payload
 
 
-def _bodyless_request(
-    base_url: str,
-    method: str,
-    path: str,
-    capability: str,
-    timeout: float,
-) -> dict[str, Any]:
-    parsed = urllib.parse.urlsplit(base_url)
-    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
-    try:
-        connection.putrequest(method, path)
-        connection.putheader("Accept", "application/json")
-        connection.putheader("Authorization", f"OTA {capability}")
-        connection.endheaders()
-        response = connection.getresponse()
-        encoded = response.read()
-        status = response.status
-    except OSError as error:
-        raise CliError(f"{method} {path} failed: {error}") from error
-    finally:
-        connection.close()
-    try:
-        payload = json.loads(encoded.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CliError(f"{method} {path} returned invalid JSON") from error
-    if not isinstance(payload, dict):
-        raise CliError(f"{method} {path} returned a non-object JSON response")
-    if status < 200 or status >= 300:
-        raise CliError(
-            f"{method} {path} returned HTTP {status}: "
-            f"{payload.get('error') or 'request failed'}"
-        )
-    return payload
-
-
 def _upload_request(
     base_url: str,
-    capability: str,
     package: bytes,
     timeout: float,
 ) -> dict[str, Any]:
@@ -195,7 +141,6 @@ def _upload_request(
     try:
         connection.putrequest("POST", "/api/ota")
         connection.putheader("Accept", "application/json")
-        connection.putheader("Authorization", f"OTA {capability}")
         connection.putheader("Content-Type", "application/octet-stream")
         connection.putheader("Content-Length", str(len(package)))
         connection.endheaders()
@@ -259,9 +204,8 @@ def _add_layout_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--capacity", type=_integer, default=APPLICATION_CAPACITY)
 
 
-def _add_auth_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_remote_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", required=True, type=_base_url)
-    parser.add_argument("--capability")
     parser.add_argument("--timeout", type=_positive_float, default=10.0)
 
 
@@ -343,29 +287,11 @@ def _command_build_config(args: argparse.Namespace) -> None:
     print(f"wrote OTA build configuration to {args.output}")
 
 
-def _command_claim(args: argparse.Namespace) -> None:
-    _, response = _request(
-        args.base_url,
-        "POST",
-        "/api/ota/session",
-        body=json.dumps(
-            {"challenge": args.challenge}, separators=(",", ":")
-        ).encode("ascii"),
-        content_type="application/json",
-        timeout=args.timeout,
-    )
-    capability = response.get("capability")
-    if not isinstance(capability, str):
-        raise CliError("claim response omitted the capability")
-    print(_capability(capability))
-
-
 def _command_status(args: argparse.Namespace) -> None:
     _, response = _request(
         args.base_url,
         "GET",
         "/api/ota/status",
-        capability=_capability(args.capability),
         timeout=args.timeout,
     )
     print(json.dumps(response, separators=(",", ":")))
@@ -375,7 +301,6 @@ def _command_upload(args: argparse.Namespace) -> None:
     package, verified = _load_and_verify(args, production=True)
     response = _upload_request(
         args.base_url,
-        _capability(args.capability),
         package,
         args.timeout,
     )
@@ -410,7 +335,6 @@ def _command_apply(args: argparse.Namespace) -> None:
         args.base_url,
         "GET",
         "/api/ota/status",
-        capability=_capability(args.capability),
         timeout=args.timeout,
     )
     if (
@@ -423,7 +347,6 @@ def _command_apply(args: argparse.Namespace) -> None:
         args.base_url,
         "POST",
         "/api/ota/apply",
-        capability=_capability(args.capability),
         body=json.dumps(
             {
                 "generation": args.generation,
@@ -522,18 +445,12 @@ def _parser() -> argparse.ArgumentParser:
     build_config.add_argument("--source", required=True)
     build_config.set_defaults(handler=_command_build_config)
 
-    claim = subparsers.add_parser("claim", help="claim a physical OTA challenge")
-    claim.add_argument("--base-url", required=True, type=_base_url)
-    claim.add_argument("--challenge", required=True)
-    claim.add_argument("--timeout", type=_positive_float, default=10.0)
-    claim.set_defaults(handler=_command_claim)
-
-    status = subparsers.add_parser("status", help="read authorized OTA status")
-    _add_auth_arguments(status)
+    status = subparsers.add_parser("status", help="read OTA status")
+    _add_remote_arguments(status)
     status.set_defaults(handler=_command_status)
 
     upload = subparsers.add_parser("upload", help="verify and upload a package")
-    _add_auth_arguments(upload)
+    _add_remote_arguments(upload)
     upload.add_argument("--package", type=Path, required=True)
     upload.add_argument("--public-key", type=Path, required=True)
     upload.add_argument("--version")
@@ -542,7 +459,7 @@ def _parser() -> argparse.ArgumentParser:
     upload.set_defaults(handler=_command_upload)
 
     apply = subparsers.add_parser("apply", help="explicitly apply a Ready generation")
-    _add_auth_arguments(apply)
+    _add_remote_arguments(apply)
     apply.add_argument("--package", type=Path, required=True)
     apply.add_argument("--public-key", type=Path, required=True)
     apply.add_argument("--generation", type=_positive_integer, required=True)

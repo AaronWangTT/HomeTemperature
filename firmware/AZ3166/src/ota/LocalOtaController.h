@@ -11,8 +11,6 @@
 enum LocalOtaState {
     LOCAL_OTA_DISABLED,
     LOCAL_OTA_IDLE,
-    LOCAL_OTA_CHALLENGE_DISPLAYED,
-    LOCAL_OTA_ARMED,
     LOCAL_OTA_WAITING_FOR_NETWORK_LEASE,
     LOCAL_OTA_RECEIVING,
     LOCAL_OTA_VERIFYING,
@@ -36,16 +34,12 @@ typedef void (*LocalOtaBeforeApplyValidation)(void *context);
 
 class LocalOtaController {
 public:
-    static const uint32_t CHALLENGE_WINDOW_MS = 30000UL;
-    static const uint32_t CAPABILITY_WINDOW_MS = 300000UL;
     static const uint32_t NETWORK_LEASE_WAIT_MS = 10000UL;
     static const uint32_t APPLY_WAIT_MS =
         OTA_STAGING_ACTIVATION_MAX_MS + 2000UL;
 
     LocalOtaController(
         LocalOtaCore &core,
-        LocalOtaEntropy &entropy,
-        LocalOtaDisplay &display,
         NetworkMaintenanceCoordinator &network,
         const uint8_t *publicKey,
         size_t publicKeySize,
@@ -58,18 +52,14 @@ public:
     ~LocalOtaController();
 
     bool begin();
-    bool openChallenge();
-    bool claim(
-        const char *challenge,
-        uint32_t peerAddress,
-        uint32_t networkGeneration,
-        char capabilityHex[33]);
-    bool authorize(const LocalHttpRequest &request, uint32_t &generation);
     bool upload(
         const LocalHttpStreamingRequest &request,
         LocalHttpBodyStream &body);
-    bool apply(const LocalHttpRequest &request, OTAStagingError &result);
-    bool cancel(const LocalHttpRequest &request);
+    bool apply(
+        uint32_t expectedGeneration,
+        const uint8_t expectedDigest[OTA_SHA256_SIZE],
+        OTAStagingError &result);
+    bool cancel();
     void update(uint32_t networkGeneration);
     LocalOtaSnapshot snapshot() const;
     const char *stateName(LocalOtaState state) const;
@@ -96,23 +86,14 @@ private:
     void processUpload();
     void processApply();
     bool metadataAllowed(const OTAStagingMetadata &metadata) const;
-    bool capabilityValidLocked(
-        const LocalHttpRequest &request,
-        uint32_t now,
-        uint32_t &generation) const;
-    bool queuedApplyValidLocked(uint32_t now) const;
+    bool queuedApplyValidLocked() const;
     bool requestCancellationLocked(uint32_t expectedGeneration);
     void fail(OTAStagingError error, bool fatal);
     void releaseLease(uint32_t generation);
-    void clearCapabilityLocked();
-    void showChallengeIfCurrent(uint32_t generation, const char *text);
-    void clearChallengeIfCurrent(uint32_t generation);
     static bool parseVersion(
         const char *version, uint16_t &major, uint16_t &minor, uint16_t &patch);
 
     LocalOtaCore &core_;
-    LocalOtaEntropy &entropy_;
-    LocalOtaDisplay &display_;
     NetworkMaintenanceCoordinator &network_;
     const uint8_t *publicKey_;
     size_t publicKeySize_;
@@ -123,7 +104,6 @@ private:
     LocalOtaBeforeApplyValidation beforeApplyValidation_;
     void *applyValidationContext_;
     mutable rtos::Mutex mutex_;
-    rtos::Mutex displayMutex_;
     rtos::Thread worker_;
     rtos::Semaphore commandSignal_;
     rtos::Semaphore uploadCompletion_;
@@ -134,13 +114,7 @@ private:
     LocalOtaState state_;
     uint32_t generation_;
     uint32_t networkGeneration_;
-    uint32_t peerAddress_;
-    uint32_t challengeDeadline_;
-    uint32_t capabilityDeadline_;
     uint32_t leaseDeadline_;
-    uint8_t challenge_[4];
-    uint8_t capability_[16];
-    uint8_t failedClaims_;
     bool cancelRequested_;
     bool uploadCompleted_;
     bool applyCompleted_;
@@ -154,11 +128,7 @@ private:
     OTAStagingError applyResult_;
     struct {
         bool pending;
-        uint8_t capability[16];
-        uint32_t peerAddress;
         uint32_t controllerGeneration;
-        uint32_t networkGeneration;
-        uint32_t deadline;
     } queuedApply_;
 };
 

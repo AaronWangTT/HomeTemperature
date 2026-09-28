@@ -44,8 +44,6 @@ and the subsequent verified upload succeeded.
 The following cases remain incomplete and must not be inferred from the
 partial run:
 
-- initiate authorization with the physical two-button hold and record the OLED
-  challenge;
 - upload and activate a valid signed upgrade through the LAN;
 - reject unsigned, corrupt, wrong-key, wrong-board, downgrade, and oversized
   packages on the physical board;

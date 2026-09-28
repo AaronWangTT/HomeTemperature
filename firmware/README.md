@@ -75,8 +75,8 @@ Local OTA is fail-closed in a clean checkout because
 `AZ3166/src/config/ota_public_key.h` has an empty trust anchor. Provision only a
 reviewed DER RFC 5480 P-256 **public** key through the wired bootstrap release;
 never add a private signing key. See
-[the OTA component guide](AZ3166/src/ota/README.md) for its physical challenge,
-capability, routes, and recovery limitations.
+[the OTA component guide](AZ3166/src/ota/README.md) for its routes and recovery
+limitations.
 OTA also requires `HOME_TEMPERATURE_FIRMWARE_VERSION` to be supplied as the
 canonical `MAJOR.MINOR.PATCH` version for the exact signed image. An absent
 version disables OTA; release tooling must generate and verify it rather than
@@ -220,9 +220,9 @@ responder and worker; stopping a session leaves the worker idle for reuse.
 - This is a small request-line handler API, not a full HTTP framework: request
   bodies, persistent connections, and WebSockets are not supported. Discovery's
   current platform backend supports one advertised service per device.
-- The firmware exposes signed, physically authorized OTA APIs and an optional
-  same-origin page at `/ota`, backed by the transport-independent Core staging
-  API. OTA remains disabled until a reviewed trust key and canonical version are
+- The firmware exposes signed trusted-LAN OTA APIs and an optional same-origin
+  page at `/ota`, backed by the transport-independent Core staging API. OTA
+  remains disabled until a reviewed trust key and canonical version are
   provisioned; see the [local OTA guide](AZ3166/src/ota/README.md).
 - Cloud uploads, NTP, and Wi-Fi maintenance remain synchronous in the main loop.
   The watchdog still monitors that loop; threads do not remove Wi-Fi bandwidth
@@ -288,9 +288,9 @@ The local smoke test accepts a target address through PowerShell:
 
 ## Hardware Boundaries
 
-- Local HTTP is unencrypted. Telemetry remains unauthenticated; OTA mutations
-  require a physical challenge, a source-bound capability, and a Core-verified
-  signed package.
+- Local HTTP is unencrypted. Telemetry and OTA controls are available to the
+  trusted LAN. Starting or cancelling an upload changes controller state, while
+  firmware installation and activation require a Core-verified signed package.
 - Wi-Fi, NTP, and HTTPS platform calls are synchronous.
 - Serial logs can contain device identity, network metadata, and measurements.
 - Hardware-in-loop tests are never run automatically by CI.

@@ -30,7 +30,6 @@ from ota_package import (  # noqa: E402
 
 VERSION = "2.0.0"
 SOURCE = "abcdef0123456789abcdef0123456789abcdef01"
-CAPABILITY = "0123456789abcdef0123456789abcdef"
 
 
 def make_package() -> tuple[bytes, bytes]:
@@ -84,9 +83,6 @@ class OtaHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def _authorized(self) -> bool:
-        return self.headers.get("Authorization") == f"OTA {CAPABILITY}"
-
     def do_GET(self) -> None:
         if self.path == "/redirect":
             self.send_response(302)
@@ -99,7 +95,7 @@ class OtaHandler(BaseHTTPRequestHandler):
                 self.version_status,
                 {"firmwareVersion": VERSION if self.applied else "1.0.0"},
             )
-        elif self.path == "/api/ota/status" and self._authorized():
+        elif self.path == "/api/ota/status":
             self._json(
                 200,
                 {
@@ -118,12 +114,7 @@ class OtaHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
-        if self.path == "/api/ota/session":
-            if json.loads(body) == {"challenge": "1234abcd"}:
-                self._json(201, {"capability": CAPABILITY})
-            else:
-                self._json(401, {"error": "unauthorized"})
-        elif self.path == "/api/ota" and self._authorized():
+        if self.path == "/api/ota":
             self.__class__.package = body
             self._json(
                 201,
@@ -137,7 +128,6 @@ class OtaHandler(BaseHTTPRequestHandler):
             )
         elif (
             self.path == "/api/ota/apply"
-            and self._authorized()
             and self.headers.get("Content-Type") == "application/json"
             and json.loads(body)
             == {
@@ -181,22 +171,10 @@ class CliTests(unittest.TestCase):
         with patch.object(sys, "argv", ["ota_cli.py", *arguments]):
             return ota_cli.main()
 
-    def test_claim_upload_status_apply_and_version_verification(self) -> None:
-        self.assertEqual(
-            self.run_cli(
-                "claim",
-                "--base-url",
-                self.base_url,
-                "--challenge",
-                "1234abcd",
-            ),
-            0,
-        )
+    def test_upload_status_apply_and_version_verification(self) -> None:
         common = (
             "--base-url",
             self.base_url,
-            "--capability",
-            CAPABILITY,
         )
         self.assertEqual(self.run_cli("status", *common), 0)
         with patch(
@@ -289,26 +267,12 @@ class CliTests(unittest.TestCase):
                 0,
             )
 
-    def test_rejects_wrong_authorization(self) -> None:
-        self.assertEqual(
-            self.run_cli(
-                "status",
-                "--base-url",
-                self.base_url,
-                "--capability",
-                "f" * 32,
-            ),
-            1,
-        )
-
     def test_rejects_unallowlisted_upload_key(self) -> None:
         self.assertEqual(
             self.run_cli(
                 "upload",
                 "--base-url",
                 self.base_url,
-                "--capability",
-                CAPABILITY,
                 "--package",
                 str(self.package),
                 "--public-key",
@@ -328,8 +292,6 @@ class CliTests(unittest.TestCase):
                     "upload",
                     "--base-url",
                     self.base_url,
-                    "--capability",
-                    CAPABILITY,
                     "--package",
                     str(self.package),
                     "--public-key",
@@ -341,43 +303,36 @@ class CliTests(unittest.TestCase):
     def test_rejects_non_origin_base_url(self) -> None:
         with self.assertRaises(SystemExit):
             self.run_cli(
-                "claim",
+                "status",
                 "--base-url",
                 f"{self.base_url}?token=secret",
-                "--challenge",
-                "1234abcd",
             )
 
     def test_rejects_invalid_port(self) -> None:
         with self.assertRaises(SystemExit):
             self.run_cli(
-                "claim",
+                "status",
                 "--base-url",
                 "http://127.0.0.1:not-a-port",
-                "--challenge",
-                "1234abcd",
             )
 
     def test_rejects_nonpositive_and_nonfinite_timeouts(self) -> None:
         for value in ("0", "-1", "nan", "inf"):
             with self.subTest(value=value), self.assertRaises(SystemExit):
                 self.run_cli(
-                    "claim",
+                    "status",
                     "--base-url",
                     self.base_url,
-                    "--challenge",
-                    "1234abcd",
                     "--timeout",
                     value,
                 )
 
-    def test_authorized_requests_do_not_follow_redirects(self) -> None:
+    def test_requests_do_not_follow_redirects(self) -> None:
         with self.assertRaisesRegex(ota_cli.CliError, "HTTP 302"):
             ota_cli._request(
                 self.base_url,
                 "GET",
                 "/redirect",
-                capability=CAPABILITY,
                 timeout=1,
             )
         self.assertFalse(OtaHandler.redirected)
@@ -467,8 +422,6 @@ class CliTests(unittest.TestCase):
                     "apply",
                     "--base-url",
                     self.base_url,
-                    "--capability",
-                    CAPABILITY,
                     "--package",
                     str(self.package),
                     "--public-key",

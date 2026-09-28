@@ -107,47 +107,30 @@ key; it cannot generate, upload, or activate a package.
 
 ## Trusted-LAN upload
 
-Hold both device buttons until the eight-character challenge appears, then
-claim it:
-
-```powershell
-$capability = python .\tools\ota\ota_cli.py claim `
-  --base-url http://az3166.local `
-  --challenge 1234abcd
-```
-
-The capability is sensitive. Prefer `HOME_TEMPERATURE_OTA_CAPABILITY` so it is
-not placed in shell history or exposed as a command-line argument. The
-`--capability` form can be visible through both shell history and process
-inspection; do not place the value in a URL or log.
-
 Upload and retain the returned generation and digest:
 
 ```powershell
 python .\tools\ota\ota_cli.py upload `
   --base-url http://az3166.local `
-  --capability $capability `
   --package .\artifacts\HomeTemperature.azpkg `
   --public-key C:\secure\ota-public-key.der
 ```
 
-Status is a separate authorized request:
+Status is a separate request:
 
 ```powershell
 python .\tools\ota\ota_cli.py status `
-  --base-url http://az3166.local `
-  --capability $capability
+  --base-url http://az3166.local
 ```
 
 Apply is deliberately separate. Supply the generation and digest returned by
 upload; the CLI verifies the package again and requires the live status to be
 `Ready` with that generation and digest before it sends both values in the
-authenticated apply request:
+apply request:
 
 ```powershell
 python .\tools\ota\ota_cli.py apply `
   --base-url http://az3166.local `
-  --capability $capability `
   --package .\artifacts\HomeTemperature.azpkg `
   --public-key C:\secure\ota-public-key.der `
   --generation 7 `
@@ -158,6 +141,11 @@ After apply, the CLI polls `GET /api/version` until it observes the package
 version or the reboot timeout expires. Use `--verify-url` and
 `--version-field` only when integrating with a different JSON version
 endpoint.
+
+These endpoints intentionally have no challenge, password, or capability
+exchange. Use them only on a trusted LAN. Package signatures, product/board
+identity, version policy, payload digest, Flash read-back, and generation/digest
+activation binding still determine whether firmware can be installed.
 
 Run the host tests, which generate only ephemeral keys:
 

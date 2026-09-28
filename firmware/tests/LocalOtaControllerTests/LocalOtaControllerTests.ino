@@ -21,34 +21,6 @@ uint32_t readClock() {
     return fakeNow;
 }
 
-class FakeEntropy : public LocalOtaEntropy {
-public:
-    uint8_t next = 1;
-    bool fail = false;
-    bool fill(uint8_t *output, size_t size) override {
-        if (fail) {
-            return false;
-        }
-        for (size_t i = 0; i < size; ++i) {
-            output[i] = next++;
-        }
-        return true;
-    }
-};
-
-class FakeDisplay : public LocalOtaDisplay {
-public:
-    char shown[9] = {};
-    int clears = 0;
-    void showChallenge(const char *challenge) override {
-        strncpy(shown, challenge, sizeof(shown) - 1);
-    }
-    void clearChallenge() override {
-        shown[0] = '\0';
-        ++clears;
-    }
-};
-
 class FakeCore : public LocalOtaCore {
 public:
     int begins = 0;
@@ -229,23 +201,10 @@ struct UploadContext {
     bool result;
 };
 
-struct ApplyContext {
-    LocalOtaController *controller;
-    LocalHttpRequest request;
-    OTAStagingError result;
-    bool accepted;
-};
-
 void uploadThread(void *rawContext) {
     UploadContext *context = static_cast<UploadContext *>(rawContext);
     context->result =
         context->controller->upload(context->request, *context->body);
-}
-
-void applyThread(void *rawContext) {
-    ApplyContext *context = static_cast<ApplyContext *>(rawContext);
-    context->accepted =
-        context->controller->apply(context->request, context->result);
 }
 
 bool waitForState(LocalOtaController &controller, LocalOtaState expected) {
@@ -258,71 +217,34 @@ bool waitForState(LocalOtaController &controller, LocalOtaState expected) {
     return false;
 }
 
-void testFailClosedConfigurationAndEntropy() {
+void testFailClosedConfiguration() {
     FakeCore core;
-    FakeEntropy entropy;
-    FakeDisplay display;
     NetworkMaintenanceCoordinator network;
     LocalOtaController disabled(
-        core, entropy, display, network, NULL, 0,
+        core, network, NULL, 0,
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
-    expect(!disabled.begin() && !disabled.openChallenge(),
+    expect(!disabled.begin(),
            "missing public key fails closed");
 
     uint8_t key[] = {1};
     LocalOtaController invalidVersion(
-        core, entropy, display, network, key, sizeof(key),
+        core, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "release", readClock);
-    expect(!invalidVersion.begin() && !invalidVersion.openChallenge(),
+    expect(!invalidVersion.begin(),
            "malformed running firmware version fails closed");
-
-    LocalOtaController controller(
-        core, entropy, display, network, key, sizeof(key),
-        "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
-    expect(controller.begin(), "configured controller starts its joinable worker");
-    entropy.fail = true;
-    expect(!controller.openChallenge() &&
-               controller.snapshot().state == LOCAL_OTA_IDLE,
-           "TRNG failure leaves authorization disabled");
 }
 
-void testAuthorizationLeaseUploadRoutesAndApply() {
+void testLeaseUploadRoutesAndApply() {
     fakeNow = 100;
     FakeCore core;
-    FakeEntropy entropy;
-    FakeDisplay display;
     NetworkMaintenanceCoordinator network;
     uint8_t key[] = {1, 2, 3};
     LocalOtaController controller(
-        core, entropy, display, network, key, sizeof(key),
+        core, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
-    expect(controller.begin() && controller.openChallenge() &&
-               strcmp(display.shown, "01020304") == 0,
-           "physical initiation displays deterministic TRNG challenge");
-
-    char capability[33];
-    expect(!controller.claim("01020305", 0x0a000001, 1, capability),
-           "wrong challenge is rejected");
-    expect(controller.claim("01020304", 0x0a000001, 1, capability) &&
-               strcmp(capability, "05060708090a0b0c0d0e0f1011121314") == 0 &&
-               display.clears == 1,
-           "correct challenge creates a source-bound 128-bit capability");
-
-    char authorization[37];
-    snprintf(authorization, sizeof(authorization), "OTA %s", capability);
+    expect(controller.begin(), "configured controller starts its joinable worker");
     LocalHttpRequest valid = makeRequest(
-        "GET /api/ota/status HTTP/1.1", authorization, 1);
-    uint32_t generation;
-    expect(controller.authorize(valid, generation),
-           "exact lowercase Authorization header is accepted");
-    LocalHttpRequest duplicate = valid;
-    duplicate.authorizationCount = 2;
-    expect(!controller.authorize(duplicate, generation),
-           "duplicate Authorization headers fail closed");
-    LocalHttpRequest wrongSource = valid;
-    wrongSource.peerAddress++;
-    expect(!controller.authorize(wrongSource, generation),
-           "capability is bound to the claiming source");
+        "GET /api/ota/status HTTP/1.1", "", 0);
 
     FakeBody body(385);
     LocalHttpStreamingRequest uploadRequest =
@@ -357,8 +279,8 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
     expect(strcmp(pageResponse.status, "404 Not Found") == 0,
            "OTA page rejects query-string route aliases");
     expect(handler.handles("POST /api/ota HTTP/1.1") &&
-               handler.handles("POST /api/ota/session HTTP/1.1") &&
                handler.handles("POST /api/ota/apply HTTP/1.1") &&
+               !handler.handles("POST /api/ota/session HTTP/1.1") &&
                !handler.handles("GET /api/telemetry HTTP/1.1"),
            "only OTA body routes transfer to the streaming worker");
     char responseBody[256];
@@ -430,8 +352,8 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
     expect(strcmp(response.status, "202 Accepted") == 0 &&
                core.activates == 1 && response.afterAttempt != NULL,
            "apply is executed by the OTA worker and returns 202");
-    expect(!controller.openChallenge(),
-           "a new challenge cannot suppress reboot before response completion");
+    expect(!controller.takeRebootRequest(),
+           "reboot waits for the response-attempt callback");
     response.afterAttempt(false, response.afterAttemptContext);
     expect(controller.takeRebootRequest(),
            "reboot is posted after the final response attempt, even on send failure");
@@ -443,21 +365,14 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
 void testWaitingLeaseAndIdleReadCancellation() {
     fakeNow = 0;
     FakeCore core;
-    FakeEntropy entropy;
-    FakeDisplay display;
     NetworkMaintenanceCoordinator network;
     uint8_t key[] = {1};
     LocalOtaController controller(
-        core, entropy, display, network, key, sizeof(key),
+        core, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
     controller.begin();
-    controller.openChallenge();
-    char capability[33];
-    controller.claim("01020304", 0x0a000001, 3, capability);
-    char authorization[37];
-    snprintf(authorization, sizeof(authorization), "OTA %s", capability);
     LocalHttpRequest valid = makeRequest(
-        "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 3);
+        "POST /api/ota HTTP/1.1", "", 0, 0x0a000001, 3);
     LocalHttpStreamingRequest request =
         makeStreamingRequest(valid.requestLine, 385, 3, valid);
 
@@ -475,11 +390,6 @@ void testWaitingLeaseAndIdleReadCancellation() {
            "server-shutdown body cancellation completes a waiting upload");
     network.endCloud();
 
-    entropy.next = 1;
-    controller.openChallenge();
-    controller.claim("01020304", 0x0a000001, 3, capability);
-    snprintf(authorization, sizeof(authorization), "OTA %s", capability);
-    valid.authorization = authorization;
     request.metadata = valid;
     IdleBody idleBody(385);
     UploadContext idle = {&controller, request, &idleBody, false};
@@ -489,7 +399,7 @@ void testWaitingLeaseAndIdleReadCancellation() {
     controller.update(3);
     expect(waitForState(controller, LOCAL_OTA_RECEIVING),
            "idle-read upload receives the OTA lease");
-    controller.cancel(valid);
+    controller.cancel();
     idleThread.join();
     expect(!idle.result && core.aborts >= 1 &&
                controller.snapshot().state == LOCAL_OTA_IDLE,
@@ -497,7 +407,6 @@ void testWaitingLeaseAndIdleReadCancellation() {
 }
 
 enum ApplyRace {
-    APPLY_RACE_EXPIRY,
     APPLY_RACE_CANCEL,
     APPLY_RACE_NETWORK
 };
@@ -511,11 +420,8 @@ struct ApplyRaceContext {
 void invalidateBeforeApply(void *rawContext) {
     ApplyRaceContext *context =
         static_cast<ApplyRaceContext *>(rawContext);
-    if (context->race == APPLY_RACE_EXPIRY) {
-        fakeNow = LocalOtaController::CAPABILITY_WINDOW_MS + 1;
-        context->controller->update(context->request.networkGeneration);
-    } else if (context->race == APPLY_RACE_CANCEL) {
-        context->controller->cancel(context->request);
+    if (context->race == APPLY_RACE_CANCEL) {
+        context->controller->cancel();
     } else {
         context->controller->update(context->request.networkGeneration + 1);
     }
@@ -525,23 +431,16 @@ void runApplyRace(int raceValue, const char *name) {
     ApplyRace race = static_cast<ApplyRace>(raceValue);
     fakeNow = 0;
     FakeCore core;
-    FakeEntropy entropy;
-    FakeDisplay display;
     NetworkMaintenanceCoordinator network;
     uint8_t key[] = {1};
     ApplyRaceContext hook = {};
     LocalOtaController controller(
-        core, entropy, display, network, key, sizeof(key),
+        core, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock,
         invalidateBeforeApply, &hook);
     controller.begin();
-    controller.openChallenge();
-    char capability[33];
-    controller.claim("01020304", 0x0a000001, 6, capability);
-    char authorization[37];
-    snprintf(authorization, sizeof(authorization), "OTA %s", capability);
     LocalHttpRequest valid = makeRequest(
-        "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 6);
+        "POST /api/ota HTTP/1.1", "", 0, 0x0a000001, 6);
     FakeBody body(385);
     LocalHttpStreamingRequest request =
         makeStreamingRequest(valid.requestLine, 385, 6, valid);
@@ -556,7 +455,8 @@ void runApplyRace(int raceValue, const char *name) {
     hook.request = valid;
     hook.race = race;
     OTAStagingError result = OTA_OK;
-    bool accepted = controller.apply(valid, result);
+    uint8_t digest[OTA_SHA256_SIZE] = {0x42};
+    bool accepted = controller.apply(7, digest, result);
     expect(accepted && result == OTA_ERROR_CANCELLED &&
                core.activates == 0 &&
                controller.snapshot().state == LOCAL_OTA_IDLE,
@@ -564,9 +464,6 @@ void runApplyRace(int raceValue, const char *name) {
 }
 
 void testFinalApplyRevalidationRaces() {
-    runApplyRace(
-        APPLY_RACE_EXPIRY,
-        "capability expiry wins immediately before Ready to Applying");
     runApplyRace(
         APPLY_RACE_CANCEL,
         "explicit cancel wins immediately before Ready to Applying");
@@ -577,12 +474,10 @@ void testFinalApplyRevalidationRaces() {
 
 void testTypedErrorsAndRebootCloudPolicy() {
     FakeCore core;
-    FakeEntropy entropy;
-    FakeDisplay display;
     NetworkMaintenanceCoordinator network;
     uint8_t key[] = {1};
     LocalOtaController controller(
-        core, entropy, display, network, key, sizeof(key),
+        core, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
     expect(strcmp(controller.errorName(OTA_ERROR_WRITE), "OTA_ERROR_WRITE") == 0 &&
                strcmp(controller.errorName(OTA_ERROR_SIGNATURE),
@@ -599,80 +494,51 @@ void testTypedErrorsAndRebootCloudPolicy() {
            "pending reboot excludes cloud before its bounded reset deadline");
 }
 
-void testClaimAndCancelHttpRoutes() {
+void testPublicCancelHttpRoute() {
     fakeNow = 0;
     FakeCore core;
-    FakeEntropy entropy;
-    FakeDisplay display;
     NetworkMaintenanceCoordinator network;
     uint8_t key[] = {1};
     LocalOtaController controller(
-        core, entropy, display, network, key, sizeof(key),
+        core, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
     controller.begin();
-    controller.openChallenge();
     FallbackHandler fallback;
     LocalOtaHttpHandler handler(fallback, controller);
 
-    LocalHttpRequest claimMetadata = makeRequest(
-        "POST /api/ota/session HTTP/1.1", "", 0, 0x0a000002, 9);
-    claimMetadata.contentType = "application/json";
-    claimMetadata.contentTypeCount = 1;
-    const char claimJson[] = "{\"challenge\":\"01020304\"}";
-    TextBody claimBody(claimJson);
-    LocalHttpStreamingRequest claim = makeStreamingRequest(
-        claimMetadata.requestLine, strlen(claimJson), 9, claimMetadata);
-    char responseBody[256];
-    LocalHttpResponse response = handler.handle(
-        claim, claimBody, responseBody, sizeof(responseBody));
-    expect(strcmp(response.status, "201 Created") == 0 &&
-               strstr(responseBody,
-                      "05060708090a0b0c0d0e0f1011121314") != NULL,
-           "session route consumes the displayed challenge exactly once");
-
-    LocalHttpRequest badUpload = makeRequest(
-        "POST /api/ota HTTP/1.1",
-        "OTA 05060708090A0B0C0D0E0F1011121314", 1,
-        0x0a000002, 9);
-    badUpload.contentType = "application/octet-stream";
-    badUpload.contentTypeCount = 1;
-    FakeBody unread(385);
+    LocalHttpRequest metadata = makeRequest(
+        "POST /api/ota HTTP/1.1", "", 0, 0x0a000002, 9);
+    FakeBody body(385);
     LocalHttpStreamingRequest upload =
-        makeStreamingRequest(badUpload.requestLine, 385, 9, badUpload);
-    response = handler.handle(
-        upload, unread, responseBody, sizeof(responseBody));
-    expect(strcmp(response.status, "401 Unauthorized") == 0 &&
-               unread.reads == 0 && response.allowUnreadRequestBody,
-           "malformed upload authorization fails before body reads");
+        makeStreamingRequest(metadata.requestLine, 385, 9, metadata);
+    UploadContext context = {&controller, upload, &body, false};
+    rtos::Thread thread;
+    thread.start(mbed::callback(uploadThread, static_cast<void *>(&context)));
+    expect(waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE),
+           "public upload starts without a session claim");
 
     LocalHttpRequest cancel = makeRequest(
-        "DELETE /api/ota HTTP/1.1",
-        "OTA 05060708090a0b0c0d0e0f1011121314", 1,
-        0x0a000002, 9);
-    response = handler.handleRequest(cancel, responseBody, sizeof(responseBody));
+        "DELETE /api/ota HTTP/1.1", "", 0, 0x0a000002, 9);
+    char responseBody[256];
+    LocalHttpResponse response =
+        handler.handleRequest(cancel, responseBody, sizeof(responseBody));
+    thread.join();
     expect(strcmp(response.status, "202 Accepted") == 0 &&
                waitForState(controller, LOCAL_OTA_IDLE),
-           "authorized DELETE route cancels and invalidates the capability");
+           "public DELETE route cancels the active upload");
 }
 
-void testExpiryAndNetworkGenerationCancelReadyWorker() {
+void testNetworkGenerationCancelsReadyWorker() {
     fakeNow = 0;
     FakeCore core;
-    FakeEntropy entropy;
-    FakeDisplay display;
     NetworkMaintenanceCoordinator network;
     uint8_t key[] = {1};
     LocalOtaController controller(
-        core, entropy, display, network, key, sizeof(key),
+        core, network, key, sizeof(key),
         "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
     controller.begin();
-    controller.openChallenge();
-    char capability[33];
-    controller.claim("01020304", 0x0a000001, 4, capability);
-    char authorization[37];
-    snprintf(authorization, sizeof(authorization), "OTA %s", capability);
     LocalHttpRequest valid = makeRequest(
-        "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 4);
+        "POST /api/ota HTTP/1.1", "", 0, 0x0a000001, 4);
     FakeBody body(385);
     LocalHttpStreamingRequest request =
         makeStreamingRequest("POST /api/ota HTTP/1.1", 385, 4, valid);
@@ -686,17 +552,6 @@ void testExpiryAndNetworkGenerationCancelReadyWorker() {
     expect(waitForState(controller, LOCAL_OTA_IDLE) && core.aborts == 1 &&
                !network.otaBusy(),
            "network generation change cancels Ready and releases the lease");
-
-    entropy.next = 1;
-    controller.openChallenge();
-    controller.claim("01020304", 0x0a000001, 5, capability);
-    valid = makeRequest("GET /api/ota/status HTTP/1.1",
-                        authorization, 1, 0x0a000001, 5);
-    fakeNow = LocalOtaController::CAPABILITY_WINDOW_MS + 1;
-    controller.update(5);
-    uint32_t generation;
-    expect(!controller.authorize(valid, generation),
-           "expired capability cannot authorize another request");
 }
 
 void setup() {
@@ -704,13 +559,13 @@ void setup() {
     while (!Serial);
     delay(3000);
     Serial.println("TEST_SUITE: LocalOtaControllerTests");
-    testFailClosedConfigurationAndEntropy();
-    testAuthorizationLeaseUploadRoutesAndApply();
+    testFailClosedConfiguration();
+    testLeaseUploadRoutesAndApply();
     testWaitingLeaseAndIdleReadCancellation();
     testFinalApplyRevalidationRaces();
     testTypedErrorsAndRebootCloudPolicy();
-    testClaimAndCancelHttpRoutes();
-    testExpiryAndNetworkGenerationCancelReadyWorker();
+    testPublicCancelHttpRoute();
+    testNetworkGenerationCancelsReadyWorker();
 }
 
 void loop() {

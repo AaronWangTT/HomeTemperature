@@ -5,19 +5,6 @@
 #include <stdint.h>
 #include <OTAStaging.h>
 
-class LocalOtaEntropy {
-public:
-    virtual ~LocalOtaEntropy() {}
-    virtual bool fill(uint8_t *output, size_t size) = 0;
-};
-
-class LocalOtaDisplay {
-public:
-    virtual ~LocalOtaDisplay() {}
-    virtual void showChallenge(const char *challenge) = 0;
-    virtual void clearChallenge() = 0;
-};
-
 class LocalOtaCore {
 public:
     virtual ~LocalOtaCore() {}
@@ -36,17 +23,6 @@ public:
     virtual OTAStagingError abort() = 0;
     virtual OTAStagingStatus status() = 0;
     virtual const char *errorName(OTAStagingError error) = 0;
-};
-
-class Az3166OtaEntropy : public LocalOtaEntropy {
-public:
-    bool fill(uint8_t *output, size_t size) override;
-};
-
-class Az3166OtaDisplay : public LocalOtaDisplay {
-public:
-    void showChallenge(const char *challenge) override;
-    void clearChallenge() override;
 };
 
 class Az3166OtaCore : public LocalOtaCore {

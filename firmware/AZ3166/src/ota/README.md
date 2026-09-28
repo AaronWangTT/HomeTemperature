@@ -16,53 +16,48 @@ configuration and invoke the build through the host-tool workflow in
 `tools/ota/README.md`; a normal build emits a fail-closed descriptor that
 cannot be signed by a configured key.
 
-Hold both device buttons for two seconds to display an eight-lowercase-hex
-challenge for 30 seconds. A successful `POST /api/ota/session` claim returns a
-single-use, source- and network-generation-bound 128-bit capability valid for
-five minutes. Mutating and detailed-status routes require exactly:
-
-```text
-Authorization: OTA <32 lowercase hexadecimal characters>
-```
-
 Open `http://az3166.local/ota` for the optional command-page UI. It is a
 same-origin wrapper around the APIs below: firmware bytes still flow through
 the signed streaming endpoint, and apply still requires the staged generation
 and digest. The page does not contain or replace signing keys.
 
-The routes are `POST /api/ota/session`, `POST /api/ota`,
-`GET /api/ota/status`, `POST /api/ota/apply`, and `DELETE /api/ota`. Uploads
+The routes are `POST /api/ota`, `GET /api/ota/status`,
+`POST /api/ota/apply`, and `DELETE /api/ota`. Uploads
 must use one `Content-Length` and `application/octet-stream`; transfer encoding,
 multipart upload, ranges, and resume are unsupported.
+
+There is intentionally no button gesture, OLED challenge, password, session,
+or capability token. Any client on the trusted LAN may invoke the endpoints,
+but Core accepts only a package that passes the configured signature, identity,
+version, bounds, digest, vector-table, and full Flash read-back checks.
 
 Successful upload and `Ready` status responses include the controller
 generation and staged payload digest. Apply requires the exact canonical JSON
 generation and digest selected by the operator; the device compares both with
 its retained Core session before activation.
-`GET /api/version` is a read-only, unauthenticated version probe used by the
-command-line client after reboot; it does not expose a capability or enable
-OTA.
+`GET /api/version` is a read-only version probe used by the command-line
+client after reboot.
 
 One controller worker is the only caller of Core staging methods. It keeps the
 Core session through `Ready` and activation, while the HTTP listener remains
 available for status and cancellation. `NetworkMaintenanceCoordinator` lets an
 in-flight cloud upload finish, then excludes new cloud work until OTA is
-terminal. Capability expiry and address-generation changes cancel the matching
-session. A successful apply posts reboot only after the HTTP response attempt.
+terminal. Address-generation changes cancel the matching session. A successful
+apply posts reboot only after the HTTP response attempt.
 An uncertain activation remains in fatal maintenance and requires ST-Link
 recovery.
 
 Successful upload and `Ready` status responses include the Core staging
 generation and lowercase payload SHA-256 digest. The command-line client
 requires both to match its locally verified package and sends both in the
-separate authenticated apply request.
+separate apply request.
 
 Build, verify, upload, activate, and confirm packages with the repository-owned
 host tool documented in
 [`tools/ota/README.md`](../../../../tools/ota/README.md).
 
-Compile the deterministic controller, authorization, lease, route, upload,
-apply, cancellation, expiry, and shutdown seams with:
+Compile the deterministic controller, lease, route, upload, apply,
+cancellation, network-change, and shutdown seams with:
 
 ```powershell
 & .\firmware\tests\run-local-ota-controller-tests.ps1 -Action Verify

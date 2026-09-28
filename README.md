@@ -89,7 +89,7 @@ terms.
 
 Repository-owned command-line tooling can validate a final AZ3166 application
 binary, build or verify the exact signed `AZPKG001` package, and perform the
-physical-challenge upload, explicit activation, and post-reboot version check.
+trusted-LAN upload, explicit activation, and post-reboot version check.
 Private signing keys must remain outside the checkout and are never printed.
 See [tools/ota/README.md](tools/ota/README.md).
 

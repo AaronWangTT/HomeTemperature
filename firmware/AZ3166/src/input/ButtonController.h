@@ -8,7 +8,6 @@
 struct ButtonEvents {
     bool uploadRequested;
     bool toggleUploadPause;
-    bool otaRequested;
 };
 
 class ButtonController {
@@ -16,8 +15,7 @@ public:
     ButtonController(
         PinName uploadButtonPin,
         PinName pauseButtonPin,
-        uint32_t debounceIntervalMs,
-        uint32_t otaHoldIntervalMs = 2000UL);
+        uint32_t debounceIntervalMs);
 
     void begin();
     ButtonEvents update();
@@ -34,13 +32,6 @@ private:
     PinName pauseButtonPin_;
     ButtonDebouncer uploadButton_;
     ButtonDebouncer pauseButton_;
-    uint32_t otaHoldIntervalMs_;
-    uint32_t chordStarted_;
-    bool chordActive_;
-    bool chordReported_;
-    bool chordEligible_;
-    bool pendingUpload_;
-    bool pendingPause_;
 };
 
 #endif

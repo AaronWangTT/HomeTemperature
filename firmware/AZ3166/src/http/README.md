@@ -179,7 +179,7 @@ constructor argument to connect an existing discovery object. See the
   handled. Bodies may contain binary data within the supplied buffer limit.
 - Persistent connections, chunked transfer coding, WebSockets, and TLS are not
   implemented. Authentication policy belongs to the application handler; the
-  OTA handler uses the parsed metadata for its exact capability rules. Use this
+  OTA handler uses parsed metadata for framing and same-origin checks. Use this
   service only on a trusted LAN.
 - A slow client can delay another client. Threads do not remove network limits
   or bound arbitrary handler execution. The main-loop watchdog does not provide
