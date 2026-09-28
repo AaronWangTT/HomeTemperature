@@ -464,26 +464,22 @@ signal, including while the worker waits in `Ready`. The worker wakes, calls
 and exits. Stale network events from an older generation cannot cancel a newer
 session.
 
-The apply handler waits outside all mutexes on the completion object with a
-documented activation deadline. Verified success produces `202 Accepted`, then
-the handler attempts that response and posts reboot. A verified failure after
-the old boot entry is restored produces `500 Internal Server Error` and requires
-a new upload. `OTA_ACTIVATION_UNCERTAIN`, completion timeout, or loss of the
-worker produces `503 Service Unavailable`, enters fatal maintenance, and does
-not claim that no pending boot entry exists. The completion object is owned
-until both the handler and worker release their references, so timeout cannot
-leave the worker signaling freed memory.
+The apply handler atomically validates the selected generation and digest,
+queues activation, and returns `202 Accepted` before boot metadata persistence
+begins. Its response-attempt callback releases the worker to persist the
+boot-table entry. This ordering avoids blocking or resetting the HTTP response
+while MiCO rewrites its redundant parameter partitions. The client then polls
+`/api/version`; only the new signed version confirms completion.
 
 Cloud scheduling reads the same synchronized snapshot and skips new uploads
 while OTA is busy. No mutex is held during socket I/O, Flash operations,
 hashing, signature verification, callbacks, command waits, or reboot.
 
-After activation succeeds, a bootable pending update intentionally exists while
-the old application is still running. The HTTP handler makes one bounded
-attempt to send the final response and then posts reboot to the main loop
-regardless of whether that send succeeds. A reset or power loss in this window
-follows the same bootloader path and applies the already authenticated staged
-image.
+After the apply response attempt, the worker creates the bootable pending
+update. The application requests reset if the Core call returns; on this MiCO
+platform parameter persistence can itself run until the watchdog resets the
+device. Both paths enter the same bootloader copy flow for the already
+authenticated staged image.
 
 A verified activation failure restores and confirms the previous boot-table
 entry, clears the staged image/session, releases the lease, does

@@ -35,8 +35,6 @@ typedef void (*LocalOtaBeforeApplyValidation)(void *context);
 class LocalOtaController {
 public:
     static const uint32_t NETWORK_LEASE_WAIT_MS = 10000UL;
-    static const uint32_t APPLY_WAIT_MS =
-        OTA_STAGING_ACTIVATION_MAX_MS + 2000UL;
 
     LocalOtaController(
         LocalOtaCore &core,
@@ -118,7 +116,6 @@ private:
     bool cancelRequested_;
     bool uploadCompleted_;
     bool applyCompleted_;
-    bool activationAwaitingResponse_;
     bool rebootPending_;
     LocalHttpBodyStream *uploadBody_;
     size_t packageSize_;

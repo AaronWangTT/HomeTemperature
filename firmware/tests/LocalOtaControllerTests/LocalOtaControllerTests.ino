@@ -350,13 +350,12 @@ void testLeaseUploadRoutesAndApply() {
     response = handler.handle(
         applyRequest, applyBody, responseBody, sizeof(responseBody));
     expect(strcmp(response.status, "202 Accepted") == 0 &&
-               core.activates == 1 && response.afterAttempt != NULL,
-           "apply is executed by the OTA worker and returns 202");
-    expect(!controller.takeRebootRequest(),
-           "reboot waits for the response-attempt callback");
+               core.activates == 0 && response.afterAttempt != NULL,
+           "apply returns 202 before boot metadata persistence begins");
     response.afterAttempt(false, response.afterAttemptContext);
-    expect(controller.takeRebootRequest(),
-           "reboot is posted after the final response attempt, even on send failure");
+    expect(waitForState(controller, LOCAL_OTA_IDLE) &&
+               core.activates == 1 && controller.takeRebootRequest(),
+           "response completion releases activation and posts reboot");
     expect(network.tryBeginCloud(),
            "terminal activation releases the network lease");
     network.endCloud();
@@ -457,9 +456,11 @@ void runApplyRace(int raceValue, const char *name) {
     OTAStagingError result = OTA_OK;
     uint8_t digest[OTA_SHA256_SIZE] = {0x42};
     bool accepted = controller.apply(7, digest, result);
-    expect(accepted && result == OTA_ERROR_CANCELLED &&
+    controller.responseAttempted(false);
+    expect(accepted && result == OTA_OK &&
+               waitForState(controller, LOCAL_OTA_IDLE) &&
                core.activates == 0 &&
-               controller.snapshot().state == LOCAL_OTA_IDLE,
+               !controller.takeRebootRequest(),
            name);
 }
 

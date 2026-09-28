@@ -54,7 +54,6 @@ LocalOtaController::LocalOtaController(
       cancelRequested_(false),
       uploadCompleted_(false),
       applyCompleted_(false),
-      activationAwaitingResponse_(false),
       rebootPending_(false),
       uploadBody_(NULL),
       packageSize_(0),
@@ -105,8 +104,7 @@ bool LocalOtaController::upload(
     uint32_t uploadGeneration;
     {
         std::lock_guard<rtos::Mutex> lock(mutex_);
-        if (activationAwaitingResponse_ ||
-            (state_ != LOCAL_OTA_IDLE && state_ != LOCAL_OTA_ERROR) ||
+        if ((state_ != LOCAL_OTA_IDLE && state_ != LOCAL_OTA_ERROR) ||
             request.contentLength < OTA_PACKAGE_PAYLOAD_OFFSET + 1 ||
             command_ != WORKER_NONE) {
             return false;
@@ -169,16 +167,9 @@ bool LocalOtaController::apply(
         queuedApply_.pending = true;
         queuedApply_.controllerGeneration = generation;
         command_ = WORKER_APPLY;
+        result = OTA_OK;
     }
-    commandSignal_.release();
-    if (applyCompletion_.wait(APPLY_WAIT_MS) != osOK) {
-        fail(OTA_ERROR_ACTIVATION_UNCERTAIN, true);
-        result = OTA_ERROR_ACTIVATION_UNCERTAIN;
-        return true;
-    }
-    std::lock_guard<rtos::Mutex> lock(mutex_);
-    result = applyResult_;
-    return applyCompleted_;
+    return true;
 }
 
 bool LocalOtaController::cancel() {
@@ -256,17 +247,15 @@ bool LocalOtaController::readyImage(
 }
 
 void LocalOtaController::responseAttempted(bool) {
-    uint32_t generation = 0;
+    bool startApply = false;
     {
         std::lock_guard<rtos::Mutex> lock(mutex_);
-        if (activationAwaitingResponse_) {
-            activationAwaitingResponse_ = false;
-            rebootPending_ = true;
-            generation = generation_;
+        if (queuedApply_.pending && command_ == WORKER_APPLY) {
+            startApply = true;
         }
     }
-    if (generation != 0) {
-        releaseLease(generation);
+    if (startApply) {
+        commandSignal_.release();
     }
 }
 
@@ -533,14 +522,14 @@ void LocalOtaController::processApply() {
         command_ = WORKER_NONE;
         if (result == OTA_OK) {
             state_ = LOCAL_OTA_IDLE;
-            activationAwaitingResponse_ = true;
+            rebootPending_ = true;
         } else if (result == OTA_ERROR_ACTIVATION_UNCERTAIN) {
             state_ = LOCAL_OTA_FATAL;
         } else {
             state_ = LOCAL_OTA_ERROR;
         }
     }
-    if (result != OTA_OK && result != OTA_ERROR_ACTIVATION_UNCERTAIN) {
+    if (result != OTA_ERROR_ACTIVATION_UNCERTAIN) {
         releaseLease(generation);
     }
     applyCompletion_.release();
