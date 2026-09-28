@@ -311,7 +311,8 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
                         responseBody, responseBodySize);
         }
         OTAStagingError result;
-        if (!controller_.apply(result)) {
+        if (!controller_.apply(
+                expectedGeneration, expectedDigest, result)) {
             return json("409 Conflict", "{\"error\":\"not ready\"}",
                         responseBody, responseBodySize);
         }

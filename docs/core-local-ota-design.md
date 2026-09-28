@@ -136,7 +136,7 @@ adding account management solely for OTA would be a separate product decision.
 | Layer | Responsibilities |
 | --- | --- |
 | AZ3166 Core | Package-envelope parsing, partition discovery, erase/write/read-back, bounds checking, streaming CRC16 and SHA-256, image-shape validation, signature-verification mechanism, activation metadata, typed errors, cancellation, and fault-injection seams. |
-| HomeTemperature | Physical authorization, trusted public key, product/board/version policy, HTTP routes, upload ownership and deadlines, progress/status UX, coordination with cloud and discovery, and delayed reboot. |
+| HomeTemperature | Trusted public key, product/board/version policy, trusted-LAN HTTP routes, upload ownership and deadlines, progress/status UX, coordination with cloud and discovery, and delayed reboot. |
 | Host tooling | Build provenance, package construction, offline private-key signing, pre-upload inspection, upload progress, and preservation of the raw `.bin` used for ST-Link recovery. |
 | Bootloader | Consume the existing length-and-CRC boot-table contract and copy the staged image into the application region. Whether it validates CRC before modifying internal Flash remains a hardware-test gate. Rollback is not available in the current bootloader. |
 
@@ -529,7 +529,7 @@ automation.
 Suggested application states:
 
 ```text
-Disabled -> ChallengeDisplayed -> Armed -> WaitingForNetworkLease
+Disabled -> Idle -> WaitingForNetworkLease
     -> Receiving -> Verifying -> Ready -> Applying
             |             |          |
             +-----------> Error <----+

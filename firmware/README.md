@@ -220,9 +220,9 @@ responder and worker; stopping a session leaves the worker idle for reuse.
 - This is a small request-line handler API, not a full HTTP framework: request
   bodies, persistent connections, and WebSockets are not supported. Discovery's
   current platform backend supports one advertised service per device.
-- The firmware exposes signed, physically authorized OTA APIs and an optional
-  same-origin page at `/ota`, backed by the transport-independent Core staging
-  API. OTA remains disabled until a reviewed trust key and canonical version are
+- The firmware exposes signed trusted-LAN OTA APIs and an optional same-origin
+  page at `/ota`, backed by the transport-independent Core staging API. OTA
+  remains disabled until a reviewed trust key and canonical version are
   provisioned; see the [local OTA guide](AZ3166/src/ota/README.md).
 - Cloud uploads, NTP, and Wi-Fi maintenance remain synchronous in the main loop.
   The watchdog still monitors that loop; threads do not remove Wi-Fi bandwidth

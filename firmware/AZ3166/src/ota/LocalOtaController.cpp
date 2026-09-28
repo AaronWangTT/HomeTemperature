@@ -148,12 +148,20 @@ bool LocalOtaController::upload(
     }
 }
 
-bool LocalOtaController::apply(OTAStagingError &result) {
+bool LocalOtaController::apply(
+    uint32_t expectedGeneration,
+    const uint8_t expectedDigest[OTA_SHA256_SIZE],
+    OTAStagingError &result) {
     uint32_t generation;
     {
         std::lock_guard<rtos::Mutex> lock(mutex_);
         generation = generation_;
-        if (state_ != LOCAL_OTA_READY || command_ != WORKER_NONE) {
+        if (expectedDigest == NULL ||
+            state_ != LOCAL_OTA_READY ||
+            command_ != WORKER_NONE ||
+            staged_.sessionGeneration != expectedGeneration ||
+            memcmp(
+                staged_.sha256, expectedDigest, OTA_SHA256_SIZE) != 0) {
             return false;
         }
         applyCompleted_ = false;

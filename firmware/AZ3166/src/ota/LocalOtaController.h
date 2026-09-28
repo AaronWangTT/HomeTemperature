@@ -55,7 +55,10 @@ public:
     bool upload(
         const LocalHttpStreamingRequest &request,
         LocalHttpBodyStream &body);
-    bool apply(OTAStagingError &result);
+    bool apply(
+        uint32_t expectedGeneration,
+        const uint8_t expectedDigest[OTA_SHA256_SIZE],
+        OTAStagingError &result);
     bool cancel();
     void update(uint32_t networkGeneration);
     LocalOtaSnapshot snapshot() const;

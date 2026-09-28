@@ -201,23 +201,10 @@ struct UploadContext {
     bool result;
 };
 
-struct ApplyContext {
-    LocalOtaController *controller;
-    LocalHttpRequest request;
-    OTAStagingError result;
-    bool accepted;
-};
-
 void uploadThread(void *rawContext) {
     UploadContext *context = static_cast<UploadContext *>(rawContext);
     context->result =
         context->controller->upload(context->request, *context->body);
-}
-
-void applyThread(void *rawContext) {
-    ApplyContext *context = static_cast<ApplyContext *>(rawContext);
-    context->accepted =
-        context->controller->apply(context->result);
 }
 
 bool waitForState(LocalOtaController &controller, LocalOtaState expected) {
@@ -468,7 +455,8 @@ void runApplyRace(int raceValue, const char *name) {
     hook.request = valid;
     hook.race = race;
     OTAStagingError result = OTA_OK;
-    bool accepted = controller.apply(result);
+    uint8_t digest[OTA_SHA256_SIZE] = {0x42};
+    bool accepted = controller.apply(7, digest, result);
     expect(accepted && result == OTA_ERROR_CANCELLED &&
                core.activates == 0 &&
                controller.snapshot().state == LOCAL_OTA_IDLE,
