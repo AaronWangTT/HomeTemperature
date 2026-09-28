@@ -22,6 +22,7 @@ from ota_package import (
     build_package,
     load_private_key,
     load_public_key,
+    render_build_config,
     verify_package,
 )
 
@@ -49,6 +50,10 @@ def _positive_integer(value: str) -> int:
 
 def _base_url(value: str) -> str:
     parsed = urllib.parse.urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("base URL contains an invalid port") from error
     if (
         parsed.scheme != "http"
         or not parsed.hostname
@@ -57,6 +62,7 @@ def _base_url(value: str) -> str:
         or parsed.path not in ("", "/")
         or parsed.query
         or parsed.fragment
+        or port == 0
     ):
         raise argparse.ArgumentTypeError("base URL must be an HTTP origin without a path")
     return value.rstrip("/")
@@ -116,6 +122,41 @@ def _request(
         message = payload.get("error")
         raise CliError(f"{method} {path} returned HTTP {status}: {message or 'request failed'}")
     return status, payload
+
+
+def _bodyless_request(
+    base_url: str,
+    method: str,
+    path: str,
+    capability: str,
+    timeout: float,
+) -> dict[str, Any]:
+    parsed = urllib.parse.urlsplit(base_url)
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
+    try:
+        connection.putrequest(method, path)
+        connection.putheader("Accept", "application/json")
+        connection.putheader("Authorization", f"OTA {capability}")
+        connection.endheaders()
+        response = connection.getresponse()
+        encoded = response.read()
+        status = response.status
+    except OSError as error:
+        raise CliError(f"{method} {path} failed: {error}") from error
+    finally:
+        connection.close()
+    try:
+        payload = json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CliError(f"{method} {path} returned invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise CliError(f"{method} {path} returned a non-object JSON response")
+    if status < 200 or status >= 300:
+        raise CliError(
+            f"{method} {path} returned HTTP {status}: "
+            f"{payload.get('error') or 'request failed'}"
+        )
+    return payload
 
 
 def _upload_request(
@@ -237,6 +278,13 @@ def _command_verify(args: argparse.Namespace) -> None:
     )
 
 
+def _command_build_config(args: argparse.Namespace) -> None:
+    _, public_der = load_public_key(args.public_key)
+    rendered = render_build_config(public_der, args.version, args.source)
+    args.output.write_text(rendered, encoding="ascii", newline="\n")
+    print(f"wrote OTA build configuration to {args.output}")
+
+
 def _command_claim(args: argparse.Namespace) -> None:
     _, response = _request(
         args.base_url,
@@ -307,12 +355,12 @@ def _command_apply(args: argparse.Namespace) -> None:
     )
     if status.get("state") != "Ready" or status.get("generation") != args.generation:
         raise CliError("device is not Ready with the requested generation")
-    _request(
+    _bodyless_request(
         args.base_url,
         "POST",
         "/api/ota/apply",
-        capability=_capability(args.capability),
-        timeout=args.timeout,
+        _capability(args.capability),
+        args.timeout,
     )
     _verify_rebooted_version(
         args.verify_url or f"{args.base_url}/api/version",
@@ -375,6 +423,15 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--source")
     _add_layout_arguments(verify)
     verify.set_defaults(handler=_command_verify)
+
+    build_config = subparsers.add_parser(
+        "build-config", help="generate public firmware build configuration"
+    )
+    build_config.add_argument("--public-key", type=Path, required=True)
+    build_config.add_argument("--output", type=Path, required=True)
+    build_config.add_argument("--version", required=True)
+    build_config.add_argument("--source", required=True)
+    build_config.set_defaults(handler=_command_build_config)
 
     claim = subparsers.add_parser("claim", help="claim a physical OTA challenge")
     claim.add_argument("--base-url", required=True, type=_base_url)

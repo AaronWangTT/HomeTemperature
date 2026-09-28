@@ -177,6 +177,26 @@ def public_key_der(private_key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
+def render_build_config(public_der: bytes, version: str, source: str) -> str:
+    _parse_version(version)
+    if _SOURCE_PATTERN.fullmatch(source) is None:
+        raise PackageError("source commit must be 40 lowercase hexadecimal characters")
+    key_id = hashlib.sha256(public_der).digest()
+
+    def byte_list(data: bytes) -> str:
+        return ", ".join(f"0x{value:02x}" for value in data)
+
+    return (
+        "#ifndef HOME_TEMPERATURE_OTA_BUILD_CONFIG_H\n"
+        "#define HOME_TEMPERATURE_OTA_BUILD_CONFIG_H\n\n"
+        f'#define HOME_TEMPERATURE_FIRMWARE_VERSION "{version}"\n'
+        f"#define HOME_TEMPERATURE_OTA_SOURCE_COMMIT_BYTES {byte_list(source.encode('ascii'))}\n"
+        f"#define HOME_TEMPERATURE_OTA_KEY_ID_BYTES {byte_list(key_id)}\n"
+        f"#define HOME_TEMPERATURE_OTA_PUBLIC_KEY_DER_BYTES {byte_list(public_der)}\n\n"
+        "#endif\n"
+    )
+
+
 def _validate_descriptor(
     descriptor: Descriptor,
     *,

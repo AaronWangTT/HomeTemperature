@@ -81,6 +81,9 @@ OTA also requires `HOME_TEMPERATURE_FIRMWARE_VERSION` to be supplied as the
 canonical `MAJOR.MINOR.PATCH` version for the exact signed image. An absent
 version disables OTA; release tooling must generate and verify it rather than
 using a fallback.
+Use the [OTA host tooling](../tools/ota/README.md) to generate the public build
+configuration, compile with the retained descriptor at image offset `0x200`,
+and produce the signed package.
 
 ## Local Discovery
 

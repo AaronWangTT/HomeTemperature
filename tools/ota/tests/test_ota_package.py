@@ -24,6 +24,7 @@ from ota_package import (  # noqa: E402
     load_public_key,
     load_private_key,
     public_key_der,
+    render_build_config,
     verify_package,
 )
 
@@ -147,6 +148,21 @@ class PackageTests(unittest.TestCase):
     def test_rejects_private_key_inside_repository(self) -> None:
         with self.assertRaisesRegex(PackageError, "outside the repository"):
             load_private_key(Path(__file__))
+
+    def test_renders_public_firmware_build_config(self) -> None:
+        rendered = render_build_config(self.public_der, VERSION, SOURCE)
+        self.assertIn(
+            f'#define HOME_TEMPERATURE_FIRMWARE_VERSION "{VERSION}"', rendered
+        )
+        self.assertIn(
+            "#define HOME_TEMPERATURE_OTA_KEY_ID_BYTES "
+            + ", ".join(
+                f"0x{value:02x}"
+                for value in hashlib.sha256(self.public_der).digest()
+            ),
+            rendered,
+        )
+        self.assertNotIn("PRIVATE", rendered)
 
 
 if __name__ == "__main__":

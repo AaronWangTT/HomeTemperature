@@ -12,7 +12,11 @@ param(
 
     [string]$ArduinoExecutable,
 
-    [string]$ArduinoInstallRoot = (Join-Path (Get-Location) ".tools")
+    [string]$ArduinoInstallRoot = (Join-Path (Get-Location) ".tools"),
+
+    [string]$BuildPath,
+
+    [string]$OtaBuildConfig
 )
 
 Set-StrictMode -Version Latest
@@ -71,6 +75,22 @@ if ([System.IO.Path]::GetExtension($resolvedSketch) -ne ".ino") {
     throw "Sketch must be an .ino file: $resolvedSketch"
 }
 
+$productionSketch = (
+    Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\AZ3166\AZ3166.ino")
+).Path
+$isProductionSketch = $resolvedSketch -eq $productionSketch
+$temporaryBuildPath = $null
+$resolvedBuildPath = $null
+if ($OtaBuildConfig -and -not $isProductionSketch) {
+    throw "-OtaBuildConfig is valid only for the production AZ3166 sketch."
+}
+if ($isProductionSketch -and -not $BuildPath) {
+    $temporaryBuildPath = Join-Path (
+        [System.IO.Path]::GetTempPath()
+    ) ("hometemperature-ota-build-" + [Guid]::NewGuid().ToString("N"))
+    $BuildPath = $temporaryBuildPath
+}
+
 $arduino = Find-ArduinoExecutable -RequestedExecutable $ArduinoExecutable
 if (
     -not (Test-Path -LiteralPath (Join-Path $installedCoreRoot "platform.txt") -PathType Leaf) -or
@@ -114,15 +134,83 @@ if ($Action -eq "Upload") {
     Write-Host "Verifying $resolvedSketch for $Board"
 }
 
+if ($isProductionSketch) {
+    $linkerScript = (
+        Resolve-Path -LiteralPath (
+            Join-Path $PSScriptRoot "..\AZ3166\linker\AZ3166-ota.ld"
+        )
+    ).Path
+    if ($linkerScript -match "\s") {
+        throw "The OTA linker-script path must not contain whitespace: $linkerScript"
+    }
+    $arguments += @(
+        "--pref",
+        "compiler.link.script.flags=-T$linkerScript"
+    )
+}
+if ($BuildPath) {
+    $resolvedBuildPath = [System.IO.Path]::GetFullPath($BuildPath)
+    New-Item -ItemType Directory -Force -Path $resolvedBuildPath | Out-Null
+    $arguments += @("--pref", "build.path=$resolvedBuildPath")
+}
+if ($OtaBuildConfig) {
+    $resolvedOtaBuildConfig = (Resolve-Path -LiteralPath $OtaBuildConfig).Path
+    if ($resolvedOtaBuildConfig -match "\s") {
+        throw "The OTA build-config path must not contain whitespace: $resolvedOtaBuildConfig"
+    }
+    $arguments += @(
+        "--pref",
+        "compiler.cpp.extra_flags=-include $resolvedOtaBuildConfig"
+    )
+}
+
 $output = (& $arduino @arguments 2>&1 | Out-String)
 $exitCode = $LASTEXITCODE
 Write-Host $output
 
 if ($exitCode -ne 0) {
+    if ($temporaryBuildPath) {
+        Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+    }
     throw "Arduino $Action failed with exit code $exitCode."
 }
 if ($Action -eq "Upload" -and $output -notmatch "\*\*\s+Verified OK\s+\*\*") {
+    if ($temporaryBuildPath) {
+        Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+    }
     throw "Upload exited successfully, but OpenOCD did not report Verified OK."
+}
+if ($isProductionSketch) {
+    $binaryPath = Join-Path $resolvedBuildPath "AZ3166.ino.bin"
+    if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+        if ($temporaryBuildPath) {
+            Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+        }
+        throw "Production build did not emit $binaryPath."
+    }
+    $binary = [System.IO.File]::ReadAllBytes($binaryPath)
+    $descriptorMagic = if ($binary.Length -ge 0x300) {
+        [System.Text.Encoding]::ASCII.GetString($binary, 0x200, 8)
+    } else {
+        ""
+    }
+    $descriptorSize = if ($binary.Length -ge 0x20C) {
+        [uint16](
+            [uint16]$binary[0x20A] -bor
+            ([uint16]$binary[0x20B] -shl 8)
+        )
+    } else {
+        0
+    }
+    if ($descriptorMagic -ne "AZOTA001" -or $descriptorSize -ne 256) {
+        if ($temporaryBuildPath) {
+            Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+        }
+        throw "Production binary has no valid OTA descriptor at offset 0x200."
+    }
+}
+if ($temporaryBuildPath) {
+    Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
 }
 
 Write-Host "AZ3166 $Action completed successfully."

@@ -23,11 +23,33 @@ version, source commit, application layout, package format, and key identifier
 must match the CLI arguments and the public key derived from the private key.
 Keep this exact raw `.bin` for ST-Link recovery.
 
+Generate a public build configuration outside the checkout, then compile the
+production sketch with the repository OTA linker. The generated header contains
+only the public verification key and release metadata:
+
+```powershell
+python .\tools\ota\ota_cli.py build-config `
+  --public-key C:\secure\ota-public-key.der `
+  --output C:\secure\ota-build-config.h `
+  --version 1.2.3 `
+  --source 0123456789abcdef0123456789abcdef01234567
+
+.\firmware\tools\Invoke-Az3166Build.ps1 `
+  -Action Verify `
+  -Sketch .\firmware\AZ3166\AZ3166.ino `
+  -BuildPath .\artifacts\ota-build `
+  -OtaBuildConfig C:\secure\ota-build-config.h
+```
+
+The build fails if the retained descriptor is absent or not exactly 256 bytes
+at image offset `0x200`. The resulting raw image is
+`artifacts\ota-build\AZ3166.ino.bin`.
+
 Build a signed package:
 
 ```powershell
 python .\tools\ota\ota_cli.py build `
-  --image .\artifacts\HomeTemperature.bin `
+  --image .\artifacts\ota-build\AZ3166.ino.bin `
   --output .\artifacts\HomeTemperature.azpkg `
   --private-key C:\secure\ota-signing-key.pem `
   --version 1.2.3 `
@@ -61,9 +83,10 @@ $capability = python .\tools\ota\ota_cli.py claim `
   --challenge 1234abcd
 ```
 
-The capability is sensitive and remains only in process memory when passed
-with `--capability`. As an alternative, set
-`HOME_TEMPERATURE_OTA_CAPABILITY`; do not place it in a URL or log.
+The capability is sensitive. Prefer `HOME_TEMPERATURE_OTA_CAPABILITY` so it is
+not placed in shell history or exposed as a command-line argument. The
+`--capability` form can be visible through both shell history and process
+inspection; do not place the value in a URL or log.
 
 Upload and retain the returned generation and digest:
 

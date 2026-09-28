@@ -112,7 +112,12 @@ class OtaHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/ota" and self._authorized():
             self.__class__.package = body
             self._json(201, {"state": "Ready", "generation": 7, "acceptedBytes": length})
-        elif self.path == "/api/ota/apply" and self._authorized() and not body:
+        elif (
+            self.path == "/api/ota/apply"
+            and self._authorized()
+            and "Content-Length" not in self.headers
+            and not body
+        ):
             self.__class__.applied = True
             self._json(202, {"status": "reboot scheduled"})
         else:
@@ -195,6 +200,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual(OtaHandler.package, self.package.read_bytes())
         self.assertTrue(OtaHandler.applied)
 
+    def test_generates_public_build_configuration(self) -> None:
+        output = Path(self.directory.name) / "ota-build-config.h"
+        self.assertEqual(
+            self.run_cli(
+                "build-config",
+                "--public-key",
+                str(self.public_key),
+                "--output",
+                str(output),
+                "--version",
+                VERSION,
+                "--source",
+                SOURCE,
+            ),
+            0,
+        )
+        rendered = output.read_text(encoding="ascii")
+        self.assertIn(
+            f'#define HOME_TEMPERATURE_FIRMWARE_VERSION "{VERSION}"',
+            rendered,
+        )
+        self.assertIn("HOME_TEMPERATURE_OTA_PUBLIC_KEY_DER_BYTES", rendered)
+        self.assertNotIn("PRIVATE", rendered)
+
     def test_rejects_wrong_authorization(self) -> None:
         self.assertEqual(
             self.run_cli(
@@ -213,6 +242,16 @@ class CliTests(unittest.TestCase):
                 "claim",
                 "--base-url",
                 f"{self.base_url}?token=secret",
+                "--challenge",
+                "1234abcd",
+            )
+
+    def test_rejects_invalid_port(self) -> None:
+        with self.assertRaises(SystemExit):
+            self.run_cli(
+                "claim",
+                "--base-url",
+                "http://127.0.0.1:not-a-port",
                 "--challenge",
                 "1234abcd",
             )
