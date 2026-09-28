@@ -12,6 +12,7 @@ namespace AppConfig {
 #endif
 
 static const char TELEMETRY_REQUEST[] = "GET /api/telemetry ";
+static const char VERSION_REQUEST[] = "GET /api/version HTTP/1.1";
 static const size_t TELEMETRY_PAYLOAD_SIZE = 160;
 static const uint16_t LOCAL_TELEMETRY_PORT = 80;
 static const unsigned long LOCAL_WEB_SERVER_RETRY_INTERVAL_MS = 5000UL;

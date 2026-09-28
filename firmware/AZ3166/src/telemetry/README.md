@@ -98,6 +98,11 @@ Construct `TelemetryHttpHandler handler(telemetry)` and inject it into
 the request-line prefix `GET /api/telemetry `, including the trailing space.
 Other methods, subpaths, and query strings do not match this route.
 
+The adapter also exposes exact `GET /api/version HTTP/1.1` as a read-only JSON
+response containing the canonical compiled `firmwareVersion`. It does not read
+the sensors and lets the command-line OTA client verify the signed version
+after reboot.
+
 | Condition | Result |
 | --- | --- |
 | Valid reading and payload | `200 OK`, JSON body |

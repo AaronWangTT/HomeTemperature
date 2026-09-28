@@ -25,6 +25,14 @@ The routes are `POST /api/ota/session`, `POST /api/ota`,
 must use one `Content-Length` and `application/octet-stream`; transfer encoding,
 multipart upload, ranges, and resume are unsupported.
 
+Successful upload and `Ready` status responses include the controller
+generation. Apply is bodyless and activates only the controller's retained
+Core session. The host client independently verifies the selected package and
+requires its supplied digest and live Ready generation to match before apply.
+`GET /api/version` is a read-only, unauthenticated version probe used by the
+command-line client after reboot; it does not expose a capability or enable
+OTA.
+
 One controller worker is the only caller of Core staging methods. It keeps the
 Core session through `Ready` and activation, while the HTTP listener remains
 available for status and cancellation. `NetworkMaintenanceCoordinator` lets an
@@ -33,6 +41,9 @@ terminal. Capability expiry and address-generation changes cancel the matching
 session. A successful apply posts reboot only after the HTTP response attempt.
 An uncertain activation remains in fatal maintenance and requires ST-Link
 recovery.
+
+Build, verify, upload, activate, and confirm packages with the repository-owned
+host tool documented in `tools/ota/README.md`.
 
 Compile the deterministic controller, authorization, lease, route, upload,
 apply, cancellation, expiry, and shutdown seams with:

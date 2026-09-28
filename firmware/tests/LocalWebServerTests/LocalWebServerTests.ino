@@ -283,6 +283,17 @@ void testTelemetryHandler() {
     LocalHttpResponse response = handler.handle("GET /other HTTP/1.1", body, sizeof(body));
     expect(strcmp(response.status, "404 Not Found") == 0 && payloadBuildCount == 0,
            "unknown routes do not read sensors");
+    response = handler.handle("GET /api/version HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               strcmp(response.contentType, "application/json") == 0 &&
+               strcmp(body, "{\"firmwareVersion\":\""
+                            HOME_TEMPERATURE_FIRMWARE_VERSION "\"}") == 0 &&
+               payloadBuildCount == 0,
+           "version endpoint reports the compiled firmware version without reading sensors");
+    response = handler.handle(
+        "GET /api/version?ignored=true HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "404 Not Found") == 0,
+           "version endpoint rejects query strings");
     response = handler.handle("GET /api/telemetry HTTP/1.1", body, sizeof(body));
     expect(strcmp(response.status, "200 OK") == 0 &&
                strcmp(response.contentType, "application/json") == 0 &&

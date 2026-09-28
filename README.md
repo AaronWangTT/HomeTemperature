@@ -10,6 +10,9 @@ The firmware is also a starting point for other AZ3166 applications, with
 reusable C++ components for connectivity, sensing, local discovery, uploads,
 buttons, and watchdog recovery.
 
+Signed local OTA release packages and trusted-LAN uploads are managed by the
+command-line-only [OTA host tooling](tools/ota/README.md).
+
 ## Project Preview
 
 | MXChip AZ3166 | Telemetry dashboard |
@@ -79,6 +82,14 @@ ArduinoMDNS 1.1.1, and the telemetry schema, routes, and fixed hostname reflect
 this application. Adapt those choices for your project and review
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including ArduinoMDNS's LGPL
 terms.
+
+## Signed Local OTA Tooling
+
+Repository-owned command-line tooling can validate a final AZ3166 application
+binary, build or verify the exact signed `AZPKG001` package, and perform the
+physical-challenge upload, explicit activation, and post-reboot version check.
+Private signing keys must remain outside the checkout and are never printed.
+See [tools/ota/README.md](tools/ota/README.md).
 
 ## Architecture
 

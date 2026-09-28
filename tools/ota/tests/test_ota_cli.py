@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import struct
+import sys
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from unittest.mock import patch
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import ota_cli  # noqa: E402
+from ota_package import (  # noqa: E402
+    APPLICATION_ADDRESS,
+    APPLICATION_CAPACITY,
+    BOARD_ID,
+    DESCRIPTOR_OFFSET,
+    DESCRIPTOR_SIZE,
+    PRODUCT_ID,
+    build_package,
+    public_key_der,
+)
+
+VERSION = "2.0.0"
+SOURCE = "abcdef0123456789abcdef0123456789abcdef01"
+CAPABILITY = "0123456789abcdef0123456789abcdef"
+
+
+def make_package() -> tuple[bytes, bytes]:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_der = public_key_der(private_key)
+    descriptor = bytearray(DESCRIPTOR_SIZE)
+    descriptor[:8] = b"AZOTA001"
+    struct.pack_into("<HHI", descriptor, 8, 1, DESCRIPTOR_SIZE, 1)
+    for offset, value in ((16, PRODUCT_ID), (48, BOARD_ID), (80, VERSION)):
+        encoded = value.encode("ascii")
+        descriptor[offset : offset + len(encoded)] = encoded
+    descriptor[112:152] = SOURCE.encode("ascii")
+    struct.pack_into(
+        "<III",
+        descriptor,
+        152,
+        APPLICATION_ADDRESS,
+        APPLICATION_CAPACITY,
+        1,
+    )
+    descriptor[164:196] = hashlib.sha256(public_der).digest()
+    image = bytearray(0x400)
+    struct.pack_into("<II", image, 0, 0x20001000, APPLICATION_ADDRESS + 0x101)
+    image[DESCRIPTOR_OFFSET : DESCRIPTOR_OFFSET + DESCRIPTOR_SIZE] = descriptor
+    return (
+        build_package(
+            bytes(image),
+            private_key,
+            expected_version=VERSION,
+            expected_source=SOURCE,
+        ),
+        public_der,
+    )
+
+
+class OtaHandler(BaseHTTPRequestHandler):
+    package = b""
+    applied = False
+
+    def log_message(self, *_args) -> None:
+        pass
+
+    def _json(self, status: int, payload: dict) -> None:
+        encoded = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _authorized(self) -> bool:
+        return self.headers.get("Authorization") == f"OTA {CAPABILITY}"
+
+    def do_GET(self) -> None:
+        if self.path == "/api/version":
+            self._json(200, {"firmwareVersion": VERSION if self.applied else "1.0.0"})
+        elif self.path == "/api/ota/status" and self._authorized():
+            self._json(
+                200,
+                {
+                    "state": "Ready",
+                    "generation": 7,
+                    "acceptedBytes": len(self.package),
+                    "totalBytes": len(self.package),
+                    "lastError": "OTA_OK",
+                },
+            )
+        else:
+            self._json(401, {"error": "unauthorized"})
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        if self.path == "/api/ota/session":
+            if json.loads(body) == {"challenge": "1234abcd"}:
+                self._json(201, {"capability": CAPABILITY})
+            else:
+                self._json(401, {"error": "unauthorized"})
+        elif self.path == "/api/ota" and self._authorized():
+            self.__class__.package = body
+            self._json(201, {"state": "Ready", "generation": 7, "acceptedBytes": length})
+        elif self.path == "/api/ota/apply" and self._authorized() and not body:
+            self.__class__.applied = True
+            self._json(202, {"status": "reboot scheduled"})
+        else:
+            self._json(401, {"error": "unauthorized"})
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        root = Path(self.directory.name)
+        package, public_der = make_package()
+        self.package = root / "firmware.azpkg"
+        self.public_key = root / "public.der"
+        self.package.write_bytes(package)
+        self.public_key.write_bytes(public_der)
+        OtaHandler.package = b""
+        OtaHandler.applied = False
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), OtaHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+        self.directory.cleanup()
+
+    def run_cli(self, *arguments: str) -> int:
+        with patch.object(sys, "argv", ["ota_cli.py", *arguments]):
+            return ota_cli.main()
+
+    def test_claim_upload_status_apply_and_version_verification(self) -> None:
+        self.assertEqual(
+            self.run_cli(
+                "claim",
+                "--base-url",
+                self.base_url,
+                "--challenge",
+                "1234abcd",
+            ),
+            0,
+        )
+        common = (
+            "--base-url",
+            self.base_url,
+            "--capability",
+            CAPABILITY,
+        )
+        self.assertEqual(self.run_cli("status", *common), 0)
+        self.assertEqual(
+            self.run_cli(
+                "upload",
+                *common,
+                "--package",
+                str(self.package),
+                "--public-key",
+                str(self.public_key),
+            ),
+            0,
+        )
+        digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest()
+        self.assertEqual(
+            self.run_cli(
+                "apply",
+                *common,
+                "--package",
+                str(self.package),
+                "--public-key",
+                str(self.public_key),
+                "--generation",
+                "7",
+                "--digest",
+                digest,
+                "--reboot-timeout",
+                "2",
+            ),
+            0,
+        )
+        self.assertEqual(OtaHandler.package, self.package.read_bytes())
+        self.assertTrue(OtaHandler.applied)
+
+    def test_rejects_wrong_authorization(self) -> None:
+        self.assertEqual(
+            self.run_cli(
+                "status",
+                "--base-url",
+                self.base_url,
+                "--capability",
+                "f" * 32,
+            ),
+            1,
+        )
+
+    def test_rejects_non_origin_base_url(self) -> None:
+        with self.assertRaises(SystemExit):
+            self.run_cli(
+                "claim",
+                "--base-url",
+                f"{self.base_url}?token=secret",
+                "--challenge",
+                "1234abcd",
+            )
+
+    def test_rejects_noncanonical_apply_digest(self) -> None:
+        digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()
+        self.assertEqual(
+            self.run_cli(
+                "apply",
+                "--base-url",
+                self.base_url,
+                "--capability",
+                CAPABILITY,
+                "--package",
+                str(self.package),
+                "--public-key",
+                str(self.public_key),
+                "--generation",
+                "7",
+                "--digest",
+                digest,
+                "--reboot-timeout",
+                "0",
+            ),
+            1,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
