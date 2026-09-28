@@ -68,12 +68,6 @@ bool copySecurityHeader(
     char *destination,
     size_t capacity,
     size_t &destinationLength) {
-    if (status != LOCAL_HTTP_METADATA_ABSENT) {
-        status = LOCAL_HTTP_METADATA_DUPLICATE;
-        destination[0] = '\0';
-        destinationLength = 0;
-        return true;
-    }
     while (length > 0 && (*value == ' ' || *value == '\t')) {
         ++value;
         --length;
@@ -82,12 +76,18 @@ bool copySecurityHeader(
            (value[length - 1] == ' ' || value[length - 1] == '\t')) {
         --length;
     }
+    if (length >= capacity) {
+        status = LOCAL_HTTP_METADATA_TOO_LONG;
+        destination[0] = '\0';
+        destinationLength = 0;
+        return true;
+    }
     if (length == 0) {
         status = LOCAL_HTTP_METADATA_MALFORMED;
         return true;
     }
-    if (length >= capacity) {
-        status = LOCAL_HTTP_METADATA_TOO_LONG;
+    if (status != LOCAL_HTTP_METADATA_ABSENT) {
+        status = LOCAL_HTTP_METADATA_DUPLICATE;
         destination[0] = '\0';
         destinationLength = 0;
         return true;
@@ -851,6 +851,12 @@ void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
             request.contentLength > streamingLimits_.maxContentLength ||
             request.prefetchedLength > request.contentLength) {
             strcpy(body, "{\"error\":\"invalid content length\"}");
+            response = {"400 Bad Request", "application/json", strlen(body)};
+        } else if (
+            request.authorizationStatus == LOCAL_HTTP_METADATA_TOO_LONG ||
+            request.hostStatus == LOCAL_HTTP_METADATA_TOO_LONG ||
+            request.originStatus == LOCAL_HTTP_METADATA_TOO_LONG) {
+            strcpy(body, "{\"error\":\"request header too long\"}");
             response = {"400 Bad Request", "application/json", strlen(body)};
         } else if (transferStreamingRequest(client, request, generation)) {
             return;

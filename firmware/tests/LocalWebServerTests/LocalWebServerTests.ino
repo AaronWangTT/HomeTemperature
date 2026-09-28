@@ -1367,6 +1367,22 @@ void testStreamingRequestMetadata() {
                outputContains("HTTP/1.1 400 Bad Request") &&
                fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 4,
            "security header values at capacity are rejected before dispatch");
+
+    char duplicateOverlength[320];
+    const char duplicatePrefix[] =
+        "POST /stream HTTP/1.1\r\nAuthorization: first\r\nAuthorization: ";
+    offset = sizeof(duplicatePrefix) - 1;
+    memcpy(duplicateOverlength, duplicatePrefix, offset);
+    memset(duplicateOverlength + offset, 'a',
+           LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY);
+    offset += LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY;
+    memcpy(duplicateOverlength + offset, suffix, sizeof(suffix) - 1);
+    offset += sizeof(suffix) - 1;
+    queueRequest(duplicateOverlength, offset);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 6) &&
+               outputContains("HTTP/1.1 400 Bad Request") &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 4,
+           "over-capacity duplicate security headers are rejected before dispatch");
 }
 
 void testLegacyRouteFramingCompatibility() {

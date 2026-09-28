@@ -104,12 +104,14 @@ outside `read()`.
 `LocalHttpStreamingRequest` also carries bounded views of `Authorization`,
 `Host`, and `Origin`, plus the accepted socket's peer IPv4 address. Header names
 are matched case-insensitively; surrounding HTTP whitespace is removed from
-values. Each header reports `ABSENT`, `VALID`, `DUPLICATE`, or `MALFORMED`, so a
-security policy never has to infer whether an empty value or conflicting copy
-was supplied. Duplicate and malformed headers expose an empty value. Values are
-bounded to 63, 127, and 255 bytes respectively; a value that does not fit is
-rejected before handler dispatch. Embedded NUL, control, and non-ASCII bytes are
-also rejected or marked malformed before application use.
+values. Each header reports `ABSENT`, `VALID`, `DUPLICATE`, `MALFORMED`, or
+`TOO_LONG`, so a security policy never has to infer whether an empty value or
+conflicting copy was supplied. Non-valid headers expose an empty value. Values
+are bounded to 63, 127, and 255 bytes respectively. A streaming request with
+any over-capacity value, including a duplicate, is rejected before handler
+dispatch; legacy request-line routes continue to ignore these streaming-only
+limits. Embedded NUL, control, and non-ASCII bytes are also rejected or marked
+malformed before application use.
 
 Peer lookup reports either `LOCAL_HTTP_PEER_IPV4_VALID` or
 `LOCAL_HTTP_PEER_IPV4_UNAVAILABLE`; the address uses the same host-order
