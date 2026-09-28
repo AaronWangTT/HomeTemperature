@@ -58,6 +58,8 @@ public:
     int aborts = 0;
     int errorNames = 0;
     OTAStagingError activationResult = OTA_OK;
+    rtos::Semaphore *activationEntered = NULL;
+    rtos::Semaphore *activationGate = NULL;
 
     OTAStagingError begin(
         size_t,
@@ -90,6 +92,12 @@ public:
     }
     OTAStagingError activate(uint32_t generation, const uint8_t digest[32]) override {
         ++activates;
+        if (activationEntered != NULL) {
+            activationEntered->release();
+        }
+        if (activationGate != NULL) {
+            activationGate->wait(1000);
+        }
         return generation == 7 && digest[0] == 0x42
             ? activationResult : OTA_ERROR_INVALID_ARGUMENT;
     }
@@ -256,6 +264,55 @@ bool waitForState(LocalOtaController &controller, LocalOtaState expected) {
         delay(2);
     }
     return false;
+}
+
+bool stageReady(
+    LocalOtaController &controller,
+    uint32_t networkGeneration,
+    char authorization[37],
+    LocalHttpRequest &request) {
+    if (!controller.begin() || !controller.openChallenge()) {
+        return false;
+    }
+    char capability[33];
+    if (!controller.claim(
+            "01020304", 0x0a000001, networkGeneration, capability)) {
+        return false;
+    }
+    snprintf(authorization, 37, "OTA %s", capability);
+    request = makeRequest(
+        "POST /api/ota HTTP/1.1", authorization, 1,
+        0x0a000001, networkGeneration);
+    FakeBody body(385);
+    LocalHttpStreamingRequest streaming =
+        makeStreamingRequest(
+            request.requestLine, 385, networkGeneration, request);
+    UploadContext upload = {&controller, streaming, &body, false};
+    rtos::Thread thread;
+    thread.start(mbed::callback(uploadThread, static_cast<void *>(&upload)));
+    if (!waitForState(
+            controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE)) {
+        thread.join();
+        return false;
+    }
+    controller.update(networkGeneration);
+    thread.join();
+    return upload.result &&
+        controller.snapshot().state == LOCAL_OTA_READY;
+}
+
+class BlockingApplyValidation {
+public:
+    BlockingApplyValidation() : entered(0), gate(0) {}
+    rtos::Semaphore entered;
+    rtos::Semaphore gate;
+};
+
+void blockApplyValidation(void *context) {
+    BlockingApplyValidation *blocking =
+        static_cast<BlockingApplyValidation *>(context);
+    blocking->entered.release();
+    blocking->gate.wait(1000);
 }
 
 void testFailClosedConfigurationAndEntropy() {
@@ -835,6 +892,88 @@ void testFatalActivationShutdownRetainsReservation() {
            "fatal shutdown deliberately retains OTA network exclusion");
 }
 
+void testApplyTimeoutBeforeWorkerValidationPreservesFatal() {
+    fakeNow = 0;
+    FakeCore core;
+    FakeEntropy entropy;
+    FakeDisplay display;
+    NetworkMaintenanceCoordinator network;
+    BlockingApplyValidation blocking;
+    uint8_t key[] = {1};
+    LocalOtaController controller(
+        core, entropy, display, network, key, sizeof(key),
+        "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock,
+        blockApplyValidation, &blocking, NULL, NULL, 5);
+    char authorization[37];
+    LocalHttpRequest request = {};
+    expect(stageReady(controller, 15, authorization, request),
+           "pre-validation timeout test reaches Ready");
+    request.requestLine = "POST /api/ota/apply HTTP/1.1";
+    ApplyContext apply = {
+        &controller, request, OTA_ERROR_INVALID_STATE, false
+    };
+    rtos::Thread thread;
+    thread.start(mbed::callback(applyThread, static_cast<void *>(&apply)));
+    expect(blocking.entered.wait(1000) > 0,
+           "apply worker pauses before queued validation");
+    thread.join();
+    expect(apply.accepted &&
+               apply.result == OTA_ERROR_ACTIVATION_UNCERTAIN &&
+               controller.snapshot().state == LOCAL_OTA_FATAL &&
+               network.otaBusy() && !network.tryBeginCloud() &&
+               core.activates == 0 && !controller.takeRebootRequest(),
+           "timeout before validation publishes only retained fatal uncertainty");
+    blocking.gate.release();
+    controller.shutdown();
+    expect(controller.snapshot().state == LOCAL_OTA_FATAL &&
+               core.aborts == 1 && network.otaBusy() &&
+               !network.tryBeginCloud() &&
+               !controller.takeRebootRequest(),
+           "late validation abort cannot downgrade fatal or release exclusion");
+}
+
+void testApplyTimeoutDuringActivatePreservesFatal() {
+    fakeNow = 0;
+    FakeCore core;
+    rtos::Semaphore activationEntered(0);
+    rtos::Semaphore activationGate(0);
+    core.activationEntered = &activationEntered;
+    core.activationGate = &activationGate;
+    FakeEntropy entropy;
+    FakeDisplay display;
+    NetworkMaintenanceCoordinator network;
+    uint8_t key[] = {1};
+    LocalOtaController controller(
+        core, entropy, display, network, key, sizeof(key),
+        "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock,
+        NULL, NULL, NULL, NULL, 5);
+    char authorization[37];
+    LocalHttpRequest request = {};
+    expect(stageReady(controller, 16, authorization, request),
+           "late activation timeout test reaches Ready");
+    request.requestLine = "POST /api/ota/apply HTTP/1.1";
+    ApplyContext apply = {
+        &controller, request, OTA_ERROR_INVALID_STATE, false
+    };
+    rtos::Thread thread;
+    thread.start(mbed::callback(applyThread, static_cast<void *>(&apply)));
+    expect(activationEntered.wait(1000) > 0,
+           "Core activation pauses after validation");
+    thread.join();
+    expect(apply.accepted &&
+               apply.result == OTA_ERROR_ACTIVATION_UNCERTAIN &&
+               controller.snapshot().state == LOCAL_OTA_FATAL &&
+               network.otaBusy() && !network.tryBeginCloud() &&
+               !controller.takeRebootRequest(),
+           "timeout during activate enters retained fatal uncertainty");
+    activationGate.release();
+    controller.shutdown();
+    expect(controller.snapshot().state == LOCAL_OTA_FATAL &&
+               network.otaBusy() && !network.tryBeginCloud() &&
+               !controller.takeRebootRequest(),
+           "late activation success cannot publish reboot or release exclusion");
+}
+
 void testClaimAndCancelHttpRoutes() {
     fakeNow = 0;
     FakeCore core;
@@ -949,6 +1088,8 @@ void setup() {
     testShutdownReleasesPreActivationReservations();
     testUploadVerificationHandoffInvalidation();
     testFatalActivationShutdownRetainsReservation();
+    testApplyTimeoutBeforeWorkerValidationPreservesFatal();
+    testApplyTimeoutDuringActivatePreservesFatal();
     testClaimAndCancelHttpRoutes();
     testExpiryAndNetworkGenerationCancelReadyWorker();
 }

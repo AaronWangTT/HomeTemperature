@@ -57,7 +57,8 @@ LocalOtaController::LocalOtaController(
     LocalOtaBeforeApplyValidation beforeApplyValidation,
     void *applyValidationContext,
     LocalOtaUploadHandoffHook uploadHandoffHook,
-    void *uploadHandoffContext)
+    void *uploadHandoffContext,
+    uint32_t applyWaitMs)
     : core_(core),
       entropy_(entropy),
       display_(display),
@@ -72,6 +73,7 @@ LocalOtaController::LocalOtaController(
       applyValidationContext_(applyValidationContext),
       uploadHandoffHook_(uploadHandoffHook),
       uploadHandoffContext_(uploadHandoffContext),
+      applyWaitMs_(applyWaitMs == 0 ? APPLY_WAIT_MS : applyWaitMs),
       worker_(osPriorityNormal, 8192),
       commandSignal_(0),
       uploadCompletion_(0),
@@ -94,6 +96,7 @@ LocalOtaController::LocalOtaController(
       cancelRequested_(false),
       uploadCompleted_(false),
       applyCompleted_(false),
+      applyCompletionOwned_(false),
       rebootPending_(false),
       activationResponseAttempted_(false),
       activationSuccessGeneration_(0),
@@ -121,20 +124,22 @@ void LocalOtaController::shutdown() {
         workerStarted_ = false;
         shutdown_ = true;
         cancelRequested_ = true;
+        if (state_ == LOCAL_OTA_APPLYING) {
+            enterFatalLocked(OTA_ERROR_ACTIVATION_UNCERTAIN);
+        }
         command_ = WORKER_SHUTDOWN;
     }
     commandSignal_.release();
     worker_.join();
     uint32_t releaseGeneration = 0;
     bool completeUpload = false;
-    bool completeApply = false;
     {
         std::lock_guard<rtos::Mutex> lock(mutex_);
         if (state_ != LOCAL_OTA_FATAL) {
             releaseGeneration = reservedGeneration_;
         }
         completeUpload = uploadBody_ != NULL && !uploadCompleted_;
-        completeApply = queuedApply_.pending && !applyCompleted_;
+        bool completeApply = applyCompletionOwned_;
         if (completeUpload) {
             uploadCompleted_ = true;
         }
@@ -142,6 +147,7 @@ void LocalOtaController::shutdown() {
             queuedApply_.pending = false;
             applyResult_ = OTA_ERROR_CANCELLED;
             applyCompleted_ = true;
+            signalApplyCompletionLocked();
         }
         if (state_ == LOCAL_OTA_WAITING_FOR_NETWORK_LEASE ||
             state_ == LOCAL_OTA_RECEIVING ||
@@ -157,9 +163,6 @@ void LocalOtaController::shutdown() {
     }
     if (completeUpload) {
         uploadCompletion_.release();
-    }
-    if (completeApply) {
-        applyCompletion_.release();
     }
 }
 
@@ -384,6 +387,7 @@ bool LocalOtaController::apply(
             return false;
         }
         applyCompleted_ = false;
+        applyCompletionOwned_ = true;
         applyResult_ = OTA_ERROR_INVALID_STATE;
         queuedApply_.pending = true;
         memcpy(queuedApply_.capability, capability, sizeof(capability));
@@ -394,10 +398,26 @@ bool LocalOtaController::apply(
         command_ = WORKER_APPLY;
     }
     commandSignal_.release();
-    if (applyCompletion_.wait(APPLY_WAIT_MS) <= 0) {
-        fail(OTA_ERROR_ACTIVATION_UNCERTAIN, true);
-        result = OTA_ERROR_ACTIVATION_UNCERTAIN;
-        return true;
+    if (applyCompletion_.wait(applyWaitMs_) <= 0) {
+        bool drainSignal = false;
+        bool completed;
+        {
+            std::lock_guard<rtos::Mutex> lock(mutex_);
+            if (!applyCompleted_ && applyCompletionOwned_) {
+                applyCompletionOwned_ = false;
+                enterFatalLocked(OTA_ERROR_ACTIVATION_UNCERTAIN);
+                applyResult_ = OTA_ERROR_ACTIVATION_UNCERTAIN;
+                applyCompleted_ = true;
+            } else if (applyCompleted_ && !applyCompletionOwned_) {
+                drainSignal = true;
+            }
+            result = applyResult_;
+            completed = applyCompleted_;
+        }
+        if (drainSignal) {
+            applyCompletion_.wait(0);
+        }
+        return completed;
     }
     std::lock_guard<rtos::Mutex> lock(mutex_);
     result = applyResult_;
@@ -583,7 +603,7 @@ void LocalOtaController::runWorker() {
                 std::lock_guard<rtos::Mutex> lock(mutex_);
                 state = state_;
                 uploadPending = uploadBody_ != NULL && !uploadCompleted_;
-                applyPending = queuedApply_.pending && !applyCompleted_;
+                applyPending = applyCompletionOwned_;
             }
             if (state == LOCAL_OTA_READY || state == LOCAL_OTA_RECEIVING ||
                 state == LOCAL_OTA_VERIFYING) {
@@ -603,8 +623,8 @@ void LocalOtaController::runWorker() {
                     queuedApply_.pending = false;
                     applyResult_ = OTA_ERROR_CANCELLED;
                     applyCompleted_ = true;
+                    signalApplyCompletionLocked();
                 }
-                applyCompletion_.release();
             }
         }
     }
@@ -697,6 +717,7 @@ void LocalOtaController::processApply() {
     OTAStagedImageInfo staged;
     uint32_t generation;
     bool abortInstead = false;
+    bool fatalAlready = false;
     if (beforeApplyValidation_ != NULL) {
         beforeApplyValidation_(applyValidationContext_);
     }
@@ -704,10 +725,14 @@ void LocalOtaController::processApply() {
         std::lock_guard<rtos::Mutex> lock(mutex_);
         generation = generation_;
         if (!queuedApplyValidLocked(clock_())) {
-            command_ = WORKER_CANCEL;
-            applyResult_ = OTA_ERROR_CANCELLED;
-            applyCompleted_ = true;
-            queuedApply_.pending = false;
+            fatalAlready = state_ == LOCAL_OTA_FATAL;
+            if (!fatalAlready) {
+                command_ = WORKER_CANCEL;
+                applyResult_ = OTA_ERROR_CANCELLED;
+                applyCompleted_ = true;
+                queuedApply_.pending = false;
+            }
+            signalApplyCompletionLocked();
             abortInstead = true;
         } else {
             state_ = LOCAL_OTA_APPLYING;
@@ -717,42 +742,45 @@ void LocalOtaController::processApply() {
     }
     if (abortInstead) {
         core_.abort();
-        fail(OTA_ERROR_CANCELLED, false);
-        applyCompletion_.release();
+        if (!fatalAlready) {
+            fail(OTA_ERROR_CANCELLED, false);
+        }
         return;
     }
     OTAStagingError result =
         core_.activate(staged.sessionGeneration, staged.sha256);
+    bool preserveFatal = false;
     {
         std::lock_guard<rtos::Mutex> lock(mutex_);
         if (state_ == LOCAL_OTA_FATAL) {
-            applyResult_ = OTA_ERROR_ACTIVATION_UNCERTAIN;
+            preserveFatal = true;
+            command_ = WORKER_NONE;
+            signalApplyCompletionLocked();
+        } else {
+            applyResult_ = result;
+            lastError_ = result;
             applyCompleted_ = true;
             command_ = WORKER_NONE;
-            applyCompletion_.release();
-            return;
+            if (result == OTA_OK) {
+                clearCapabilityLocked();
+                activationSuccessGeneration_ = generation;
+                activationResponseAttempted_ = false;
+                state_ = LOCAL_OTA_ACTIVATED_AWAITING_RESPONSE;
+            } else if (result == OTA_ERROR_ACTIVATION_UNCERTAIN) {
+                enterFatalLocked(result);
+            } else {
+                clearCapabilityLocked();
+                state_ = LOCAL_OTA_ERROR;
+            }
+            signalApplyCompletionLocked();
         }
-        applyResult_ = result;
-        lastError_ = result;
-        applyCompleted_ = true;
-        command_ = WORKER_NONE;
-        if (result == OTA_OK) {
-            clearCapabilityLocked();
-            activationSuccessGeneration_ = generation;
-            activationResponseAttempted_ = false;
-            state_ = LOCAL_OTA_ACTIVATED_AWAITING_RESPONSE;
-        } else if (result == OTA_ERROR_ACTIVATION_UNCERTAIN) {
-            clearCapabilityLocked();
-            state_ = LOCAL_OTA_FATAL;
-        } else {
-            clearCapabilityLocked();
-            state_ = LOCAL_OTA_ERROR;
-        }
+    }
+    if (preserveFatal) {
+        return;
     }
     if (result != OTA_OK && result != OTA_ERROR_ACTIVATION_UNCERTAIN) {
         releaseLease(generation);
     }
-    applyCompletion_.release();
 }
 
 void LocalOtaController::fail(OTAStagingError error, bool fatal) {
@@ -805,6 +833,21 @@ bool LocalOtaController::uploadCanAdvanceLocked(
         state_ == expectedState &&
         !cancelRequested_ &&
         !shutdown_;
+}
+
+void LocalOtaController::signalApplyCompletionLocked() {
+    if (applyCompletionOwned_) {
+        applyCompletionOwned_ = false;
+        applyCompletion_.release();
+    }
+}
+
+void LocalOtaController::enterFatalLocked(OTAStagingError error) {
+    lastError_ = error;
+    applyResult_ = error;
+    queuedApply_.pending = false;
+    clearCapabilityLocked();
+    state_ = LOCAL_OTA_FATAL;
 }
 
 bool LocalOtaController::requestCancellationLocked(

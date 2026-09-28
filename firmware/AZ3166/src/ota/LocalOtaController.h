@@ -58,7 +58,8 @@ public:
         LocalOtaBeforeApplyValidation beforeApplyValidation = NULL,
         void *applyValidationContext = NULL,
         LocalOtaUploadHandoffHook uploadHandoffHook = NULL,
-        void *uploadHandoffContext = NULL);
+        void *uploadHandoffContext = NULL,
+        uint32_t applyWaitMs = APPLY_WAIT_MS);
     ~LocalOtaController();
 
     bool begin();
@@ -106,6 +107,8 @@ private:
     bool uploadCanAdvanceLocked(
         uint32_t expectedGeneration,
         LocalOtaState expectedState) const;
+    void signalApplyCompletionLocked();
+    void enterFatalLocked(OTAStagingError error);
     bool requestCancellationLocked(uint32_t expectedGeneration);
     void fail(OTAStagingError error, bool fatal);
     void releaseLease(uint32_t generation);
@@ -127,6 +130,7 @@ private:
     void *applyValidationContext_;
     LocalOtaUploadHandoffHook uploadHandoffHook_;
     void *uploadHandoffContext_;
+    uint32_t applyWaitMs_;
     mutable rtos::Mutex mutex_;
     rtos::Thread worker_;
     rtos::Semaphore commandSignal_;
@@ -149,6 +153,7 @@ private:
     bool cancelRequested_;
     bool uploadCompleted_;
     bool applyCompleted_;
+    bool applyCompletionOwned_;
     bool rebootPending_;
     bool activationResponseAttempted_;
     uint32_t activationSuccessGeneration_;
