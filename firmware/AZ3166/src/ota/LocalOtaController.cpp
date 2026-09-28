@@ -536,6 +536,32 @@ void LocalOtaController::runWorker() {
             if (abortForShutdown) {
                 core_.abort();
             }
+            uint32_t shutdownGeneration;
+            bool releaseUpload;
+            bool releaseApply;
+            {
+                std::lock_guard<rtos::Mutex> lock(mutex_);
+                shutdownGeneration = generation_;
+                releaseUpload = uploadBody_ != NULL && !uploadCompleted_;
+                releaseApply = queuedApply_.pending && !applyCompleted_;
+                uploadBody_ = NULL;
+                uploadCompleted_ = true;
+                applyCompleted_ = true;
+                queuedApply_.pending = false;
+                command_ = WORKER_NONE;
+                lastError_ = OTA_ERROR_CANCELLED;
+                clearCapabilityLocked();
+                if (state_ != LOCAL_OTA_FATAL) {
+                    state_ = LOCAL_OTA_IDLE;
+                }
+            }
+            releaseLease(shutdownGeneration);
+            if (releaseUpload) {
+                uploadCompletion_.release();
+            }
+            if (releaseApply) {
+                applyCompletion_.release();
+            }
             break;
         }
         if (command == WORKER_UPLOAD) {
