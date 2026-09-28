@@ -460,7 +460,9 @@ def _verify_rebooted_version(
             last_error = "device is unavailable while rebooting"
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             last_error = f"version endpoint returned invalid JSON: {error}"
-        time.sleep(1.0)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(1.0, remaining))
     raise CliError(
         f"reboot/version verification timed out for {expected_version}: {last_error}"
     )

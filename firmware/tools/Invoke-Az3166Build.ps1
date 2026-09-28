@@ -90,6 +90,7 @@ $productionSketch = (
 ).Path
 $isProductionSketch = $resolvedSketch -eq $productionSketch
 $temporaryBuildPath = $null
+$temporaryRecipePath = $null
 $resolvedBuildPath = $null
 if ($OtaBuildConfig -and -not $isProductionSketch) {
     throw "-OtaBuildConfig is valid only for the production AZ3166 sketch."
@@ -157,14 +158,17 @@ if ($Action -eq "Upload" -and -not $isProductionSketch) {
 }
 
 if ($isProductionSketch) {
-    $linkerScript = (
+    $sourceLinkerScript = (
         Resolve-Path -LiteralPath (
             Join-Path $PSScriptRoot "..\AZ3166\linker\AZ3166-ota.ld"
         )
     ).Path
-    if ($linkerScript -match "\s") {
-        throw "The OTA linker-script path must not contain whitespace: $linkerScript"
-    }
+    $temporaryRecipePath = Join-Path (
+        $env:SystemDrive + "\HomeTemperatureOtaBuild"
+    ) ([Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $temporaryRecipePath | Out-Null
+    $linkerScript = Join-Path $temporaryRecipePath "AZ3166-ota.ld"
+    Copy-Item -LiteralPath $sourceLinkerScript -Destination $linkerScript
     $arguments += @(
         "--pref",
         "compiler.link.script.flags=-T$linkerScript"
@@ -207,12 +211,11 @@ if ($Action -eq "Upload" -and $isProductionSketch) {
 }
 if ($OtaBuildConfig) {
     $resolvedOtaBuildConfig = (Resolve-Path -LiteralPath $OtaBuildConfig).Path
-    if ($resolvedOtaBuildConfig -match "\s") {
-        throw "The OTA build-config path must not contain whitespace: $resolvedOtaBuildConfig"
-    }
+    $stagedOtaBuildConfig = Join-Path $temporaryRecipePath "ota-build-config.h"
+    Copy-Item -LiteralPath $resolvedOtaBuildConfig -Destination $stagedOtaBuildConfig
     $arguments += @(
         "--pref",
-        "compiler.cpp.extra_flags=-include $resolvedOtaBuildConfig"
+        "compiler.cpp.extra_flags=-include $stagedOtaBuildConfig"
     )
 }
 
@@ -223,6 +226,9 @@ Write-Host $output
 if ($exitCode -ne 0) {
     if ($temporaryBuildPath) {
         Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+    }
+    if ($temporaryRecipePath) {
+        Remove-Item -LiteralPath $temporaryRecipePath -Recurse -Force
     }
     throw "Arduino $Action failed with exit code $exitCode."
 }
@@ -307,6 +313,9 @@ if ($isProductionSketch) {
 }
 if ($temporaryBuildPath) {
     Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+}
+if ($temporaryRecipePath) {
+    Remove-Item -LiteralPath $temporaryRecipePath -Recurse -Force
 }
 
 Write-Host "AZ3166 $Action completed successfully."

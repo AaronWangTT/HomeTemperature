@@ -68,11 +68,10 @@ ST-Link probe by its 24-hex-character serial number:
   -SourceCommit 0123456789abcdef0123456789abcdef01234567
 ```
 
-Do not pass `-Port` or a hand-written `-OtaBuildConfig` to production Upload. Production wired
-upload also requires `-OtaBuildConfig`, an allowlisted descriptor key ID, and
-the exact 24-hex-character `-StLinkSerial`; `-Port` remains the board's virtual
-COM port, while the probe serial unambiguously selects the ST-Link used by
-OpenOCD.
+Do not pass `-Port` or a hand-written `-OtaBuildConfig` to production Upload.
+The wrapper generates the configuration from the public key and release
+metadata, requires its descriptor key ID to be allowlisted, and uses
+`-StLinkSerial` to select the exact probe.
 
 Build a signed package:
 

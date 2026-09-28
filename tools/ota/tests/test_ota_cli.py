@@ -373,6 +373,11 @@ class CliTests(unittest.TestCase):
         self.assertLess(script.index(" validate-image `"), upload)
         self.assertIn(" build-config `", script)
         self.assertIn('"hla_serial $StLinkSerial"', script)
+        self.assertNotIn("path must not contain whitespace", script)
+        self.assertIn("Copy-Item -LiteralPath $sourceLinkerScript", script)
+        self.assertIn("Copy-Item -LiteralPath $resolvedOtaBuildConfig", script)
+        self.assertIn("compiler.link.script.flags=-T$linkerScript", script)
+        self.assertIn("compiler.cpp.extra_flags=-include $stagedOtaBuildConfig", script)
         self.assertNotIn("Uploading validated $binaryPath to $Board on $Port", script)
         self.assertIn(
             '$Action -eq "Upload" -and -not $isProductionSketch',
