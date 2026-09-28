@@ -11,6 +11,7 @@ public:
     int acceptClient(int listener) override;
     int receiveBytes(int client, char *buffer, size_t size) override;
     int sendBytes(int client, const char *buffer, size_t size) override;
+    bool peerIpv4(int client, uint32_t &address) override;
     void closeSocket(int descriptor) override;
     bool supportsConcurrentSockets() const override { return true; }
 
@@ -19,6 +20,8 @@ protected:
     virtual int acceptSocket(int listener);
     virtual int getSocketOption(int descriptor, int level, int option,
                                 void *value, socklen_t *length);
+    virtual int getPeerName(int descriptor, sockaddr *address,
+                            socklen_t *length);
 };
 
 #endif

@@ -61,6 +61,55 @@ bool parseContentLength(const char *value, size_t length, size_t &result) {
     return true;
 }
 
+bool copySecurityHeader(
+    const char *value,
+    size_t length,
+    LocalHttpRequestMetadataStatus &status,
+    char *destination,
+    size_t capacity,
+    size_t &destinationLength) {
+    while (length > 0 && (*value == ' ' || *value == '\t')) {
+        ++value;
+        --length;
+    }
+    while (length > 0 &&
+           (value[length - 1] == ' ' || value[length - 1] == '\t')) {
+        --length;
+    }
+    if (status == LOCAL_HTTP_METADATA_TOO_LONG || length >= capacity) {
+        status = LOCAL_HTTP_METADATA_TOO_LONG;
+        destination[0] = '\0';
+        destinationLength = 0;
+        return true;
+    }
+    if (length == 0) {
+        status = LOCAL_HTTP_METADATA_MALFORMED;
+        destination[0] = '\0';
+        destinationLength = 0;
+        return true;
+    }
+    if (status != LOCAL_HTTP_METADATA_ABSENT) {
+        status = LOCAL_HTTP_METADATA_DUPLICATE;
+        destination[0] = '\0';
+        destinationLength = 0;
+        return true;
+    }
+    for (size_t index = 0; index < length; ++index) {
+        unsigned char current = static_cast<unsigned char>(value[index]);
+        if ((current < 32 && current != '\t') || current >= 127) {
+            status = LOCAL_HTTP_METADATA_MALFORMED;
+            destination[0] = '\0';
+            destinationLength = 0;
+            return true;
+        }
+    }
+    memcpy(destination, value, length);
+    destination[length] = '\0';
+    destinationLength = length;
+    status = LOCAL_HTTP_METADATA_VALID;
+    return true;
+}
+
 bool setNonblocking(int descriptor) {
     unsigned long enabled = 1;
     return lwip_ioctl(descriptor, FIONBIO, &enabled) == 0;
@@ -100,6 +149,11 @@ int Az3166LocalWebServerOperations::acceptSocket(int listener) {
 int Az3166LocalWebServerOperations::getSocketOption(
     int descriptor, int level, int option, void *value, socklen_t *length) {
     return lwip_getsockopt(descriptor, level, option, value, length);
+}
+
+int Az3166LocalWebServerOperations::getPeerName(
+    int descriptor, sockaddr *address, socklen_t *length) {
+    return lwip_getpeername(descriptor, address, length);
 }
 
 int Az3166LocalWebServerOperations::openListener(uint32_t address, uint16_t port) {
@@ -180,6 +234,19 @@ int Az3166LocalWebServerOperations::sendBytes(int client, const char *buffer, si
         return ready;
     }
     return lwip_send(client, buffer, size, MSG_DONTWAIT);
+}
+
+bool Az3166LocalWebServerOperations::peerIpv4(
+    int client, uint32_t &address) {
+    sockaddr_in peer = {};
+    socklen_t length = sizeof(peer);
+    if (getPeerName(client, reinterpret_cast<sockaddr *>(&peer), &length) != 0 ||
+        length != sizeof(peer) || peer.sin_family != AF_INET) {
+        address = 0;
+        return false;
+    }
+    address = ntohl(peer.sin_addr.s_addr);
+    return true;
 }
 
 int LocalWebServer::classifyAcceptError(int socketError) {
@@ -686,6 +753,18 @@ void LocalWebServer::runStreaming() {
         size_t prefetchedLength = 0;
         char requestLine[REQUEST_LINE_SIZE];
         char prefetched[MAX_PREFETCH_BYTES];
+        char authorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
+        char host[LocalHttpStreamingRequest::HOST_CAPACITY];
+        char origin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
+        LocalHttpRequestMetadataStatus authorizationStatus;
+        LocalHttpRequestMetadataStatus hostStatus;
+        LocalHttpRequestMetadataStatus originStatus;
+        size_t authorizationLength = 0;
+        size_t hostLength = 0;
+        size_t originLength = 0;
+        LocalHttpPeerIpv4Metadata peerIpv4 = {
+            LOCAL_HTTP_PEER_IPV4_UNAVAILABLE, 0
+        };
         {
             std::lock_guard<rtos::Mutex> lock(streamingMutex_);
             if (!streamingJob_.pending) {
@@ -703,6 +782,17 @@ void LocalWebServer::runStreaming() {
             prefetchedLength = streamingJob_.prefetchedLength;
             memcpy(requestLine, streamingJob_.requestLine, sizeof(requestLine));
             memcpy(prefetched, streamingJob_.prefetched, prefetchedLength);
+            authorizationStatus = streamingJob_.authorizationStatus;
+            authorizationLength = streamingJob_.authorizationLength;
+            memcpy(authorization, streamingJob_.authorization,
+                   authorizationLength + 1);
+            hostStatus = streamingJob_.hostStatus;
+            hostLength = streamingJob_.hostLength;
+            memcpy(host, streamingJob_.host, hostLength + 1);
+            originStatus = streamingJob_.originStatus;
+            originLength = streamingJob_.originLength;
+            memcpy(origin, streamingJob_.origin, originLength + 1);
+            peerIpv4 = streamingJob_.peerIpv4;
         }
 
         LocalHttpSocket socket(streamingOperations_, client);
@@ -711,7 +801,11 @@ void LocalWebServer::runStreaming() {
                 *this, streamingOperations_, socket.get(), generation,
                 contentLength, prefetched, prefetchedLength, streamingLimits_);
             LocalHttpStreamingRequest request = {
-                requestLine, contentLength, generation
+                requestLine, contentLength, generation,
+                {authorizationStatus, authorization, authorizationLength},
+                {hostStatus, host, hostLength},
+                {originStatus, origin, originLength},
+                peerIpv4
             };
             char responseBody[RESPONSE_BODY_SIZE] = {};
             LocalHttpResponse response = streamingHandler_->handle(
@@ -761,6 +855,12 @@ void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
             request.contentLength > streamingLimits_.maxContentLength ||
             request.prefetchedLength > request.contentLength) {
             strcpy(body, "{\"error\":\"invalid content length\"}");
+            response = {"400 Bad Request", "application/json", strlen(body)};
+        } else if (
+            request.authorizationStatus == LOCAL_HTTP_METADATA_TOO_LONG ||
+            request.hostStatus == LOCAL_HTTP_METADATA_TOO_LONG ||
+            request.originStatus == LOCAL_HTTP_METADATA_TOO_LONG) {
+            strcpy(body, "{\"error\":\"request header too long\"}");
             response = {"400 Bad Request", "application/json", strlen(body)};
         } else if (transferStreamingRequest(client, request, generation)) {
             return;
@@ -885,6 +985,15 @@ bool LocalWebServer::readRequest(
     request.hasContentLength = false;
     request.hasTransferEncoding = false;
     request.contentLength = 0;
+    request.authorizationStatus = LOCAL_HTTP_METADATA_ABSENT;
+    request.authorization[0] = '\0';
+    request.authorizationLength = 0;
+    request.hostStatus = LOCAL_HTTP_METADATA_ABSENT;
+    request.host[0] = '\0';
+    request.hostLength = 0;
+    request.originStatus = LOCAL_HTTP_METADATA_ABSENT;
+    request.origin[0] = '\0';
+    request.originLength = 0;
     if (!canonicalFraming) {
         return true;
     }
@@ -931,6 +1040,20 @@ bool LocalWebServer::readRequest(
             }
             request.hasContentLength = true;
         }
+        if (asciiEqualIgnoreCase(name, nameLength, "authorization")) {
+            copySecurityHeader(
+                value, valueLength, request.authorizationStatus,
+                request.authorization, sizeof(request.authorization),
+                request.authorizationLength);
+        } else if (asciiEqualIgnoreCase(name, nameLength, "host")) {
+            copySecurityHeader(
+                value, valueLength, request.hostStatus,
+                request.host, sizeof(request.host), request.hostLength);
+        } else if (asciiEqualIgnoreCase(name, nameLength, "origin")) {
+            copySecurityHeader(
+                value, valueLength, request.originStatus,
+                request.origin, sizeof(request.origin), request.originLength);
+        }
         position = lineEnd + 2;
     }
     return position == headersEnd;
@@ -940,6 +1063,16 @@ bool LocalWebServer::transferStreamingRequest(
     LocalHttpSocket &client,
     const ParsedRequest &request,
     uint32_t generation) {
+    if (!isCurrent(generation)) {
+        return false;
+    }
+    uint32_t peerAddress = 0;
+    bool peerAvailable = operations_.peerIpv4(client.get(), peerAddress);
+    LocalHttpPeerIpv4Metadata peerIpv4 = {
+        peerAvailable ? LOCAL_HTTP_PEER_IPV4_VALID
+                      : LOCAL_HTTP_PEER_IPV4_UNAVAILABLE,
+        peerAvailable ? peerAddress : 0
+    };
     if (!isCurrent(generation)) {
         return false;
     }
@@ -958,6 +1091,17 @@ bool LocalWebServer::transferStreamingRequest(
                sizeof(streamingJob_.requestLine));
         memcpy(streamingJob_.prefetched, request.prefetched,
                request.prefetchedLength);
+        streamingJob_.authorizationStatus = request.authorizationStatus;
+        streamingJob_.authorizationLength = request.authorizationLength;
+        memcpy(streamingJob_.authorization, request.authorization,
+               request.authorizationLength + 1);
+        streamingJob_.hostStatus = request.hostStatus;
+        streamingJob_.hostLength = request.hostLength;
+        memcpy(streamingJob_.host, request.host, request.hostLength + 1);
+        streamingJob_.originStatus = request.originStatus;
+        streamingJob_.originLength = request.originLength;
+        memcpy(streamingJob_.origin, request.origin, request.originLength + 1);
+        streamingJob_.peerIpv4 = peerIpv4;
     }
     streamingSignal_.release();
     return true;

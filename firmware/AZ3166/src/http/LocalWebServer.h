@@ -16,6 +16,11 @@ public:
     virtual int acceptClient(int listener) = 0;
     virtual int receiveBytes(int client, char *buffer, size_t size) = 0;
     virtual int sendBytes(int client, const char *buffer, size_t size) = 0;
+    virtual bool peerIpv4(int client, uint32_t &address) {
+        (void)client;
+        address = 0;
+        return false;
+    }
     virtual void closeSocket(int descriptor) = 0;
     virtual bool supportsConcurrentSockets() const { return false; }
 };
@@ -122,6 +127,15 @@ private:
         size_t contentLength;
         size_t prefetchedLength;
         char prefetched[MAX_PREFETCH_BYTES];
+        LocalHttpRequestMetadataStatus authorizationStatus;
+        size_t authorizationLength;
+        char authorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
+        LocalHttpRequestMetadataStatus hostStatus;
+        size_t hostLength;
+        char host[LocalHttpStreamingRequest::HOST_CAPACITY];
+        LocalHttpRequestMetadataStatus originStatus;
+        size_t originLength;
+        char origin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
     };
 
     struct StreamingJob {
@@ -134,6 +148,16 @@ private:
         size_t prefetchedLength;
         char requestLine[96];
         char prefetched[MAX_PREFETCH_BYTES];
+        LocalHttpRequestMetadataStatus authorizationStatus;
+        size_t authorizationLength;
+        char authorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
+        LocalHttpRequestMetadataStatus hostStatus;
+        size_t hostLength;
+        char host[LocalHttpStreamingRequest::HOST_CAPACITY];
+        LocalHttpRequestMetadataStatus originStatus;
+        size_t originLength;
+        char origin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
+        LocalHttpPeerIpv4Metadata peerIpv4;
     };
 
     LocalWebServer(const LocalWebServer &) = delete;
