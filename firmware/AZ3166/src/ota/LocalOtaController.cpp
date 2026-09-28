@@ -674,15 +674,25 @@ void LocalOtaController::processUpload() {
         OTAStagedImageInfo staged = {};
         result = core_.finish(&staged);
         if (result == OTA_OK) {
-            std::lock_guard<rtos::Mutex> lock(mutex_);
-            staged_ = staged;
-            state_ = LOCAL_OTA_READY;
-            lastError_ = OTA_OK;
-            command_ = WORKER_NONE;
-            uploadBody_ = NULL;
-            uploadCompleted_ = true;
-            uploadCompletion_.release();
-            return;
+            bool publishReady;
+            {
+                std::lock_guard<rtos::Mutex> lock(mutex_);
+                publishReady = !cancelRequested_ &&
+                    state_ == LOCAL_OTA_VERIFYING;
+                if (publishReady) {
+                    staged_ = staged;
+                    state_ = LOCAL_OTA_READY;
+                    lastError_ = OTA_OK;
+                    command_ = WORKER_NONE;
+                    uploadBody_ = NULL;
+                    uploadCompleted_ = true;
+                }
+            }
+            if (publishReady) {
+                uploadCompletion_.release();
+                return;
+            }
+            result = OTA_ERROR_CANCELLED;
         }
     }
     core_.abort();
