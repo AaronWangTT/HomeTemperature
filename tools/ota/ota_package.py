@@ -179,11 +179,7 @@ def public_key_der(private_key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
-def require_trusted_key(public_der: bytes, profile: str) -> None:
-    if profile == "development":
-        return
-    if profile != "production":
-        raise PackageError("trust profile must be production or development")
+def require_production_key(public_der: bytes) -> None:
     key_id = hashlib.sha256(public_der).hexdigest()
     if key_id not in PRODUCTION_KEY_IDS:
         raise PackageError(
@@ -191,17 +187,8 @@ def require_trusted_key(public_der: bytes, profile: str) -> None:
         )
 
 
-def require_production_key(public_der: bytes) -> None:
-    require_trusted_key(public_der, "production")
-
-
-def render_build_config(
-    public_der: bytes,
-    version: str,
-    source: str,
-    profile: str = "production",
-) -> str:
-    require_trusted_key(public_der, profile)
+def render_build_config(public_der: bytes, version: str, source: str) -> str:
+    require_production_key(public_der)
     _parse_version(version)
     if _SOURCE_PATTERN.fullmatch(source) is None:
         raise PackageError("source commit must be 40 lowercase hexadecimal characters")

@@ -317,20 +317,6 @@ class CliTests(unittest.TestCase):
             )
         self.assertFalse(OtaHandler.redirected)
 
-    def test_development_profile_verifies_ephemeral_package(self) -> None:
-        self.assertEqual(
-            self.run_cli(
-                "verify",
-                "--package",
-                str(self.package),
-                "--public-key",
-                str(self.public_key),
-                "--profile",
-                "development",
-            ),
-            0,
-        )
-
     def test_production_upload_validates_binary_before_openocd(self) -> None:
         script = (
             Path(__file__).resolve().parents[3]
