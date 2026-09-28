@@ -110,6 +110,37 @@ bool copySecurityHeader(
     return true;
 }
 
+bool copyHeaderValue(
+    const char *value, size_t length, char *destination, size_t capacity) {
+    while (length > 0 && (*value == ' ' || *value == '\t')) {
+        ++value;
+        --length;
+    }
+    while (length > 0 &&
+           (value[length - 1] == ' ' || value[length - 1] == '\t')) {
+        --length;
+    }
+    if (length == 0 || length >= capacity) {
+        destination[0] = '\0';
+        return false;
+    }
+    memcpy(destination, value, length);
+    destination[length] = '\0';
+    return true;
+}
+
+uint8_t metadataCount(LocalHttpRequestMetadataStatus status) {
+    if (status == LOCAL_HTTP_METADATA_ABSENT) {
+        return 0;
+    }
+    return status == LOCAL_HTTP_METADATA_DUPLICATE ? 2 : 1;
+}
+
+bool metadataUsable(LocalHttpRequestMetadataStatus status) {
+    return status == LOCAL_HTTP_METADATA_ABSENT ||
+        status == LOCAL_HTTP_METADATA_VALID;
+}
+
 bool setNonblocking(int descriptor) {
     unsigned long enabled = 1;
     return lwip_ioctl(descriptor, FIONBIO, &enabled) == 0;
@@ -673,6 +704,7 @@ bool LocalWebServer::publishState(uint32_t generation, uint32_t address, int err
     if (current) {
         state_.listening = address != 0;
         state_.address = address;
+        state_.generation = generation;
         state_.error = error;
     }
     return current;
@@ -756,12 +788,15 @@ void LocalWebServer::runStreaming() {
         char authorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
         char host[LocalHttpStreamingRequest::HOST_CAPACITY];
         char origin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
+        char contentType[48];
         LocalHttpRequestMetadataStatus authorizationStatus;
         LocalHttpRequestMetadataStatus hostStatus;
         LocalHttpRequestMetadataStatus originStatus;
         size_t authorizationLength = 0;
         size_t hostLength = 0;
         size_t originLength = 0;
+        uint8_t contentTypeCount = 0;
+        bool hasCookie = false;
         LocalHttpPeerIpv4Metadata peerIpv4 = {
             LOCAL_HTTP_PEER_IPV4_UNAVAILABLE, 0
         };
@@ -792,6 +827,9 @@ void LocalWebServer::runStreaming() {
             originStatus = streamingJob_.originStatus;
             originLength = streamingJob_.originLength;
             memcpy(origin, streamingJob_.origin, originLength + 1);
+            contentTypeCount = streamingJob_.contentTypeCount;
+            memcpy(contentType, streamingJob_.contentType, sizeof(contentType));
+            hasCookie = streamingJob_.hasCookie;
             peerIpv4 = streamingJob_.peerIpv4;
         }
 
@@ -805,12 +843,34 @@ void LocalWebServer::runStreaming() {
                 {authorizationStatus, authorization, authorizationLength},
                 {hostStatus, host, hostLength},
                 {originStatus, origin, originLength},
-                peerIpv4
+                peerIpv4,
+                {
+                    requestLine,
+                    peerIpv4.status == LOCAL_HTTP_PEER_IPV4_VALID
+                        ? peerIpv4.address : 0,
+                    generation,
+                    authorization,
+                    metadataCount(authorizationStatus),
+                    contentType,
+                    contentTypeCount,
+                    host,
+                    metadataCount(hostStatus),
+                    origin,
+                    metadataCount(originStatus),
+                    hasCookie,
+                    metadataUsable(authorizationStatus) &&
+                        metadataUsable(hostStatus) &&
+                        metadataUsable(originStatus),
+                    true,
+                    false,
+                    contentLength,
+                    prefetchedLength
+                }
             };
             char responseBody[RESPONSE_BODY_SIZE] = {};
             LocalHttpResponse response = streamingHandler_->handle(
                 request, body, responseBody, sizeof(responseBody));
-            if (body.remaining() != 0) {
+            if (body.remaining() != 0 && !response.allowUnreadRequestBody) {
                 strcpy(responseBody, "{\"error\":\"incomplete request body\"}");
                 response = {
                     "400 Bad Request", "application/json", strlen(responseBody)
@@ -826,6 +886,9 @@ void LocalWebServer::runStreaming() {
             bool sent = sendResponse(
                 streamingOperations_, socket.get(), response, responseBody,
                 generation, true);
+            if (response.afterAttempt != NULL) {
+                response.afterAttempt(sent, response.afterAttemptContext);
+            }
             Serial.print("Local HTTP streaming response: ");
             Serial.println(sent ? response.status : "send failed or session changed");
         }
@@ -871,7 +934,35 @@ void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
             };
         }
     } else {
-        response = handler_.handle(request.requestLine, body, sizeof(body));
+        uint32_t peerAddress = 0;
+        bool needsMetadata =
+            handler_.requiresRequestMetadata(request.requestLine);
+        bool peerAvailable = needsMetadata &&
+            operations_.peerIpv4(client.get(), peerAddress);
+        LocalHttpRequest metadata = {
+            request.requestLine,
+            peerAvailable ? peerAddress : 0,
+            generation,
+            request.authorization,
+            metadataCount(request.authorizationStatus),
+            request.contentType,
+            request.contentTypeCount,
+            request.host,
+            metadataCount(request.hostStatus),
+            request.origin,
+            metadataCount(request.originStatus),
+            request.hasCookie,
+            request.bodyFramingValid &&
+                (!needsMetadata ||
+                 (metadataUsable(request.authorizationStatus) &&
+                  metadataUsable(request.hostStatus) &&
+                  metadataUsable(request.originStatus))),
+            request.hasContentLength,
+            request.hasTransferEncoding,
+            request.contentLength,
+            request.prefetchedLength
+        };
+        response = handler_.handleRequest(metadata, body, sizeof(body));
         if (response.bodyLength > sizeof(body) || response.status == NULL ||
             response.contentType == NULL) {
             strcpy(body, "{\"error\":\"invalid response\"}");
@@ -880,6 +971,9 @@ void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
     }
     bool sent = sendResponse(
         operations_, client.get(), response, body, generation, false);
+    if (response.afterAttempt != NULL) {
+        response.afterAttempt(sent, response.afterAttemptContext);
+    }
     Serial.print("Local HTTP response: ");
     Serial.println(sent ? response.status : "send failed or session changed");
 }
@@ -994,6 +1088,9 @@ bool LocalWebServer::readRequest(
     request.originStatus = LOCAL_HTTP_METADATA_ABSENT;
     request.origin[0] = '\0';
     request.originLength = 0;
+    request.contentTypeCount = 0;
+    request.contentType[0] = '\0';
+    request.hasCookie = false;
     if (!canonicalFraming) {
         return true;
     }
@@ -1053,6 +1150,19 @@ bool LocalWebServer::readRequest(
             copySecurityHeader(
                 value, valueLength, request.originStatus,
                 request.origin, sizeof(request.origin), request.originLength);
+        } else if (asciiEqualIgnoreCase(name, nameLength, "content-type")) {
+            ++request.contentTypeCount;
+            if (request.contentTypeCount == 1) {
+                if (!copyHeaderValue(
+                        value, valueLength, request.contentType,
+                        sizeof(request.contentType))) {
+                    request.bodyFramingValid = false;
+                }
+            } else {
+                request.bodyFramingValid = false;
+            }
+        } else if (asciiEqualIgnoreCase(name, nameLength, "cookie")) {
+            request.hasCookie = true;
         }
         position = lineEnd + 2;
     }
@@ -1101,6 +1211,10 @@ bool LocalWebServer::transferStreamingRequest(
         streamingJob_.originStatus = request.originStatus;
         streamingJob_.originLength = request.originLength;
         memcpy(streamingJob_.origin, request.origin, request.originLength + 1);
+        streamingJob_.contentTypeCount = request.contentTypeCount;
+        memcpy(streamingJob_.contentType, request.contentType,
+               sizeof(streamingJob_.contentType));
+        streamingJob_.hasCookie = request.hasCookie;
         streamingJob_.peerIpv4 = peerIpv4;
     }
     streamingSignal_.release();

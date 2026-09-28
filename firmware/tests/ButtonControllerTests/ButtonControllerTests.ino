@@ -15,7 +15,8 @@ void expect(bool condition, const char *name) {
 
 void expectNoEvents(const ButtonEvents &events, const char *name) {
     expect(
-        !events.uploadRequested && !events.toggleUploadPause,
+        !events.uploadRequested && !events.toggleUploadPause &&
+            !events.otaRequested,
         name);
 }
 
@@ -71,11 +72,30 @@ void testSimultaneousButtonEvents() {
 
     buttons.updateFromInputs(false, false, 0);
     buttons.updateFromInputs(true, true, 10);
-    ButtonEvents events = buttons.updateFromInputs(true, true, 60);
+    expectNoEvents(
+        buttons.updateFromInputs(true, true, 60),
+        "simultaneous presses are held pending chord decision");
+    ButtonEvents events = buttons.updateFromInputs(true, true, 2010);
+    expect(events.otaRequested && !events.uploadRequested &&
+               !events.toggleUploadPause,
+           "held chord emits only the OTA event");
+}
 
-    expect(
-        events.uploadRequested && events.toggleUploadPause,
-        "simultaneous stable presses produce both events");
+void testShortChordPreservesNormalActions() {
+    ButtonController buttons(
+        USER_BUTTON_A,
+        USER_BUTTON_B,
+        AppConfig::BUTTON_DEBOUNCE_INTERVAL_MS,
+        AppConfig::OTA_BUTTON_HOLD_INTERVAL_MS);
+
+    buttons.updateFromInputs(false, false, 0);
+    buttons.updateFromInputs(true, true, 10);
+    expectNoEvents(buttons.updateFromInputs(true, true, 60),
+                   "short chord defers cloud actions");
+    ButtonEvents events = buttons.updateFromInputs(false, false, 100);
+    expect(events.uploadRequested && events.toggleUploadPause &&
+               !events.otaRequested,
+           "short chord follows the normal button policy");
 }
 
 void testStartupPressIsNotReplayed() {
@@ -115,6 +135,7 @@ void setup() {
     testUploadButtonEvent();
     testPauseButtonEvent();
     testSimultaneousButtonEvents();
+    testShortChordPreservesNormalActions();
     testStartupPressIsNotReplayed();
 }
 

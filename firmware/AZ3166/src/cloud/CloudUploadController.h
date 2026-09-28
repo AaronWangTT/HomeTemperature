@@ -7,6 +7,7 @@
 #include "UploadScheduler.h"
 
 class TelemetryUploader;
+class NetworkMaintenanceCoordinator;
 
 typedef uint32_t (*CloudUploadClock)();
 
@@ -21,6 +22,12 @@ public:
         TelemetryUploader &uploader,
         CloudUploadClock clock);
 
+    CloudUploadController(
+        UploadScheduler &scheduler,
+        TelemetryUploader &uploader,
+        NetworkMaintenanceCoordinator &network,
+        CloudUploadClock clock = 0);
+
     bool requestManualUpload();
     bool togglePaused();
     bool isPaused() const;
@@ -33,6 +40,7 @@ private:
     UploadScheduler &scheduler_;
     TelemetryUploader &uploader_;
     CloudUploadClock clock_;
+    NetworkMaintenanceCoordinator *network_;
 };
 
 #endif
