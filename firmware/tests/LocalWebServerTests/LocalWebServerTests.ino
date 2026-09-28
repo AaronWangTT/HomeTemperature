@@ -1422,6 +1422,33 @@ void testLegacyRouteFramingCompatibility() {
                outputContains("HTTP/1.1 200 OK") &&
                fakeCount(&FakeHttpPlatform::handlerCount) == 4,
            "legacy handlers retain bare carriage-return tolerance");
+
+    const char *names[] = {"Authorization", "Host", "Origin"};
+    const size_t capacities[] = {
+        LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY,
+        LocalHttpStreamingRequest::HOST_CAPACITY,
+        LocalHttpStreamingRequest::ORIGIN_CAPACITY
+    };
+    for (size_t headerIndex = 0; headerIndex < 3; ++headerIndex) {
+        char oversized[512];
+        int prefixLength = snprintf(
+            oversized, sizeof(oversized),
+            "GET /example HTTP/1.1\r\n%s: ", names[headerIndex]);
+        size_t length = static_cast<size_t>(prefixLength);
+        memset(oversized + length, 'x', capacities[headerIndex]);
+        length += capacities[headerIndex];
+        const char suffix[] = "\r\n\r\n";
+        memcpy(oversized + length, suffix, sizeof(suffix) - 1);
+        length += sizeof(suffix) - 1;
+        queueRequest(oversized, length);
+        expect(waitForCount(
+                   &FakeHttpPlatform::closeClientCount,
+                   static_cast<int>(6 + headerIndex)) &&
+                   outputContains("HTTP/1.1 200 OK"),
+               "legacy routes ignore over-capacity streaming metadata");
+    }
+    expect(fakeCount(&FakeHttpPlatform::handlerCount) == 7,
+           "all over-capacity metadata requests reach the legacy handler");
     expect(fakeCount(&FakeHttpPlatform::peerLookupCount) == 0,
            "legacy routes do not perform streaming peer metadata lookup");
 
@@ -1436,7 +1463,7 @@ void testLegacyRouteFramingCompatibility() {
     queueRequest(
         streamingBareCarriageReturn,
         sizeof(streamingBareCarriageReturn) - 1);
-    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 6) &&
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 9) &&
                outputContains("HTTP/1.1 400 Bad Request") &&
                fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 0,
            "streaming rejects a bare carriage return split across receives");

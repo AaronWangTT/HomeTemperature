@@ -87,7 +87,10 @@ bool copySecurityHeader(
         return true;
     }
     if (length >= capacity) {
-        return false;
+        status = LOCAL_HTTP_METADATA_TOO_LONG;
+        destination[0] = '\0';
+        destinationLength = 0;
+        return true;
     }
     for (size_t index = 0; index < length; ++index) {
         unsigned char current = static_cast<unsigned char>(value[index]);
@@ -1027,23 +1030,19 @@ bool LocalWebServer::readRequest(
             }
             request.hasContentLength = true;
         }
-        bool metadataValid = true;
         if (asciiEqualIgnoreCase(name, nameLength, "authorization")) {
-            metadataValid = copySecurityHeader(
+            copySecurityHeader(
                 value, valueLength, request.authorizationStatus,
                 request.authorization, sizeof(request.authorization),
                 request.authorizationLength);
         } else if (asciiEqualIgnoreCase(name, nameLength, "host")) {
-            metadataValid = copySecurityHeader(
+            copySecurityHeader(
                 value, valueLength, request.hostStatus,
                 request.host, sizeof(request.host), request.hostLength);
         } else if (asciiEqualIgnoreCase(name, nameLength, "origin")) {
-            metadataValid = copySecurityHeader(
+            copySecurityHeader(
                 value, valueLength, request.originStatus,
                 request.origin, sizeof(request.origin), request.originLength);
-        }
-        if (!metadataValid) {
-            return false;
         }
         position = lineEnd + 2;
     }

@@ -16,7 +16,11 @@ public:
     virtual int acceptClient(int listener) = 0;
     virtual int receiveBytes(int client, char *buffer, size_t size) = 0;
     virtual int sendBytes(int client, const char *buffer, size_t size) = 0;
-    virtual bool peerIpv4(int client, uint32_t &address) = 0;
+    virtual bool peerIpv4(int client, uint32_t &address) {
+        (void)client;
+        address = 0;
+        return false;
+    }
     virtual void closeSocket(int descriptor) = 0;
     virtual bool supportsConcurrentSockets() const { return false; }
 };
