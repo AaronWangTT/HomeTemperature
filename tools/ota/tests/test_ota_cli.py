@@ -377,7 +377,6 @@ class CliTests(unittest.TestCase):
         self.assertIn('Join-Path $env:PUBLIC "HomeTemperatureOtaBuild"', script)
         self.assertIn("Copy-Item -LiteralPath $sourceLinkerScript", script)
         self.assertIn("Copy-Item -LiteralPath $resolvedOtaBuildConfig", script)
-        self.assertIn('Join-Path $env:PUBLIC "HomeTemperatureOtaBuild"', script)
         self.assertIn("compiler.link.script.flags=-T$linkerScript", script)
         self.assertIn("compiler.cpp.extra_flags=-include $stagedOtaBuildConfig", script)
         self.assertNotIn("Uploading validated $binaryPath to $Board on $Port", script)
