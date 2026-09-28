@@ -144,7 +144,9 @@ timeout values. The listener validates a single decimal `Content-Length`,
 rejects every `Transfer-Encoding`, preserves body bytes received with the
 headers, and transfers the socket to a separate joinable worker. Existing
 `LocalHttpHandler` routes remain compatible and can serve bounded status or
-cancellation requests while that worker owns the body stream.
+cancellation requests while that worker owns the body stream, including the
+legacy LF-only request framing accepted before streaming was introduced.
+Streaming routes require canonical CRLF framing.
 
 To substitute the clock and socket implementation, derive from
 `LocalWebServerOperations` and pass the implementation by reference to the
