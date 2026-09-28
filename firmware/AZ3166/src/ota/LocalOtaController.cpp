@@ -279,9 +279,10 @@ bool LocalOtaController::takeRebootRequest() {
 
 int LocalOtaController::admit(
     const OTAStagingMetadata *metadata, void *context) {
+    // Core accepts a candidate only when the admission callback returns nonzero.
     return metadata != NULL &&
         static_cast<LocalOtaController *>(context)->metadataAllowed(*metadata)
-        ? 0 : -1;
+        ? 1 : 0;
 }
 
 int LocalOtaController::cancelled(void *context) {
@@ -637,7 +638,8 @@ bool LocalOtaController::metadataAllowed(
         !parseVersion(currentVersion_, currentMajor, currentMinor, currentPatch)) {
         return false;
     }
-    return major > currentMajor ||
+    bool newer = major > currentMajor ||
         (major == currentMajor && minor > currentMinor) ||
         (major == currentMajor && minor == currentMinor && patch > currentPatch);
+    return newer;
 }

@@ -352,6 +352,9 @@ struct FakeHttpPlatform {
     int receiveCount;
     int receiveStep;
     int receiveDuration;
+    int streamingProcessingDuration;
+    size_t forcedZeroStartOffset;
+    bool forcedZeroDone;
     size_t receiveDurationStartOffset;
     size_t firstReceiveLength;
     int sendStep;
@@ -431,6 +434,7 @@ void resetHttpPlatform() {
     fake.openResult = 10;
     fake.receiveChunkSize = 7;
     fake.receiveDurationStartOffset = SIZE_MAX;
+    fake.forcedZeroStartOffset = SIZE_MAX;
     fake.peerLookupSuccess = true;
     fake.peerAddress = 0xC0000263UL;
     fakeMutex.unlock();
@@ -507,6 +511,13 @@ int FakeLocalWebServerOperations::acceptClient(int) {
 int FakeLocalWebServerOperations::receiveBytes(int, char *buffer, size_t size) {
     fakeMutex.lock();
     ++fake.receiveCount;
+    if (!fake.forcedZeroDone &&
+        fake.inputOffset >= fake.forcedZeroStartOffset) {
+        fake.forcedZeroDone = true;
+        fake.now += fake.receiveStep;
+        fakeMutex.unlock();
+        return 0;
+    }
     if (fake.inputOffset >= fake.receiveDurationStartOffset) {
         fake.now += fake.receiveDuration;
     }
@@ -879,6 +890,7 @@ public:
                 size_t copied = received < available ? received : available;
                 memcpy(fake.streamedBody + fake.streamedLength, chunk, copied);
                 fake.streamedLength += copied;
+                fake.now += fake.streamingProcessingDuration;
                 fakeMutex.unlock();
             }
             if (status == LOCAL_HTTP_BODY_DATA) {
@@ -1686,6 +1698,68 @@ void testStreamingFaultsAndGenerationCancellation() {
         expect(waitForStreamingStatus(LOCAL_HTTP_BODY_TIMEOUT) &&
                    waitForCount(&FakeHttpPlatform::closeClientCount, 1),
                "body reads enforce an idle deadline without buffering the request");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 5000, 1500};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        fakeMutex.lock();
+        fake.receiveStep = 2000;
+        fakeMutex.unlock();
+        const char stalled[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\n";
+        queueRequest(stalled, sizeof(stalled) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_TIMEOUT),
+               "zero-byte reads enforce the total deadline immediately");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 1000, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        const char delayed[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 10\r\n\r\nabcdefghij";
+        fakeMutex.lock();
+        fake.receiveChunkSize =
+            static_cast<size_t>(strstr(delayed, "\r\n\r\n") + 4 - delayed);
+        fake.streamingProcessingDuration = 2000;
+        fakeMutex.unlock();
+        queueRequest(delayed, sizeof(delayed) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_COMPLETE) &&
+                   outputContains("200 OK"),
+               "handler processing time does not count as client body idle time");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 1000, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        const char intermittent[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 10\r\n\r\nabcdefghij";
+        fakeMutex.lock();
+        fake.receiveChunkSize = static_cast<size_t>(
+            strstr(intermittent, "\r\n\r\n") + 4 - intermittent);
+        fake.forcedZeroStartOffset = fake.receiveChunkSize;
+        fake.receiveStep = 600;
+        fake.receiveDurationStartOffset = fake.receiveChunkSize;
+        fake.receiveDuration = 600;
+        fakeMutex.unlock();
+        queueRequest(intermittent, sizeof(intermittent) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_TIMEOUT),
+               "intermittent data cannot reset an expired socket idle interval");
     }
 
     {

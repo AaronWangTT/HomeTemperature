@@ -456,7 +456,7 @@ def _parser() -> argparse.ArgumentParser:
     upload.add_argument("--version")
     upload.add_argument("--source")
     _add_layout_arguments(upload)
-    upload.set_defaults(handler=_command_upload)
+    upload.set_defaults(handler=_command_upload, timeout=120.0)
 
     apply = subparsers.add_parser("apply", help="explicitly apply a Ready generation")
     _add_remote_arguments(apply)

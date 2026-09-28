@@ -353,7 +353,8 @@ public:
           prefetchedLength_(prefetchedLength),
           prefetchedOffset_(0),
           started_(operations.currentTime()),
-          lastProgress_(started_),
+          idleWaitStarted_(0),
+          idleWaiting_(false),
           limits_(limits) {
     }
 
@@ -373,8 +374,7 @@ public:
         }
 
         uint32_t now = operations_.currentTime();
-        if (now - started_ >= limits_.totalTimeoutMs ||
-            now - lastProgress_ >= limits_.idleTimeoutMs) {
+        if (now - started_ >= limits_.totalTimeoutMs) {
             return LOCAL_HTTP_BODY_TIMEOUT;
         }
 
@@ -387,12 +387,13 @@ public:
             memcpy(buffer, prefetched_ + prefetchedOffset_, received);
             prefetchedOffset_ += received;
             remaining_ -= received;
-            lastProgress_ = operations_.currentTime();
             return LOCAL_HTTP_BODY_DATA;
         }
 
+        uint32_t receiveStarted = operations_.currentTime();
         int count = operations_.receiveBytes(
             client_, buffer, capacity < remaining_ ? capacity : remaining_);
+        uint32_t completed = operations_.currentTime();
         if (count == LocalWebServer::RECEIVE_DISCONNECTED) {
             return LOCAL_HTTP_BODY_DISCONNECTED;
         }
@@ -400,23 +401,37 @@ public:
             return LOCAL_HTTP_BODY_ERROR;
         }
         if (count == 0) {
+            if (!idleWaiting_) {
+                idleWaiting_ = true;
+                idleWaitStarted_ = receiveStarted;
+            }
+            if (completed - started_ >= limits_.totalTimeoutMs ||
+                completed - idleWaitStarted_ >= limits_.idleTimeoutMs) {
+                return LOCAL_HTTP_BODY_TIMEOUT;
+            }
             rtos::Thread::wait(1);
-            return server_.isStreamingCurrent(generation_)
-                ? LOCAL_HTTP_BODY_DATA
-                : LOCAL_HTTP_BODY_CANCELLED;
+            if (!server_.isStreamingCurrent(generation_)) {
+                return LOCAL_HTTP_BODY_CANCELLED;
+            }
+            uint32_t afterWait = operations_.currentTime();
+            return afterWait - started_ >= limits_.totalTimeoutMs ||
+                   afterWait - idleWaitStarted_ >= limits_.idleTimeoutMs
+                ? LOCAL_HTTP_BODY_TIMEOUT
+                : LOCAL_HTTP_BODY_DATA;
         }
         if (static_cast<size_t>(count) > capacity ||
             static_cast<size_t>(count) > remaining_) {
             return LOCAL_HTTP_BODY_ERROR;
         }
-        uint32_t completed = operations_.currentTime();
+        uint32_t idleStarted =
+            idleWaiting_ ? idleWaitStarted_ : receiveStarted;
         if (completed - started_ >= limits_.totalTimeoutMs ||
-            completed - lastProgress_ >= limits_.idleTimeoutMs) {
+            completed - idleStarted >= limits_.idleTimeoutMs) {
             return LOCAL_HTTP_BODY_TIMEOUT;
         }
+        idleWaiting_ = false;
         received = static_cast<size_t>(count);
         remaining_ -= received;
-        lastProgress_ = completed;
         return LOCAL_HTTP_BODY_DATA;
     }
 
@@ -438,7 +453,8 @@ private:
     size_t prefetchedLength_;
     size_t prefetchedOffset_;
     uint32_t started_;
-    uint32_t lastProgress_;
+    uint32_t idleWaitStarted_;
+    bool idleWaiting_;
     LocalHttpStreamingLimits limits_;
 };
 
