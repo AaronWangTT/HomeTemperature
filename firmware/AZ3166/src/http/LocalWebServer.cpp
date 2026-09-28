@@ -620,6 +620,7 @@ void LocalWebServer::update(bool wifiConnected, uint32_t address) {
             ++requested_.generation;
             state_.listening = false;
             state_.address = 0;
+            state_.generation = requested_.generation;
             state_.error = 0;
             workerAttempted_ = false;
         }

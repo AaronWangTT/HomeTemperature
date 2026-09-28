@@ -29,10 +29,12 @@ product policy, progress reporting, and reboot coordination.
 The initial implementation must not replace the bootloader or claim rollback
 support. A failed update must remain recoverable through ST-Link.
 
-This Core migration adopts the staging engine only. It does not add
-HomeTemperature upload routes or browser UI, automatic reboot, A/B rollback,
-boot-attempt counters, or health-confirmation logic, and the package contains no
-private signing key.
+The earlier Core-only migration adopted the staging engine without application
+routes. Phase 5 now adds the HomeTemperature controller, API routes, physical
+authorization, and delayed reboot coordination. Browser UI, A/B rollback,
+boot-attempt counters, health-confirmation logic, and production trust
+provisioning remain out of scope, and the package contains no private signing
+key.
 
 ## 2. Core 3.1.2 Findings
 

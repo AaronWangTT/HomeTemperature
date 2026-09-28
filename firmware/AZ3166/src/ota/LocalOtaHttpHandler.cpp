@@ -152,6 +152,10 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
                     "{\"error\":\"activation uncertain; restore with ST-Link\"}",
                     body, bodySize);
     }
+    if (result == OTA_ERROR_CANCELLED) {
+        return json("409 Conflict",
+                    "{\"error\":\"apply cancelled\"}", body, bodySize);
+    }
     return json("500 Internal Server Error",
                 "{\"error\":\"activation failed\"}", body, bodySize);
 }

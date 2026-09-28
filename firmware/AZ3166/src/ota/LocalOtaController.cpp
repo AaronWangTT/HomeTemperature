@@ -443,10 +443,17 @@ const char *LocalOtaController::errorName(OTAStagingError error) {
 }
 
 void LocalOtaController::responseAttempted(bool) {
-    std::lock_guard<rtos::Mutex> lock(mutex_);
-    if (activationAwaitingResponse_) {
-        activationAwaitingResponse_ = false;
-        rebootPending_ = true;
+    uint32_t generation = 0;
+    {
+        std::lock_guard<rtos::Mutex> lock(mutex_);
+        if (activationAwaitingResponse_) {
+            activationAwaitingResponse_ = false;
+            rebootPending_ = true;
+            generation = generation_;
+        }
+    }
+    if (generation != 0) {
+        releaseLease(generation);
     }
 }
 
@@ -500,19 +507,23 @@ void LocalOtaController::runWorker() {
         }
         if (command == WORKER_UPLOAD) {
             bool ready;
+            bool cancel;
             {
                 std::lock_guard<rtos::Mutex> lock(mutex_);
                 ready = state_ == LOCAL_OTA_RECEIVING;
-                if (cancelRequested_) {
+                cancel = cancelRequested_;
+                if (cancel) {
                     command_ = WORKER_CANCEL;
                 }
             }
-            if (ready) {
+            if (ready && !cancel) {
                 processUpload();
-            } else if (command_ == WORKER_CANCEL) {
+            } else if (cancel) {
                 fail(OTA_ERROR_CANCELLED, false);
-                std::lock_guard<rtos::Mutex> lock(mutex_);
-                uploadCompleted_ = true;
+                {
+                    std::lock_guard<rtos::Mutex> lock(mutex_);
+                    uploadCompleted_ = true;
+                }
                 uploadCompletion_.release();
             }
         } else if (command == WORKER_APPLY) {
@@ -671,7 +682,7 @@ void LocalOtaController::processApply() {
             state_ = LOCAL_OTA_ERROR;
         }
     }
-    if (result != OTA_ERROR_ACTIVATION_UNCERTAIN) {
+    if (result != OTA_OK && result != OTA_ERROR_ACTIVATION_UNCERTAIN) {
         releaseLease(generation);
     }
     applyCompletion_.release();
