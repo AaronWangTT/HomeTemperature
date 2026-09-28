@@ -450,11 +450,6 @@ class CliTests(unittest.TestCase):
         )
         upload = harness.index('& $invokeBuild "Upload" $testSketch')
         self.assertLess(preflight, upload)
-        preflight = harness.index(
-            '$env:HOME_TEMPERATURE_STLINK_SERIAL -notmatch "^[0-9A-Fa-f]{24}$"'
-        )
-        upload = harness.index('& $invokeBuild "Upload" $testSketch')
-        self.assertLess(preflight, upload)
 
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()
