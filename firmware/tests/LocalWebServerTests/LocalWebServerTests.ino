@@ -1211,6 +1211,31 @@ void testLegacyRouteFramingCompatibility() {
                outputContains("HTTP/1.1 400 Bad Request") &&
                fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 0,
            "streaming routes still require canonical CRLF framing");
+
+    const char legacyBareCarriageReturn[] =
+        "GET /example HTTP/1.1\r\nX-Test: a\rb\r\n\r\n";
+    queueRequest(
+        legacyBareCarriageReturn, sizeof(legacyBareCarriageReturn) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 5) &&
+               outputContains("HTTP/1.1 200 OK") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 4,
+           "legacy handlers retain bare carriage-return tolerance");
+
+    const char streamingBareCarriageReturn[] =
+        "POST /stream HTTP/1.1\r\nX-Test: a\rb\r\n"
+        "Content-Length: 3\r\n\r\nabc";
+    fakeMutex.lock();
+    fake.receiveChunkSize =
+        static_cast<size_t>(strstr(streamingBareCarriageReturn, "a\rb") -
+                            streamingBareCarriageReturn) + 2;
+    fakeMutex.unlock();
+    queueRequest(
+        streamingBareCarriageReturn,
+        sizeof(streamingBareCarriageReturn) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 6) &&
+               outputContains("HTTP/1.1 400 Bad Request") &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 0,
+           "streaming rejects a bare carriage return split across receives");
 }
 
 void testStreamingFaultsAndGenerationCancellation() {

@@ -796,6 +796,7 @@ bool LocalWebServer::readRequest(
     bool requestLineComplete = false;
     bool requestLineCarriageReturn = false;
     bool canonicalFraming = true;
+    bool previousCarriageReturn = false;
 
     while (isCurrent(generation) &&
            operations_.currentTime() - requestStart < IO_TIMEOUT_MS) {
@@ -811,11 +812,11 @@ bool LocalWebServer::readRequest(
                 return false;
             }
             receivedBytes[receivedLength++] = current;
-            if (current == '\n' &&
-                (receivedLength < 2 ||
-                 receivedBytes[receivedLength - 2] != '\r')) {
+            if ((previousCarriageReturn && current != '\n') ||
+                (current == '\n' && !previousCarriageReturn)) {
                 canonicalFraming = false;
             }
+            previousCarriageReturn = current == '\r';
             if (!requestLineComplete) {
                 if (current == '\n') {
                     requestLineComplete = true;
