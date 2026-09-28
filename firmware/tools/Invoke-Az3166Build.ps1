@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Verify", "Upload")]
+    [ValidateSet("Verify", "Upload", "Restore")]
     [string]$Action = "Verify",
 
     [Parameter(Mandatory = $true)]
@@ -92,11 +92,26 @@ $isProductionSketch = $resolvedSketch -eq $productionSketch
 $temporaryBuildPath = $null
 $temporaryRecipePath = $null
 $resolvedBuildPath = $null
+
+trap {
+    $failure = $_
+    if ($temporaryBuildPath -and (Test-Path -LiteralPath $temporaryBuildPath)) {
+        Remove-Item -LiteralPath $temporaryBuildPath -Recurse -Force
+    }
+    if ($temporaryRecipePath -and (Test-Path -LiteralPath $temporaryRecipePath)) {
+        Remove-Item -LiteralPath $temporaryRecipePath -Recurse -Force
+    }
+    throw $failure
+}
+
 if ($OtaBuildConfig -and -not $isProductionSketch) {
     throw "-OtaBuildConfig is valid only for the production AZ3166 sketch."
 }
 if ($Action -eq "Upload" -and $isProductionSketch -and $OtaBuildConfig) {
     throw "Production Upload generates its OTA build config; do not pass -OtaBuildConfig."
+}
+if ($Action -eq "Restore" -and -not $isProductionSketch) {
+    throw "Restore is valid only for the production AZ3166 sketch."
 }
 if ($isProductionSketch -and -not $BuildPath) {
     $temporaryBuildPath = Join-Path (
@@ -287,14 +302,22 @@ if ($isProductionSketch) {
             }
             throw "Production image validation failed with exit code $validationExitCode."
         }
+    }
+    if ($Action -eq "Upload" -or $Action -eq "Restore") {
         $openOcdRoot = Split-Path -Parent (Split-Path -Parent $installedOpenOcd)
         $interfaceConfig = Join-Path $openOcdRoot "scripts\interface\stlink-v2-1.cfg"
         $targetConfig = Join-Path $openOcdRoot "scripts\target\stm32f4x.cfg"
-        Write-Host "Uploading validated $binaryPath to $Board through ST-Link $StLinkSerial"
+        if ($Action -eq "Upload") {
+            $probeSelection = @("-c", "hla_serial $StLinkSerial")
+            Write-Host "Uploading validated $binaryPath to $Board through ST-Link $StLinkSerial"
+        } else {
+            $probeSelection = @()
+            Write-Host "Restoring validated fail-closed production firmware through the attached ST-Link"
+        }
         $uploadOutput = (& $installedOpenOcd `
             "-f" $interfaceConfig `
             "-c" "transport select hla_swd" `
-            "-c" "hla_serial $StLinkSerial" `
+            @probeSelection `
             "-f" $targetConfig `
             "-c" "program {$binaryPath} verify reset 0x800C000; shutdown" `
             2>&1 | Out-String)
