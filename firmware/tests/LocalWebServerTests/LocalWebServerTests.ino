@@ -1403,6 +1403,25 @@ void testStreamingRequestMetadata() {
                outputContains("HTTP/1.1 400 Bad Request") &&
                fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 4,
            "a shorter duplicate cannot overwrite an over-capacity rejection");
+
+    const char malformedDuplicate[] =
+        "POST /stream HTTP/1.1\r\n"
+        "Authorization: first\r\nAuthorization:\t\r\n"
+        "Host: first\r\nHost: second\x01\r\n"
+        "Content-Length: 0\r\n\r\n";
+    queueRequest(malformedDuplicate, sizeof(malformedDuplicate) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 8) &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 5,
+           "malformed metadata duplicates remain available to streaming policy");
+    fakeMutex.lock();
+    bool malformedDuplicateMetadata =
+        fake.streamingAuthorizationStatus == LOCAL_HTTP_METADATA_MALFORMED &&
+        fake.streamingHostStatus == LOCAL_HTTP_METADATA_DUPLICATE &&
+        fake.streamingAuthorization[0] == '\0' &&
+        fake.streamingHost[0] == '\0';
+    fakeMutex.unlock();
+    expect(malformedDuplicateMetadata,
+           "empty and control-bearing duplicates remain non-valid and clear stored metadata");
 }
 
 void testLegacyRouteFramingCompatibility() {
