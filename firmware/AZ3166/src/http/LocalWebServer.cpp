@@ -417,8 +417,10 @@ public:
             static_cast<size_t>(count) > remaining_) {
             return LOCAL_HTTP_BODY_ERROR;
         }
+        uint32_t idleStarted =
+            idleWaiting_ ? idleWaitStarted_ : receiveStarted;
         if (completed - started_ >= limits_.totalTimeoutMs ||
-            completed - receiveStarted >= limits_.idleTimeoutMs) {
+            completed - idleStarted >= limits_.idleTimeoutMs) {
             return LOCAL_HTTP_BODY_TIMEOUT;
         }
         idleWaiting_ = false;
