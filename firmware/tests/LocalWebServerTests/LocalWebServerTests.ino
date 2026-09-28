@@ -1692,6 +1692,28 @@ void testStreamingFaultsAndGenerationCancellation() {
         resetHttpPlatform();
         ExampleHandler handler;
         ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 1000, 10000};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        const char delayed[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 10\r\n\r\nabcdefghij";
+        fakeMutex.lock();
+        fake.receiveChunkSize =
+            static_cast<size_t>(strstr(delayed, "\r\n\r\n") + 4 - delayed);
+        fake.receiveDurationStartOffset = fake.receiveChunkSize;
+        fake.receiveDuration = 2000;
+        fakeMutex.unlock();
+        queueRequest(delayed, sizeof(delayed) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_COMPLETE) &&
+                   outputContains("200 OK"),
+               "handler processing time does not count as client body idle time");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
         LocalHttpStreamingLimits limits = {64, 1000, 1500};
         LocalWebServer server(
             handler, streamingHandler, limits, 8080, 5000, httpOperations());

@@ -373,8 +373,7 @@ public:
         }
 
         uint32_t now = operations_.currentTime();
-        if (now - started_ >= limits_.totalTimeoutMs ||
-            now - lastProgress_ >= limits_.idleTimeoutMs) {
+        if (now - started_ >= limits_.totalTimeoutMs) {
             return LOCAL_HTTP_BODY_TIMEOUT;
         }
 
@@ -400,6 +399,10 @@ public:
             return LOCAL_HTTP_BODY_ERROR;
         }
         if (count == 0) {
+            if (operations_.currentTime() - lastProgress_ >=
+                limits_.idleTimeoutMs) {
+                return LOCAL_HTTP_BODY_TIMEOUT;
+            }
             rtos::Thread::wait(1);
             return server_.isStreamingCurrent(generation_)
                 ? LOCAL_HTTP_BODY_DATA
@@ -410,8 +413,7 @@ public:
             return LOCAL_HTTP_BODY_ERROR;
         }
         uint32_t completed = operations_.currentTime();
-        if (completed - started_ >= limits_.totalTimeoutMs ||
-            completed - lastProgress_ >= limits_.idleTimeoutMs) {
+        if (completed - started_ >= limits_.totalTimeoutMs) {
             return LOCAL_HTTP_BODY_TIMEOUT;
         }
         received = static_cast<size_t>(count);

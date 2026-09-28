@@ -116,6 +116,10 @@ python .\tools\ota\ota_cli.py upload `
   --public-key C:\secure\ota-public-key.der
 ```
 
+Upload waits up to 120 seconds by default because the device performs bounded
+Flash erase, write, and full read-back verification before returning `Ready`.
+Use `--timeout` only when hardware measurements justify another bound.
+
 Status is a separate request:
 
 ```powershell
