@@ -352,6 +352,7 @@ struct FakeHttpPlatform {
     int receiveCount;
     int receiveStep;
     int receiveDuration;
+    int streamingProcessingDuration;
     size_t receiveDurationStartOffset;
     size_t firstReceiveLength;
     int sendStep;
@@ -879,6 +880,7 @@ public:
                 size_t copied = received < available ? received : available;
                 memcpy(fake.streamedBody + fake.streamedLength, chunk, copied);
                 fake.streamedLength += copied;
+                fake.now += fake.streamingProcessingDuration;
                 fakeMutex.unlock();
             }
             if (status == LOCAL_HTTP_BODY_DATA) {
@@ -1701,8 +1703,7 @@ void testStreamingFaultsAndGenerationCancellation() {
         fakeMutex.lock();
         fake.receiveChunkSize =
             static_cast<size_t>(strstr(delayed, "\r\n\r\n") + 4 - delayed);
-        fake.receiveDurationStartOffset = fake.receiveChunkSize;
-        fake.receiveDuration = 2000;
+        fake.streamingProcessingDuration = 2000;
         fakeMutex.unlock();
         queueRequest(delayed, sizeof(delayed) - 1);
         expect(waitForStreamingStatus(LOCAL_HTTP_BODY_COMPLETE) &&

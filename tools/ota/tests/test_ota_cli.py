@@ -327,6 +327,20 @@ class CliTests(unittest.TestCase):
                     value,
                 )
 
+    def test_upload_defaults_to_flash_verification_timeout(self) -> None:
+        args = ota_cli._parser().parse_args(
+            [
+                "upload",
+                "--base-url",
+                self.base_url,
+                "--package",
+                str(self.package),
+                "--public-key",
+                str(self.public_key),
+            ]
+        )
+        self.assertEqual(args.timeout, 120.0)
+
     def test_requests_do_not_follow_redirects(self) -> None:
         with self.assertRaisesRegex(ota_cli.CliError, "HTTP 302"):
             ota_cli._request(
