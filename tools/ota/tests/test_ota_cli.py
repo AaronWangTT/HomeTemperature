@@ -417,6 +417,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("Copy-Item -LiteralPath $resolvedOtaBuildConfig", script)
         self.assertIn("compiler.link.script.flags=-T$linkerScript", script)
         self.assertIn("compiler.cpp.extra_flags=-include $stagedOtaBuildConfig", script)
+        self.assertIn('$openOcdBinaryPath = $binaryPath.Replace("\\", "/")', script)
         self.assertNotIn("Uploading validated $binaryPath to $Board on $Port", script)
         self.assertIn(
             '$Action -eq "Upload" -and -not $isProductionSketch',
