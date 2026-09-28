@@ -346,6 +346,16 @@ def verify_package(
     application_address: int = APPLICATION_ADDRESS,
     application_capacity: int = APPLICATION_CAPACITY,
 ) -> VerifiedPackage:
+    if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(
+        public_key.curve, ec.SECP256R1
+    ):
+        raise PackageError("verification key must use P-256")
+    verification_der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    if verification_der != public_der:
+        raise PackageError("public key DER does not match the verification key")
     if len(package) < PAYLOAD_OFFSET + 1:
         raise PackageError("package is too short")
     prefix = package[:PACKAGE_PREFIX_SIZE]

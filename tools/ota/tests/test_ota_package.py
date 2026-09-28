@@ -8,8 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -19,6 +20,8 @@ from ota_package import (  # noqa: E402
     BOARD_ID,
     DESCRIPTOR_OFFSET,
     DESCRIPTOR_SIZE,
+    PACKAGE_HEADER_SIZE,
+    PAYLOAD_OFFSET,
     PRODUCT_ID,
     PackageError,
     build_package,
@@ -113,6 +116,33 @@ class PackageTests(unittest.TestCase):
         wrong_der = public_key_der(wrong_key)
         with self.assertRaisesRegex(PackageError, "key"):
             verify_package(self.package, wrong_key.public_key(), wrong_der)
+
+    def test_rejects_key_identifier_bound_to_different_verification_key(self) -> None:
+        other_key = ec.generate_private_key(ec.SECP256R1())
+        other_der = public_key_der(other_key)
+        package = bytearray(self.package)
+        other_key_id = hashlib.sha256(other_der).digest()
+        package[64 + 164 : 64 + 196] = other_key_id
+        package[PAYLOAD_OFFSET + DESCRIPTOR_OFFSET + 164 :
+                PAYLOAD_OFFSET + DESCRIPTOR_OFFSET + 196] = other_key_id
+        package[20:52] = hashlib.sha256(package[PAYLOAD_OFFSET:]).digest()
+        der_signature = self.private_key.sign(
+            bytes(package[:PACKAGE_HEADER_SIZE]),
+            ec.ECDSA(hashes.SHA256()),
+        )
+        r, s = decode_dss_signature(der_signature)
+        package[PACKAGE_HEADER_SIZE:PAYLOAD_OFFSET] = (
+            r.to_bytes(32, "big") + s.to_bytes(32, "big")
+        )
+
+        with self.assertRaisesRegex(PackageError, "verification key"):
+            verify_package(
+                bytes(package),
+                self.public_key,
+                other_der,
+                expected_version=VERSION,
+                expected_source=SOURCE,
+            )
 
     def test_rejects_malformed_image_vector_table(self) -> None:
         image = bytearray(self.image)
