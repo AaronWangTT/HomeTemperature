@@ -448,14 +448,17 @@ OTA worker observes that flag and calls `abort()`. After `finish()` verifies
 staging and publishes `Ready`, the joinable OTA worker remains alive, owns the
 Core session, and waits on a bounded command signal. An apply request carries
 the expected generation and digest; the handler compares both with the retained
-`Ready` image before queuing a one-shot completion object. The worker
+`Ready` image before queuing a one-shot activation command. The worker
 revalidates generation and cancellation state immediately before claiming
 `Applying`.
 
-The worker then calls `activate()`, publishes success, verified failure, or
-uncertain state, signals the completion object, and only then exits. A cancel
-request wakes it to abort and exit. HTTP handlers never call Core session
-methods.
+The handler queues activation without a completion object. Its
+response-attempt callback wakes the worker only after the `202 Accepted`
+response has been attempted. The worker then calls `activate()` and records
+success, verified failure, or uncertain state independently of the request
+lifetime. On success it latches a reboot request; the long-lived worker remains
+available until controller shutdown. A cancel request wakes it to abort the
+staged session. HTTP handlers never call Core session methods.
 
 Wi-Fi/address generation changes enqueue the same generation-bound cancellation
 signal, including while the worker waits in `Ready`. The worker wakes, calls
@@ -634,8 +637,9 @@ separate recovery and manufacturing review.
 - repeated begin, abort, finish, and activation calls;
 - apply queued immediately before expiry, cancellation, and address-generation
   changes, proving invalidation wins before `Applying`;
-- apply completion success, verified failure, uncertain result, timeout, and
-  handler-timeout lifetime;
+- apply response attempted before activation starts, plus activation success
+  with a latched reboot request, verified failure, and uncertain result,
+  independently of the handler lifetime;
 - `finish()` reaches `Ready` without touching boot metadata, while only
   `activate()` writes and verifies that metadata;
 - exact read-back of the new boot-table entry and restoration of the previous
