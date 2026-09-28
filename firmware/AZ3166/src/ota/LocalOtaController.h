@@ -56,7 +56,8 @@ public:
     bool apply(
         uint32_t expectedGeneration,
         const uint8_t expectedDigest[OTA_SHA256_SIZE],
-        OTAStagingError &result);
+        OTAStagingError &result,
+        void *&responseContext);
     bool cancel();
     void update(uint32_t networkGeneration);
     LocalOtaSnapshot snapshot() const;
@@ -65,7 +66,7 @@ public:
     bool readyImage(
         uint32_t &generation,
         uint8_t digest[OTA_SHA256_SIZE]) const;
-    void responseAttempted(bool sent);
+    static void responseAttempted(bool sent, void *context);
     bool takeRebootRequest();
 
 private:
@@ -75,6 +76,12 @@ private:
         WORKER_APPLY,
         WORKER_CANCEL,
         WORKER_SHUTDOWN
+    };
+
+    struct ApplyResponseContext {
+        LocalOtaController *controller;
+        uint32_t controllerGeneration;
+        bool active;
     };
 
     static int admit(const OTAStagingMetadata *metadata, void *context);
@@ -122,8 +129,10 @@ private:
     OTAStagingError lastError_;
     struct {
         bool pending;
+        bool responseReleased;
         uint32_t controllerGeneration;
     } queuedApply_;
+    ApplyResponseContext applyResponseContexts_[2];
 };
 
 #endif

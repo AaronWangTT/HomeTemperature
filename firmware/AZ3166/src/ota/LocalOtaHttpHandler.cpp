@@ -324,8 +324,9 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
                         responseBody, responseBodySize);
         }
         OTAStagingError result;
+        void *responseContext = NULL;
         if (!controller_.apply(
-                expectedGeneration, expectedDigest, result)) {
+                expectedGeneration, expectedDigest, result, responseContext)) {
             return json("409 Conflict", "{\"error\":\"not ready\"}",
                         responseBody, responseBodySize);
         }
@@ -333,8 +334,8 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
             LocalHttpResponse response = json(
                 "202 Accepted", "{\"status\":\"reboot scheduled\"}",
                 responseBody, responseBodySize);
-            response.afterAttempt = afterApplyResponse;
-            response.afterAttemptContext = &controller_;
+            response.afterAttempt = LocalOtaController::responseAttempted;
+            response.afterAttemptContext = responseContext;
             return response;
         }
         if (result == OTA_ERROR_ACTIVATION_UNCERTAIN) {
@@ -384,8 +385,4 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
         static_cast<unsigned long>(stagedGeneration),
         static_cast<unsigned long>(status.acceptedBytes),
         digest);
-}
-
-void LocalOtaHttpHandler::afterApplyResponse(bool sent, void *context) {
-    static_cast<LocalOtaController *>(context)->responseAttempted(sent);
 }

@@ -50,8 +50,6 @@ private:
         size_t bodySize,
         ...);
     static LocalHttpResponse otaPage(char *body, size_t bodySize);
-    static void afterApplyResponse(bool sent, void *context);
-
     LocalHttpHandler &fallback_;
     LocalOtaController &controller_;
 };
