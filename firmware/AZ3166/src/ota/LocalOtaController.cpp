@@ -475,6 +475,21 @@ const char *LocalOtaController::errorName(OTAStagingError error) {
     return core_.errorName(error);
 }
 
+bool LocalOtaController::readyImage(
+    uint32_t &generation,
+    uint8_t digest[OTA_SHA256_SIZE]) const {
+    if (digest == NULL) {
+        return false;
+    }
+    std::lock_guard<rtos::Mutex> lock(mutex_);
+    if (state_ != LOCAL_OTA_READY) {
+        return false;
+    }
+    generation = staged_.sessionGeneration;
+    memcpy(digest, staged_.sha256, OTA_SHA256_SIZE);
+    return true;
+}
+
 void LocalOtaController::responseAttempted(bool) {
     uint32_t generation = 0;
     {

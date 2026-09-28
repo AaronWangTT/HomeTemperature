@@ -47,6 +47,11 @@ session. A successful apply posts reboot only after the HTTP response attempt.
 An uncertain activation remains in fatal maintenance and requires ST-Link
 recovery.
 
+Successful upload and `Ready` status responses include the Core staging
+generation and lowercase payload SHA-256 digest. The command-line client
+requires both to match its locally verified package before it sends the
+separate bodyless apply request.
+
 Build, verify, upload, activate, and confirm packages with the repository-owned
 host tool documented in
 [`tools/ota/README.md`](../../../../tools/ota/README.md).

@@ -351,8 +351,11 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
     LocalHttpResponse response =
         handler.handleRequest(valid, responseBody, sizeof(responseBody));
     expect(strcmp(response.status, "200 OK") == 0 &&
-               strstr(responseBody, "\"state\":\"Ready\"") != NULL,
-           "authorized status route reports Ready");
+               strstr(responseBody, "\"state\":\"Ready\"") != NULL &&
+               strstr(responseBody, "\"generation\":7") != NULL &&
+               strstr(responseBody,
+                      "\"digest\":\"4200000000000000000000000000000000000000000000000000000000000000\"") != NULL,
+           "authorized status reports the Core generation and digest");
 
     LocalHttpRequest malformedStatus = valid;
     malformedStatus.hasTransferEncoding = true;

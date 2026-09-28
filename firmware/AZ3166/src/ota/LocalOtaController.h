@@ -74,6 +74,9 @@ public:
     LocalOtaSnapshot snapshot() const;
     const char *stateName(LocalOtaState state) const;
     const char *errorName(OTAStagingError error);
+    bool readyImage(
+        uint32_t &generation,
+        uint8_t digest[OTA_SHA256_SIZE]) const;
     void responseAttempted(bool sent);
     bool takeRebootRequest();
 

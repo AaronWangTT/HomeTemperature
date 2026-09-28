@@ -44,13 +44,6 @@ function Invoke-Az3166TestSuite {
     ) {
         throw "Run requires HOME_TEMPERATURE_STLINK_SERIAL as exactly 24 hexadecimal characters."
     }
-    if (
-        $Action -eq "Run" -and
-        $env:HOME_TEMPERATURE_STLINK_SERIAL -notmatch "^[0-9A-Fa-f]{24}$"
-    ) {
-        throw "Run requires HOME_TEMPERATURE_STLINK_SERIAL as exactly 24 hexadecimal characters."
-    }
-
     $invokeBuild = {
         param(
             [string]$BuildAction,

@@ -114,16 +114,23 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
     }
     if (exactRoute(request.requestLine, "GET", "/api/ota/status")) {
         LocalOtaSnapshot status = controller_.snapshot();
+        uint32_t stagedGeneration = 0;
+        uint8_t digestBytes[OTA_SHA256_SIZE];
+        char digest[(OTA_SHA256_SIZE * 2) + 1] = {};
+        if (controller_.readyImage(stagedGeneration, digestBytes)) {
+            encodeDigest(digestBytes, digest);
+        }
         return json(
             "200 OK",
             "{\"state\":\"%s\",\"generation\":%lu,\"acceptedBytes\":%lu,"
-            "\"totalBytes\":%lu,\"lastError\":\"%s\"}",
+            "\"totalBytes\":%lu,\"lastError\":\"%s\",\"digest\":\"%s\"}",
             body, bodySize,
             controller_.stateName(status.state),
-            static_cast<unsigned long>(status.generation),
+            static_cast<unsigned long>(stagedGeneration),
             static_cast<unsigned long>(status.acceptedBytes),
             static_cast<unsigned long>(status.totalBytes),
-            controller_.errorName(status.lastError));
+            controller_.errorName(status.lastError),
+            digest);
     }
     if (exactRoute(request.requestLine, "DELETE", "/api/ota")) {
         if (!controller_.cancel(request)) {
@@ -200,6 +207,17 @@ bool LocalOtaHttpHandler::parseChallenge(
     return true;
 }
 
+void LocalOtaHttpHandler::encodeDigest(
+    const uint8_t digest[OTA_SHA256_SIZE],
+    char output[(OTA_SHA256_SIZE * 2) + 1]) {
+    static const char HEX[] = "0123456789abcdef";
+    for (size_t index = 0; index < OTA_SHA256_SIZE; ++index) {
+        output[index * 2] = HEX[digest[index] >> 4];
+        output[index * 2 + 1] = HEX[digest[index] & 0x0f];
+    }
+    output[OTA_SHA256_SIZE * 2] = '\0';
+}
+
 LocalHttpResponse LocalOtaHttpHandler::handle(
     const LocalHttpStreamingRequest &request,
     LocalHttpBodyStream &body,
@@ -268,12 +286,20 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
                     controller_.errorName(status.lastError));
     }
     LocalOtaSnapshot status = controller_.snapshot();
+    uint32_t stagedGeneration = 0;
+    uint8_t digestBytes[OTA_SHA256_SIZE];
+    char digest[(OTA_SHA256_SIZE * 2) + 1] = {};
+    if (controller_.readyImage(stagedGeneration, digestBytes)) {
+        encodeDigest(digestBytes, digest);
+    }
     return json(
         "201 Created",
-        "{\"state\":\"Ready\",\"generation\":%lu,\"acceptedBytes\":%lu}",
+        "{\"state\":\"Ready\",\"generation\":%lu,\"acceptedBytes\":%lu,"
+        "\"digest\":\"%s\"}",
         responseBody, responseBodySize,
-        static_cast<unsigned long>(status.generation),
-        static_cast<unsigned long>(status.acceptedBytes));
+        static_cast<unsigned long>(stagedGeneration),
+        static_cast<unsigned long>(status.acceptedBytes),
+        digest);
 }
 
 void LocalOtaHttpHandler::afterApplyResponse(bool sent, void *context) {

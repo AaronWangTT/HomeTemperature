@@ -382,11 +382,13 @@ def _command_upload(args: argparse.Namespace) -> None:
     generation = response.get("generation")
     if not isinstance(generation, int) or generation <= 0:
         raise CliError("upload response omitted a valid generation")
+    digest = response.get("digest")
+    if digest != verified.payload_sha256.hex():
+        raise CliError("device staged digest does not match the verified package")
     print(
         json.dumps(
             {
                 **response,
-                "digest": verified.payload_sha256.hex(),
                 "version": verified.descriptor.firmware_version,
             },
             separators=(",", ":"),
@@ -411,8 +413,12 @@ def _command_apply(args: argparse.Namespace) -> None:
         capability=_capability(args.capability),
         timeout=args.timeout,
     )
-    if status.get("state") != "Ready" or status.get("generation") != args.generation:
-        raise CliError("device is not Ready with the requested generation")
+    if (
+        status.get("state") != "Ready"
+        or status.get("generation") != args.generation
+        or status.get("digest") != supplied_digest
+    ):
+        raise CliError("device is not Ready with the requested generation/digest")
     _bodyless_request(
         args.base_url,
         "POST",

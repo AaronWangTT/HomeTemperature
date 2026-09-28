@@ -71,6 +71,7 @@ class OtaHandler(BaseHTTPRequestHandler):
     applied = False
     version_status = 200
     redirected = False
+    digest_override = None
 
     def log_message(self, *_args) -> None:
         pass
@@ -107,6 +108,8 @@ class OtaHandler(BaseHTTPRequestHandler):
                     "acceptedBytes": len(self.package),
                     "totalBytes": len(self.package),
                     "lastError": "OTA_OK",
+                    "digest": self.digest_override
+                    or hashlib.sha256(self.package[384:]).hexdigest(),
                 },
             )
         else:
@@ -122,7 +125,16 @@ class OtaHandler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "unauthorized"})
         elif self.path == "/api/ota" and self._authorized():
             self.__class__.package = body
-            self._json(201, {"state": "Ready", "generation": 7, "acceptedBytes": length})
+            self._json(
+                201,
+                {
+                    "state": "Ready",
+                    "generation": 7,
+                    "acceptedBytes": length,
+                    "digest": self.digest_override
+                    or hashlib.sha256(body[384:]).hexdigest(),
+                },
+            )
         elif (
             self.path == "/api/ota/apply"
             and self._authorized()
@@ -149,6 +161,7 @@ class CliTests(unittest.TestCase):
         OtaHandler.applied = False
         OtaHandler.version_status = 200
         OtaHandler.redirected = False
+        OtaHandler.digest_override = None
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), OtaHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -299,6 +312,27 @@ class CliTests(unittest.TestCase):
             ),
             1,
         )
+
+    def test_rejects_device_staged_digest_mismatch(self) -> None:
+        OtaHandler.digest_override = "0" * 64
+        with patch(
+            "ota_package.PRODUCTION_KEY_IDS",
+            frozenset({self.production_key_id}),
+        ):
+            self.assertEqual(
+                self.run_cli(
+                    "upload",
+                    "--base-url",
+                    self.base_url,
+                    "--capability",
+                    CAPABILITY,
+                    "--package",
+                    str(self.package),
+                    "--public-key",
+                    str(self.public_key),
+                ),
+                1,
+            )
 
     def test_rejects_non_origin_base_url(self) -> None:
         with self.assertRaises(SystemExit):
