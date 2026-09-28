@@ -141,7 +141,8 @@ python .\tools\ota\ota_cli.py status `
 
 Apply is deliberately separate. Supply the generation and digest returned by
 upload; the CLI verifies the package again and requires the live status to be
-`Ready` with that generation before it sends the bodyless apply request:
+`Ready` with that generation and digest before it sends both values in the
+authenticated apply request:
 
 ```powershell
 python .\tools\ota\ota_cli.py apply `

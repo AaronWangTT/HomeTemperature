@@ -31,9 +31,9 @@ must use one `Content-Length` and `application/octet-stream`; transfer encoding,
 multipart upload, ranges, and resume are unsupported.
 
 Successful upload and `Ready` status responses include the controller
-generation. Apply is bodyless and activates only the controller's retained
-Core session. The host client independently verifies the selected package and
-requires its supplied digest and live Ready generation to match before apply.
+generation and staged payload digest. Apply requires the exact canonical JSON
+generation and digest selected by the operator; the device compares both with
+its retained Core session before activation.
 `GET /api/version` is a read-only, unauthenticated version probe used by the
 command-line client after reboot; it does not expose a capability or enable
 OTA.
@@ -49,8 +49,8 @@ recovery.
 
 Successful upload and `Ready` status responses include the Core staging
 generation and lowercase payload SHA-256 digest. The command-line client
-requires both to match its locally verified package before it sends the
-separate bodyless apply request.
+requires both to match its locally verified package and sends both in the
+separate authenticated apply request.
 
 Build, verify, upload, activate, and confirm packages with the repository-owned
 host tool documented in

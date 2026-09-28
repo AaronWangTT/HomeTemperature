@@ -83,7 +83,6 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
 
 bool LocalOtaHttpHandler::requiresRequestMetadata(const char *requestLine) {
     return exactRoute(requestLine, "GET", "/api/ota/status") ||
-        exactRoute(requestLine, "POST", "/api/ota/apply") ||
         exactRoute(requestLine, "DELETE", "/api/ota");
 }
 
@@ -97,7 +96,6 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
     }
     bool otaRoute =
         exactRoute(request.requestLine, "GET", "/api/ota/status") ||
-        exactRoute(request.requestLine, "POST", "/api/ota/apply") ||
         exactRoute(request.requestLine, "DELETE", "/api/ota");
     if (!otaRoute) {
         return fallback_.handleRequest(request, body, bodySize);
@@ -141,35 +139,13 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
                     body, bodySize);
     }
 
-    OTAStagingError result;
-    if (!controller_.apply(request, result)) {
-        return json("409 Conflict", "{\"error\":\"not ready\"}",
-                    body, bodySize);
-    }
-    if (result == OTA_OK) {
-        LocalHttpResponse response = json(
-            "202 Accepted", "{\"status\":\"reboot scheduled\"}",
-            body, bodySize);
-        response.afterAttempt = afterApplyResponse;
-        response.afterAttemptContext = &controller_;
-        return response;
-    }
-    if (result == OTA_ERROR_ACTIVATION_UNCERTAIN) {
-        return json("503 Service Unavailable",
-                    "{\"error\":\"activation uncertain; restore with ST-Link\"}",
-                    body, bodySize);
-    }
-    if (result == OTA_ERROR_CANCELLED) {
-        return json("409 Conflict",
-                    "{\"error\":\"apply cancelled\"}", body, bodySize);
-    }
-    return json("500 Internal Server Error",
-                "{\"error\":\"activation failed\"}", body, bodySize);
+    return json("404 Not Found", "{\"error\":\"not found\"}", body, bodySize);
 }
 
 bool LocalOtaHttpHandler::handles(const char *requestLine) {
     return exactRoute(requestLine, "POST", "/api/ota/session") ||
-        exactRoute(requestLine, "POST", "/api/ota");
+        exactRoute(requestLine, "POST", "/api/ota") ||
+        exactRoute(requestLine, "POST", "/api/ota/apply");
 }
 
 bool LocalOtaHttpHandler::readSmallBody(
@@ -202,8 +178,58 @@ bool LocalOtaHttpHandler::parseChallenge(
         strcmp(body + sizeof(PREFIX) - 1 + 8, "\"}") != 0) {
         return false;
     }
+
     memcpy(challenge, body + sizeof(PREFIX) - 1, 8);
     challenge[8] = '\0';
+    return true;
+}
+
+bool LocalOtaHttpHandler::parseApply(
+    const char *body,
+    uint32_t &generation,
+    uint8_t digest[OTA_SHA256_SIZE]) {
+    static const char PREFIX[] = "{\"generation\":";
+    static const char DIGEST[] = ",\"digest\":\"";
+    if (body == NULL || digest == NULL ||
+        strncmp(body, PREFIX, sizeof(PREFIX) - 1) != 0) {
+        return false;
+    }
+    const char *cursor = body + sizeof(PREFIX) - 1;
+    if (*cursor < '1' || *cursor > '9') {
+        return false;
+    }
+    uint32_t value = 0;
+    while (*cursor >= '0' && *cursor <= '9') {
+        uint32_t digit = static_cast<uint32_t>(*cursor - '0');
+        if (value > (UINT32_MAX - digit) / 10U) {
+            return false;
+        }
+        value = value * 10U + digit;
+        ++cursor;
+    }
+    if (strncmp(cursor, DIGEST, sizeof(DIGEST) - 1) != 0) {
+        return false;
+    }
+    cursor += sizeof(DIGEST) - 1;
+    for (size_t index = 0; index < OTA_SHA256_SIZE; ++index) {
+        uint8_t byte = 0;
+        for (size_t nibble = 0; nibble < 2; ++nibble) {
+            char character = *cursor++;
+            if (character >= '0' && character <= '9') {
+                byte = static_cast<uint8_t>((byte << 4) | (character - '0'));
+            } else if (character >= 'a' && character <= 'f') {
+                byte = static_cast<uint8_t>(
+                    (byte << 4) | (character - 'a' + 10));
+            } else {
+                return false;
+            }
+        }
+        digest[index] = byte;
+    }
+    if (strcmp(cursor, "\"}") != 0) {
+        return false;
+    }
+    generation = value;
     return true;
 }
 
@@ -266,6 +292,59 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
             responseBody, responseBodySize);
         response.allowUnreadRequestBody = true;
         return response;
+    }
+    if (exactRoute(request.requestLine, "POST", "/api/ota/apply")) {
+        if (request.contentLength > 128 ||
+            request.metadata.contentTypeCount != 1 ||
+            strcmp(request.metadata.contentType, "application/json") != 0) {
+            LocalHttpResponse response = json(
+                "400 Bad Request", "{\"error\":\"invalid apply\"}",
+                responseBody, responseBodySize);
+            response.allowUnreadRequestBody = true;
+            return response;
+        }
+        char requestBody[129];
+        size_t length = 0;
+        uint32_t expectedGeneration = 0;
+        uint8_t expectedDigest[OTA_SHA256_SIZE];
+        uint32_t stagedGeneration = 0;
+        uint8_t stagedDigest[OTA_SHA256_SIZE];
+        if (!readSmallBody(
+                body, requestBody, sizeof(requestBody), length) ||
+            !parseApply(
+                requestBody, expectedGeneration, expectedDigest) ||
+            !controller_.readyImage(stagedGeneration, stagedDigest) ||
+            expectedGeneration != stagedGeneration ||
+            memcmp(expectedDigest, stagedDigest, OTA_SHA256_SIZE) != 0) {
+            return json("409 Conflict", "{\"error\":\"staged image mismatch\"}",
+                        responseBody, responseBodySize);
+        }
+        OTAStagingError result;
+        if (!controller_.apply(request.metadata, result)) {
+            return json("409 Conflict", "{\"error\":\"not ready\"}",
+                        responseBody, responseBodySize);
+        }
+        if (result == OTA_OK) {
+            LocalHttpResponse response = json(
+                "202 Accepted", "{\"status\":\"reboot scheduled\"}",
+                responseBody, responseBodySize);
+            response.afterAttempt = afterApplyResponse;
+            response.afterAttemptContext = &controller_;
+            return response;
+        }
+        if (result == OTA_ERROR_ACTIVATION_UNCERTAIN) {
+            return json(
+                "503 Service Unavailable",
+                "{\"error\":\"activation uncertain; restore with ST-Link\"}",
+                responseBody, responseBodySize);
+        }
+        if (result == OTA_ERROR_CANCELLED) {
+            return json("409 Conflict", "{\"error\":\"apply cancelled\"}",
+                        responseBody, responseBodySize);
+        }
+        return json("500 Internal Server Error",
+                    "{\"error\":\"activation failed\"}",
+                    responseBody, responseBodySize);
     }
     if (request.metadata.contentTypeCount != 1 ||
         strcmp(request.metadata.contentType, "application/octet-stream") != 0 ||

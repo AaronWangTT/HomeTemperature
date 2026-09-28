@@ -37,6 +37,10 @@ private:
     static bool readSmallBody(
         LocalHttpBodyStream &stream, char *body, size_t capacity, size_t &length);
     static bool parseChallenge(const char *body, char challenge[9]);
+    static bool parseApply(
+        const char *body,
+        uint32_t &generation,
+        uint8_t digest[OTA_SHA256_SIZE]);
     static void encodeDigest(
         const uint8_t digest[OTA_SHA256_SIZE],
         char output[(OTA_SHA256_SIZE * 2) + 1]);

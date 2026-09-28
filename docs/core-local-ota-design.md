@@ -555,7 +555,7 @@ Suggested endpoints:
 | `POST /api/ota/session` | Submit the physically initiated, OLED-displayed challenge and atomically receive a capability. |
 | `POST /api/ota` | With the capability, stream one signed OTA package using `application/octet-stream`. |
 | `GET /api/ota/status` | With the capability, return state, accepted bytes, total bytes, and last error. |
-| `POST /api/ota/apply` | With the capability, activate a completely verified staged image. |
+| `POST /api/ota/apply` | With the capability and canonical generation/digest JSON, activate only that completely verified staged image. |
 | `DELETE /api/ota` | With the capability, request cancellation before activation. |
 
 The first version requires exactly one `Content-Length` header. After trimming
@@ -840,8 +840,8 @@ cannot override this production gate.
 The command-line uploader claims the physical challenge, verifies and uploads
 the raw package body with the capability header, checks that the live Ready
 generation matches the operator-selected generation and that the supplied
-digest matches the locally verified package, sends the bodyless activation
-request, and confirms the expected version through the read-only
+digest matches the locally verified package, sends both expected values in the
+activation request, and confirms the expected version through the read-only
 `/api/version` probe after reboot.
 
 ### Phase 6: Validate and release

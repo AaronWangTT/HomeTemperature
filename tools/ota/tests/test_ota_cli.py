@@ -138,8 +138,12 @@ class OtaHandler(BaseHTTPRequestHandler):
         elif (
             self.path == "/api/ota/apply"
             and self._authorized()
-            and "Content-Length" not in self.headers
-            and not body
+            and self.headers.get("Content-Type") == "application/json"
+            and json.loads(body)
+            == {
+                "generation": 7,
+                "digest": hashlib.sha256(self.package[384:]).hexdigest(),
+            }
         ):
             self.__class__.applied = True
             self._json(202, {"status": "reboot scheduled"})

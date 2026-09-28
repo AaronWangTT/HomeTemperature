@@ -419,12 +419,20 @@ def _command_apply(args: argparse.Namespace) -> None:
         or status.get("digest") != supplied_digest
     ):
         raise CliError("device is not Ready with the requested generation/digest")
-    _bodyless_request(
+    _request(
         args.base_url,
         "POST",
         "/api/ota/apply",
-        _capability(args.capability),
-        args.timeout,
+        capability=_capability(args.capability),
+        body=json.dumps(
+            {
+                "generation": args.generation,
+                "digest": supplied_digest,
+            },
+            separators=(",", ":"),
+        ).encode("ascii"),
+        content_type="application/json",
+        timeout=args.timeout,
     )
     _verify_rebooted_version(
         args.verify_url or f"{args.base_url}/api/version",
