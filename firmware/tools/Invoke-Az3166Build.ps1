@@ -16,7 +16,9 @@ param(
 
     [string]$BuildPath,
 
-    [string]$OtaBuildConfig
+    [string]$OtaBuildConfig,
+
+    [string]$StLinkSerial
 )
 
 Set-StrictMode -Version Latest
@@ -216,6 +218,23 @@ if ($isProductionSketch) {
         throw "Production binary has no valid OTA descriptor at offset 0x200."
     }
     if ($Action -eq "Upload") {
+        if (-not $OtaBuildConfig) {
+            throw "Production Upload requires -OtaBuildConfig from the reviewed OTA build-config workflow."
+        }
+        if ($StLinkSerial -notmatch "^[0-9A-Fa-f]{24}$") {
+            throw "Production Upload requires the exact 24-hex-character -StLinkSerial."
+        }
+        $descriptorKeyId = [Convert]::ToHexString(
+            $binary[0x2A4..0x2C3]
+        ).ToLowerInvariant()
+        $productionKeyIdsPath = Join-Path $PSScriptRoot "..\..\tools\ota\production_key_ids.py"
+        $productionKeyIds = [regex]::Matches(
+            (Get-Content -Raw -LiteralPath $productionKeyIdsPath),
+            '(?m)^\s*"([0-9a-f]{64})",?\s*$'
+        ) | ForEach-Object { $_.Groups[1].Value }
+        if ($descriptorKeyId -notin $productionKeyIds) {
+            throw "Production descriptor key ID is not in the reviewed allowlist."
+        }
         $openOcdRoot = Split-Path -Parent (Split-Path -Parent $installedOpenOcd)
         $interfaceConfig = Join-Path $openOcdRoot "scripts\interface\stlink-v2-1.cfg"
         $targetConfig = Join-Path $openOcdRoot "scripts\target\stm32f4x.cfg"
@@ -223,6 +242,7 @@ if ($isProductionSketch) {
         $uploadOutput = (& $installedOpenOcd `
             "-f" $interfaceConfig `
             "-c" "transport select hla_swd" `
+            "-c" "hla_serial $StLinkSerial" `
             "-f" $targetConfig `
             "-c" "program {$binaryPath} verify reset 0x800C000; shutdown" `
             2>&1 | Out-String)

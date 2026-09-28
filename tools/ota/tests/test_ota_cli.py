@@ -352,6 +352,9 @@ class CliTests(unittest.TestCase):
             '$Action -eq "Upload" -and -not $isProductionSketch',
             script,
         )
+        self.assertIn("Production Upload requires -OtaBuildConfig", script)
+        self.assertIn("descriptorKeyId -notin $productionKeyIds", script)
+        self.assertIn('"hla_serial $StLinkSerial"', script)
 
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()

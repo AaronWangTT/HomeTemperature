@@ -52,7 +52,11 @@ at image offset `0x200`. The resulting raw image is
 `artifacts\ota-build\AZ3166.ino.bin`.
 For production `-Action Upload`, the wrapper performs this compile and
 descriptor validation before invoking OpenOCD on that exact validated binary;
-an invalid image is never passed to the flashing command.
+an invalid image is never passed to the flashing command. Production wired
+upload also requires `-OtaBuildConfig`, an allowlisted descriptor key ID, and
+the exact 24-hex-character `-StLinkSerial`; `-Port` remains the board's virtual
+COM port, while the probe serial unambiguously selects the ST-Link used by
+OpenOCD.
 
 Build a signed package:
 
