@@ -69,6 +69,7 @@ def make_package() -> tuple[bytes, bytes]:
 class OtaHandler(BaseHTTPRequestHandler):
     package = b""
     applied = False
+    version_status = 200
     redirected = False
 
     def log_message(self, *_args) -> None:
@@ -93,7 +94,10 @@ class OtaHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/version":
             if self.headers.get("Authorization") is not None:
                 self.__class__.redirected = True
-            self._json(200, {"firmwareVersion": VERSION if self.applied else "1.0.0"})
+            self._json(
+                self.version_status,
+                {"firmwareVersion": VERSION if self.applied else "1.0.0"},
+            )
         elif self.path == "/api/ota/status" and self._authorized():
             self._json(
                 200,
@@ -143,6 +147,7 @@ class CliTests(unittest.TestCase):
         self.production_key_id = hashlib.sha256(public_der).hexdigest()
         OtaHandler.package = b""
         OtaHandler.applied = False
+        OtaHandler.version_status = 200
         OtaHandler.redirected = False
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), OtaHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -316,6 +321,34 @@ class CliTests(unittest.TestCase):
                 timeout=1,
             )
         self.assertFalse(OtaHandler.redirected)
+
+    def test_development_profile_verifies_ephemeral_package(self) -> None:
+        self.assertEqual(
+            self.run_cli(
+                "verify",
+                "--package",
+                str(self.package),
+                "--public-key",
+                str(self.public_key),
+                "--profile",
+                "development",
+            ),
+            0,
+        )
+
+    def test_reboot_verification_rejects_error_status_with_expected_version(
+        self,
+    ) -> None:
+        OtaHandler.applied = True
+        OtaHandler.version_status = 500
+        with self.assertRaisesRegex(ota_cli.CliError, "HTTP 500"):
+            ota_cli._verify_rebooted_version(
+                f"{self.base_url}/api/version",
+                VERSION,
+                "firmwareVersion",
+                0.05,
+                0.05,
+            )
 
     def test_production_upload_validates_binary_before_openocd(self) -> None:
         script = (

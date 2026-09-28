@@ -804,11 +804,11 @@ The repository-owned `tools/ota/ota_cli.py` implements the package builder,
 verifier, and trusted-LAN client. It checks the final raw image, exact
 descriptor copy, Core 3.1.2 vectors and layout, DER SPKI key identity, payload
 digest, and raw fixed-width signature. Test keys are generated only at test
-time. Build configuration, signing, upload, and apply enforce the immutable
-reviewed key-ID set in `tools/ota/production_key_ids.py`. Production remains
-fail-closed while that set is empty and until the wired bootstrap provisions
-the matching reviewed public key. Standalone verification accepts an explicit
-inspection key but cannot create, upload, or activate a package.
+time. The default production profile enforces the immutable reviewed key-ID set
+in `tools/ota/production_key_ids.py` during build configuration, signing,
+verification, upload, and apply. Production remains fail-closed while that set
+is empty. An explicit development profile permits non-allowlisted keys without
+relaxing package, descriptor, vector, signature, or digest validation.
 
 The first OTA-capable HomeTemperature release must be installed through the
 wired ST-Link workflow. That trusted bootstrap installs the public key and local

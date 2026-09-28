@@ -24,7 +24,7 @@ from ota_package import (
     load_private_key,
     load_public_key,
     public_key_der,
-    require_production_key,
+    require_trusted_key,
     render_build_config,
     verify_package,
 )
@@ -229,12 +229,9 @@ def _upload_request(
     return payload
 
 
-def _load_and_verify(
-    args: argparse.Namespace, *, production: bool = False
-) -> tuple[bytes, VerifiedPackage]:
+def _load_and_verify(args: argparse.Namespace) -> tuple[bytes, VerifiedPackage]:
     public_key, public_der = load_public_key(args.public_key)
-    if production:
-        require_production_key(public_der)
+    require_trusted_key(public_der, args.profile)
     package = args.package.read_bytes()
     verified = verify_package(
         package,
@@ -257,6 +254,15 @@ def _add_layout_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--capacity", type=_integer, default=APPLICATION_CAPACITY)
 
 
+def _add_profile_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--profile",
+        choices=("production", "development"),
+        default="production",
+        help="trust policy; production requires a repository-allowlisted key",
+    )
+
+
 def _add_auth_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", required=True, type=_base_url)
     parser.add_argument("--capability")
@@ -275,7 +281,7 @@ def _command_build(args: argparse.Namespace) -> None:
         )
     image = args.image.read_bytes()
     private_key = load_private_key(key_path)
-    require_production_key(public_key_der(private_key))
+    require_trusted_key(public_key_der(private_key), args.profile)
     package = build_package(
         image,
         private_key,
@@ -309,7 +315,9 @@ def _command_verify(args: argparse.Namespace) -> None:
 
 def _command_build_config(args: argparse.Namespace) -> None:
     _, public_der = load_public_key(args.public_key)
-    rendered = render_build_config(public_der, args.version, args.source)
+    rendered = render_build_config(
+        public_der, args.version, args.source, args.profile
+    )
     args.output.write_text(rendered, encoding="ascii", newline="\n")
     print(f"wrote OTA build configuration to {args.output}")
 
@@ -343,7 +351,7 @@ def _command_status(args: argparse.Namespace) -> None:
 
 
 def _command_upload(args: argparse.Namespace) -> None:
-    package, verified = _load_and_verify(args, production=True)
+    package, verified = _load_and_verify(args)
     response = _upload_request(
         args.base_url,
         _capability(args.capability),
@@ -366,7 +374,7 @@ def _command_upload(args: argparse.Namespace) -> None:
 
 
 def _command_apply(args: argparse.Namespace) -> None:
-    _, verified = _load_and_verify(args, production=True)
+    _, verified = _load_and_verify(args)
     supplied_digest = args.digest
     if (
         len(supplied_digest) != 64
@@ -414,6 +422,9 @@ def _verify_rebooted_version(
         try:
             request = urllib.request.Request(url, headers={"Accept": "application/json"})
             with _NO_REDIRECT_OPENER.open(request, timeout=request_timeout) as response:
+                if response.status < 200 or response.status >= 300:
+                    last_error = f"version endpoint returned HTTP {response.status}"
+                    continue
                 payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 raise CliError("version endpoint returned non-object JSON")
@@ -422,6 +433,8 @@ def _verify_rebooted_version(
                 return
             if observed is not None:
                 last_error = f"version endpoint reported {observed!r}"
+        except urllib.error.HTTPError as error:
+            last_error = f"version endpoint returned HTTP {error.code}"
         except (urllib.error.URLError, TimeoutError):
             last_error = "device is unavailable while rebooting"
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -442,6 +455,7 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--private-key", type=Path)
     build.add_argument("--version", required=True)
     build.add_argument("--source", required=True)
+    _add_profile_argument(build)
     _add_layout_arguments(build)
     build.set_defaults(handler=_command_build)
 
@@ -450,6 +464,7 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--public-key", type=Path, required=True)
     verify.add_argument("--version")
     verify.add_argument("--source")
+    _add_profile_argument(verify)
     _add_layout_arguments(verify)
     verify.set_defaults(handler=_command_verify)
 
@@ -460,6 +475,7 @@ def _parser() -> argparse.ArgumentParser:
     build_config.add_argument("--output", type=Path, required=True)
     build_config.add_argument("--version", required=True)
     build_config.add_argument("--source", required=True)
+    _add_profile_argument(build_config)
     build_config.set_defaults(handler=_command_build_config)
 
     claim = subparsers.add_parser("claim", help="claim a physical OTA challenge")
@@ -478,6 +494,7 @@ def _parser() -> argparse.ArgumentParser:
     upload.add_argument("--public-key", type=Path, required=True)
     upload.add_argument("--version")
     upload.add_argument("--source")
+    _add_profile_argument(upload)
     _add_layout_arguments(upload)
     upload.set_defaults(handler=_command_upload)
 
@@ -489,6 +506,7 @@ def _parser() -> argparse.ArgumentParser:
     apply.add_argument("--digest", required=True)
     apply.add_argument("--version")
     apply.add_argument("--source")
+    _add_profile_argument(apply)
     apply.add_argument(
         "--verify-url",
         help="JSON version endpoint (default: BASE_URL/api/version)",

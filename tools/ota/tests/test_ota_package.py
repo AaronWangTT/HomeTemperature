@@ -29,6 +29,7 @@ from ota_package import (  # noqa: E402
     load_private_key,
     public_key_der,
     require_production_key,
+    require_trusted_key,
     render_build_config,
     verify_package,
 )
@@ -116,6 +117,15 @@ class PackageTests(unittest.TestCase):
         wrong_der = public_key_der(wrong_key)
         with self.assertRaisesRegex(PackageError, "key"):
             verify_package(self.package, wrong_key.public_key(), wrong_der)
+
+    def test_rejects_non_p256_signing_key(self) -> None:
+        with self.assertRaisesRegex(PackageError, "signing key must use P-256"):
+            build_package(
+                self.image,
+                ec.generate_private_key(ec.SECP384R1()),
+                expected_version=VERSION,
+                expected_source=SOURCE,
+            )
 
     def test_rejects_key_identifier_bound_to_different_verification_key(self) -> None:
         other_key = ec.generate_private_key(ec.SECP256R1())
@@ -206,6 +216,13 @@ class PackageTests(unittest.TestCase):
         key_id = hashlib.sha256(self.public_der).hexdigest()
         with patch("ota_package.PRODUCTION_KEY_IDS", frozenset({key_id})):
             require_production_key(self.public_der)
+
+    def test_development_profile_accepts_ephemeral_key(self) -> None:
+        require_trusted_key(self.public_der, "development")
+        rendered = render_build_config(
+            self.public_der, VERSION, SOURCE, profile="development"
+        )
+        self.assertIn("HOME_TEMPERATURE_OTA_PUBLIC_KEY_DER_BYTES", rendered)
 
 if __name__ == "__main__":
     unittest.main()

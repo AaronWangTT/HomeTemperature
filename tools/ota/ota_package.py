@@ -179,7 +179,11 @@ def public_key_der(private_key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
-def require_production_key(public_der: bytes) -> None:
+def require_trusted_key(public_der: bytes, profile: str) -> None:
+    if profile == "development":
+        return
+    if profile != "production":
+        raise PackageError("trust profile must be production or development")
     key_id = hashlib.sha256(public_der).hexdigest()
     if key_id not in PRODUCTION_KEY_IDS:
         raise PackageError(
@@ -187,8 +191,17 @@ def require_production_key(public_der: bytes) -> None:
         )
 
 
-def render_build_config(public_der: bytes, version: str, source: str) -> str:
-    require_production_key(public_der)
+def require_production_key(public_der: bytes) -> None:
+    require_trusted_key(public_der, "production")
+
+
+def render_build_config(
+    public_der: bytes,
+    version: str,
+    source: str,
+    profile: str = "production",
+) -> str:
+    require_trusted_key(public_der, profile)
     _parse_version(version)
     if _SOURCE_PATTERN.fullmatch(source) is None:
         raise PackageError("source commit must be 40 lowercase hexadecimal characters")
@@ -299,6 +312,14 @@ def build_package(
     application_address: int = APPLICATION_ADDRESS,
     application_capacity: int = APPLICATION_CAPACITY,
 ) -> bytes:
+    if not isinstance(private_key, ec.EllipticCurvePrivateKey) or not isinstance(
+        private_key.curve, ec.SECP256R1
+    ):
+        raise PackageError("signing key must use P-256")
+    if not isinstance(private_key, ec.EllipticCurvePrivateKey) or not isinstance(
+        private_key.curve, ec.SECP256R1
+    ):
+        raise PackageError("private signing key must use P-256")
     public_der = public_key_der(private_key)
     key_id = hashlib.sha256(public_der).digest()
     descriptor = validate_image(
