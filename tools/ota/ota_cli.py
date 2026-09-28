@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import math
 import os
 import sys
 import time
@@ -23,7 +24,7 @@ from ota_package import (
     load_private_key,
     load_public_key,
     public_key_der,
-    require_production_key,
+    require_trusted_key,
     render_build_config,
     verify_package,
 )
@@ -34,6 +35,14 @@ CAPABILITY_ENV = "HOME_TEMPERATURE_OTA_CAPABILITY"
 
 class CliError(RuntimeError):
     pass
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 
 def _integer(value: str) -> int:
@@ -47,6 +56,16 @@ def _positive_integer(value: str) -> int:
     parsed = _integer(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number") from error
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
     return parsed
 
 
@@ -106,7 +125,7 @@ def _request(
         method=method,
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _NO_REDIRECT_OPENER.open(request, timeout=timeout) as response:
             encoded = response.read()
             status = response.status
     except urllib.error.HTTPError as error:
@@ -114,6 +133,8 @@ def _request(
         status = error.code
     except urllib.error.URLError as error:
         raise CliError(f"{method} {path} failed: {error.reason}") from error
+    if 300 <= status < 400:
+        raise CliError(f"{method} {path} returned HTTP {status}; redirects are disabled")
     try:
         payload = json.loads(encoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -208,12 +229,9 @@ def _upload_request(
     return payload
 
 
-def _load_and_verify(
-    args: argparse.Namespace, *, production: bool = False
-) -> tuple[bytes, VerifiedPackage]:
+def _load_and_verify(args: argparse.Namespace) -> tuple[bytes, VerifiedPackage]:
     public_key, public_der = load_public_key(args.public_key)
-    if production:
-        require_production_key(public_der)
+    require_trusted_key(public_der, args.profile)
     package = args.package.read_bytes()
     verified = verify_package(
         package,
@@ -236,10 +254,19 @@ def _add_layout_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--capacity", type=_integer, default=APPLICATION_CAPACITY)
 
 
+def _add_profile_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--profile",
+        choices=("production", "development"),
+        default="production",
+        help="trust policy; production requires a repository-allowlisted key",
+    )
+
+
 def _add_auth_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", required=True, type=_base_url)
     parser.add_argument("--capability")
-    parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--timeout", type=_positive_float, default=10.0)
 
 
 def _command_build(args: argparse.Namespace) -> None:
@@ -254,7 +281,7 @@ def _command_build(args: argparse.Namespace) -> None:
         )
     image = args.image.read_bytes()
     private_key = load_private_key(key_path)
-    require_production_key(public_key_der(private_key))
+    require_trusted_key(public_key_der(private_key), args.profile)
     package = build_package(
         image,
         private_key,
@@ -288,7 +315,9 @@ def _command_verify(args: argparse.Namespace) -> None:
 
 def _command_build_config(args: argparse.Namespace) -> None:
     _, public_der = load_public_key(args.public_key)
-    rendered = render_build_config(public_der, args.version, args.source)
+    rendered = render_build_config(
+        public_der, args.version, args.source, args.profile
+    )
     args.output.write_text(rendered, encoding="ascii", newline="\n")
     print(f"wrote OTA build configuration to {args.output}")
 
@@ -322,7 +351,7 @@ def _command_status(args: argparse.Namespace) -> None:
 
 
 def _command_upload(args: argparse.Namespace) -> None:
-    package, verified = _load_and_verify(args, production=True)
+    package, verified = _load_and_verify(args)
     response = _upload_request(
         args.base_url,
         _capability(args.capability),
@@ -345,7 +374,7 @@ def _command_upload(args: argparse.Namespace) -> None:
 
 
 def _command_apply(args: argparse.Namespace) -> None:
-    _, verified = _load_and_verify(args, production=True)
+    _, verified = _load_and_verify(args)
     supplied_digest = args.digest
     if (
         len(supplied_digest) != 64
@@ -392,7 +421,7 @@ def _verify_rebooted_version(
     while time.monotonic() < deadline:
         try:
             request = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(request, timeout=request_timeout) as response:
+            with _NO_REDIRECT_OPENER.open(request, timeout=request_timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 raise CliError("version endpoint returned non-object JSON")
@@ -421,6 +450,7 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--private-key", type=Path)
     build.add_argument("--version", required=True)
     build.add_argument("--source", required=True)
+    _add_profile_argument(build)
     _add_layout_arguments(build)
     build.set_defaults(handler=_command_build)
 
@@ -429,6 +459,7 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--public-key", type=Path, required=True)
     verify.add_argument("--version")
     verify.add_argument("--source")
+    _add_profile_argument(verify)
     _add_layout_arguments(verify)
     verify.set_defaults(handler=_command_verify)
 
@@ -439,12 +470,13 @@ def _parser() -> argparse.ArgumentParser:
     build_config.add_argument("--output", type=Path, required=True)
     build_config.add_argument("--version", required=True)
     build_config.add_argument("--source", required=True)
+    _add_profile_argument(build_config)
     build_config.set_defaults(handler=_command_build_config)
 
     claim = subparsers.add_parser("claim", help="claim a physical OTA challenge")
     claim.add_argument("--base-url", required=True, type=_base_url)
     claim.add_argument("--challenge", required=True)
-    claim.add_argument("--timeout", type=float, default=10.0)
+    claim.add_argument("--timeout", type=_positive_float, default=10.0)
     claim.set_defaults(handler=_command_claim)
 
     status = subparsers.add_parser("status", help="read authorized OTA status")
@@ -457,6 +489,7 @@ def _parser() -> argparse.ArgumentParser:
     upload.add_argument("--public-key", type=Path, required=True)
     upload.add_argument("--version")
     upload.add_argument("--source")
+    _add_profile_argument(upload)
     _add_layout_arguments(upload)
     upload.set_defaults(handler=_command_upload)
 
@@ -468,12 +501,13 @@ def _parser() -> argparse.ArgumentParser:
     apply.add_argument("--digest", required=True)
     apply.add_argument("--version")
     apply.add_argument("--source")
+    _add_profile_argument(apply)
     apply.add_argument(
         "--verify-url",
         help="JSON version endpoint (default: BASE_URL/api/version)",
     )
     apply.add_argument("--version-field", default="firmwareVersion")
-    apply.add_argument("--reboot-timeout", type=float, default=120.0)
+    apply.add_argument("--reboot-timeout", type=_positive_float, default=120.0)
     _add_layout_arguments(apply)
     apply.set_defaults(handler=_command_apply)
     return parser

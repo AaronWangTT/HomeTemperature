@@ -69,6 +69,7 @@ def make_package() -> tuple[bytes, bytes]:
 class OtaHandler(BaseHTTPRequestHandler):
     package = b""
     applied = False
+    redirected = False
 
     def log_message(self, *_args) -> None:
         pass
@@ -85,7 +86,13 @@ class OtaHandler(BaseHTTPRequestHandler):
         return self.headers.get("Authorization") == f"OTA {CAPABILITY}"
 
     def do_GET(self) -> None:
-        if self.path == "/api/version":
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/api/version")
+            self.end_headers()
+        elif self.path == "/api/version":
+            if self.headers.get("Authorization") is not None:
+                self.__class__.redirected = True
             self._json(200, {"firmwareVersion": VERSION if self.applied else "1.0.0"})
         elif self.path == "/api/ota/status" and self._authorized():
             self._json(
@@ -136,6 +143,7 @@ class CliTests(unittest.TestCase):
         self.production_key_id = hashlib.sha256(public_der).hexdigest()
         OtaHandler.package = b""
         OtaHandler.applied = False
+        OtaHandler.redirected = False
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), OtaHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -285,6 +293,44 @@ class CliTests(unittest.TestCase):
                 "1234abcd",
             )
 
+    def test_rejects_nonpositive_and_nonfinite_timeouts(self) -> None:
+        for value in ("0", "-1", "nan", "inf"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                self.run_cli(
+                    "claim",
+                    "--base-url",
+                    self.base_url,
+                    "--challenge",
+                    "1234abcd",
+                    "--timeout",
+                    value,
+                )
+
+    def test_authorized_requests_do_not_follow_redirects(self) -> None:
+        with self.assertRaisesRegex(ota_cli.CliError, "HTTP 302"):
+            ota_cli._request(
+                self.base_url,
+                "GET",
+                "/redirect",
+                capability=CAPABILITY,
+                timeout=1,
+            )
+        self.assertFalse(OtaHandler.redirected)
+
+    def test_development_profile_verifies_ephemeral_package(self) -> None:
+        self.assertEqual(
+            self.run_cli(
+                "verify",
+                "--package",
+                str(self.package),
+                "--public-key",
+                str(self.public_key),
+                "--profile",
+                "development",
+            ),
+            0,
+        )
+
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()
         with patch(
@@ -307,7 +353,7 @@ class CliTests(unittest.TestCase):
                     "--digest",
                     digest,
                     "--reboot-timeout",
-                    "0",
+                    "1",
                 ),
                 1,
             )
