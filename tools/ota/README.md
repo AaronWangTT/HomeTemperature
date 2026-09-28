@@ -1,6 +1,6 @@
 # Local OTA Host Tooling
 
-The Python CLI builds, verifies, uploads, and explicitly applies Core 3.1.2
+The Python CLI builds, verifies, uploads, and explicitly applies Core 3.1.3
 `AZPKG001` packages. It has no browser UI and stores no credentials.
 
 Install the one pinned cryptographic dependency in an isolated environment:

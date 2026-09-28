@@ -105,7 +105,6 @@ private:
     rtos::Thread worker_;
     rtos::Semaphore commandSignal_;
     rtos::Semaphore uploadCompletion_;
-    rtos::Semaphore applyCompletion_;
     bool workerStarted_;
     bool shutdown_;
     WorkerCommand command_;
@@ -115,14 +114,12 @@ private:
     uint32_t leaseDeadline_;
     bool cancelRequested_;
     bool uploadCompleted_;
-    bool applyCompleted_;
     bool rebootPending_;
     LocalHttpBodyStream *uploadBody_;
     size_t packageSize_;
     size_t acceptedBytes_;
     OTAStagedImageInfo staged_;
     OTAStagingError lastError_;
-    OTAStagingError applyResult_;
     struct {
         bool pending;
         uint32_t controllerGeneration;

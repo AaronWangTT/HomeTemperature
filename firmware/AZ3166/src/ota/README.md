@@ -1,6 +1,6 @@
 # Local OTA Controller
 
-`LocalOtaController` implements the application side of the Core 3.1.2
+`LocalOtaController` implements the application side of the Core 3.1.3
 `OTAStaging` protocol. OTA is disabled when
 `config/ota_public_key.h` has no DER RFC 5480 P-256 public key. That file must
 contain only the public verification key; package signing keys stay in the

@@ -93,13 +93,13 @@ currently feeds from the main loop around input, connectivity, and upload work.
 
 ## Board Package Behavior
 
-The firmware requires maintained AZ3166 Core 3.1.2. It carries forward Core
+The firmware requires maintained AZ3166 Core 3.1.3. It carries forward Core
 2.0.1's corrected `dtostrf` fractional-digit and width behavior while retaining
 rounding and non-finite handling. `TelemetryService` uses that Core function
 instead of floating-point `printf`; callers must still provide enough output
 storage for the requested width, precision, sign, and terminator.
 
-Core 3.1.2 keeps the bundled SDK system telemetry hooks disabled by default and
+Core 3.1.3 keeps the bundled SDK system telemetry hooks disabled by default and
 reports the maintained version through `getDevkitVersion()`. Defining
 `ENABLETRACE=1` in platform build flags opts into that vendor behavior. This
 does not disable or alter the application's explicit

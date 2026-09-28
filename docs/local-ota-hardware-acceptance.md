@@ -11,7 +11,7 @@ Environment:
 - MXCHIP AZ3166 connected through its onboard ST-Link virtual COM port
   (`COM3` for this run); the exact probe serial was supplied to OpenOCD and is
   retained only in private test evidence;
-- AZ3166 Core 3.1.2;
+- AZ3166 Core 3.1.3;
 - OpenOCD 0.10.0;
 - ephemeral P-256 test key stored outside the repository;
 - test key ID added to the local allowlist only for the run and removed

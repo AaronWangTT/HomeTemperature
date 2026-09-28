@@ -3,12 +3,12 @@
 Status: application controller/API implemented; production provisioning and
 hardware acceptance remain gated
 
-Baseline: AZ3166 Core 3.1.2
+Baseline: AZ3166 Core 3.1.3
 
 Target: HomeTemperature integration on the maintained Core staging API
 
 Implementation note (2026-09-28): `firmware/AZ3166/src/ota/` now implements the
-Phase 5 controller and routes against the exact Core 3.1.2 `OTAStaging` C API.
+Phase 5 controller and routes against the exact Core 3.1.3 `OTAStaging` C API.
 The checked-in public-key configuration is intentionally empty, so production
 OTA remains disabled until a reviewed wired bootstrap provisions a trusted
 public key. Package-builder and browser-page work remain separate, and the
@@ -20,7 +20,7 @@ compile-only application tests.
 Support local firmware upload without requiring the device to download an image
 from a remote URL.
 
-Core 3.1.2 provides a transport-independent, streaming OTA staging API that
+Core 3.1.3 provides a transport-independent, streaming OTA staging API that
 writes a verified application image to the existing external Flash OTA
 partition and activates it through the existing bootloader contract.
 HomeTemperature provides the trusted-LAN HTTP endpoint, product policy,
@@ -36,10 +36,10 @@ boot-attempt counters, health-confirmation logic, and production trust
 provisioning remain out of scope, and the package contains no private signing
 key.
 
-## 2. Core 3.1.2 Findings
+## 2. Core 3.1.3 Findings
 
 The Core's
-[`OTAStaging`](https://github.com/AaronWangTT/devkit-sdk/blob/3.1.2/libraries/OTA/src/OTAStaging.h)
+[`OTAStaging`](https://github.com/AaronWangTT/devkit-sdk/blob/3.1.3/libraries/OTA/src/OTAStaging.h)
 library exposes a signed streaming workflow:
 
 - `OTAStagingBegin()` accepts the complete package size, a trusted P-256 public
@@ -64,7 +64,7 @@ deprecated:
   reboot.
 
 The application image is a raw `.bin` linked at `0x0800C000`. Inspection of the
-Core 3.1.2 partition table shows:
+Core 3.1.3 partition table shows:
 
 | Partition | Storage | Start | Capacity |
 | --- | --- | ---: | ---: |
@@ -165,7 +165,7 @@ version, bounds, vector-table, digest, or full Flash read-back validation.
 Activation additionally requires the caller-selected generation and digest to
 match the retained verified Core session.
 
-Core 3.1.2 enables and links the Mbed TLS SHA-256, ECP, ECDSA, bignum, ASN.1,
+Core 3.1.3 enables and links the Mbed TLS SHA-256, ECP, ECDSA, bignum, ASN.1,
 OID, and public-key parsing modules needed for P-256 verification. Its
 production signature adapter is covered by direct known-answer host tests,
 including tampered digest/signature, wrong-key, and malformed-key rejection.
@@ -595,7 +595,7 @@ dropped connection never leads to the session's `activate()` method.
 
 ## 10. Boot and Recovery Limitations
 
-The shipped bootloader is provided as a binary, and Core 3.1.2 exposes no
+The shipped bootloader is provided as a binary, and Core 3.1.3 exposes no
 rollback, boot-attempt counter, confirmed-image, or automatic recovery API.
 The initial local OTA feature must therefore be documented as staged
 replacement, not fail-safe A/B OTA.
@@ -704,7 +704,7 @@ separate recovery and manufacturing review.
    bootloader copy.
 4. Record which failures recover automatically and which require ST-Link.
 
-### Phase 2: Add the Core staging engine (completed in Core 3.1.2)
+### Phase 2: Add the Core staging engine (completed in Core 3.1.3)
 
 1. Add the transport-independent begin/write/finish/abort/activate API.
 2. Add partition discovery, erase, bounds checks, CRC16, SHA-256, read-back,
@@ -735,7 +735,7 @@ separate recovery and manufacturing review.
 
 The repository-owned `tools/ota/ota_cli.py` implements the package builder,
 verifier, and trusted-LAN client. It checks the final raw image, exact
-descriptor copy, Core 3.1.2 vectors and layout, DER SPKI key identity, payload
+descriptor copy, Core 3.1.3 vectors and layout, DER SPKI key identity, payload
 digest, and raw fixed-width signature. Test keys are generated only at test
 time. Build configuration, signing, upload, and apply enforce the immutable
 reviewed key-ID set in `tools/ota/production_key_ids.py`. Production remains

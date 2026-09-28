@@ -6,17 +6,17 @@ software and data keep their own licenses and terms.
 ## Firmware Toolchain
 
 The firmware builds against the maintained MXChip Azure IoT DevKit SDK / AZ3166
-Arduino board package 3.1.2 base profile, based on Microsoft's final 2.0.0
+Arduino board package 3.1.3 base profile, based on Microsoft's final 2.0.0
 release. The package is installed separately and is not vendored in this
 repository.
 
-- Maintained source: <https://github.com/AaronWangTT/devkit-sdk/tree/3.1.2>
+- Maintained source: <https://github.com/AaronWangTT/devkit-sdk/tree/3.1.3>
 - Upstream source: <https://github.com/microsoft/devkit-sdk/tree/2.0.0>
-- Board package index: <https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/976bbeba67fab6da5676e8685fe4a132a93f3501/package_azureboard_index.json>
-- Release archive: <https://github.com/AaronWangTT/devkit-sdk/releases/download/3.1.2/AZ3166-3.1.2-base.zip>
+- Board package index: <https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/786a8e9b2088a18858bc2dccda341fe7f5a59619/package_azureboard_index.json>
+- Release archive: <https://github.com/AaronWangTT/devkit-sdk/releases/download/3.1.3/AZ3166-3.1.3-base.zip>
 - Board archive size: 4,980,128 bytes
 - Board archive SHA-256:
-  `3f45783bb736c9934dc5993076eb619e4877333f05a1c2f81feffe76e97f644f`
+  `9b44581f73cd435e29216293eba7bedc59fe5eb61e5cd71b0aba92758f79007c`
 - License: MIT, copyright Microsoft Corporation
 - Tool dependencies declared by that package: GNU Arm Embedded Toolchain
   `5_4-2016q3` and OpenOCD `0.10.0`
@@ -24,7 +24,7 @@ repository.
 The maintained release carries forward corrected `dtostrf` precision and width
 formatting, keeps SDK system telemetry opt-in through `ENABLETRACE=1`, reports
 the maintained Core version through `getDevkitVersion()`, supplies bounded
-multicast UDP, and excludes Azure IoT support from the base profile. Core 3.1.2
+multicast UDP, and excludes Azure IoT support from the base profile. Core 3.1.3
 also provides a transport-independent signed OTA staging engine with P-256
 signature verification, bounded Flash operations, full read-back verification,
 and session-bound activation. Its legacy unsigned raw-image OTA APIs remain

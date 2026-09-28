@@ -14,7 +14,7 @@ const char OTA_PAGE[] =
     "</style><h1>AZ3166 Local OTA</h1><label>Signed package "
     "<input id=f type=file></label>"
     "<button onclick=upload()>Upload</button><button onclick=apply()>Apply</button>"
-    "<pre id=o>Idle</pre><script>let g,d;const q=(p,x={})=>fetch(p,x).then("
+    "<pre id=o>Idle</pre><script>let g,d,old;const q=(p,x={})=>fetch(p,x).then("
     "async r=>{let j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j"
     "});let poll;async function watch(){try{let s=await q('/api/ota/status');"
     "o.textContent=s.state+' '+s.acceptedBytes+'/'+s.totalBytes;"
@@ -25,14 +25,16 @@ const char OTA_PAGE[] =
     "headers:{'Content-Type':"
     "'application/octet-stream'},body:f.files[0]});g=j.generation;d=j.digest;"
     "o.textContent=JSON.stringify(j,null,2)}catch(e){o.textContent=e}}async function "
-    "apply(){try{o.textContent='Applying and writing boot metadata…';"
-    "let s=await q('/api/ota/status');if(s.generation!==g"
+    "apply(){try{old=(await q('/api/version')).firmwareVersion;"
+    "o.textContent='Applying and writing boot metadata…';let s=await q("
+    "'/api/ota/status');if(s.generation!==g"
     "||s.digest!==d)throw Error('staged image changed');await q('/api/ota/apply',"
     "{method:'POST',headers:{'Content-Type':'application/json'},body:JSON."
     "stringify({generation:g,digest:d})});o.textContent='Rebooting';setTimeout("
     "check,1500)}catch(e){o.textContent=e}}async function check(){try{let j=await "
-    "q('/api/version');o.textContent='Firmware '+j.firmwareVersion}catch(e){"
-    "setTimeout(check,1500)}}</script>";
+    "q('/api/version');if(j.firmwareVersion===old)throw Error('waiting for new "
+    "firmware');o.textContent='Firmware '+j.firmwareVersion}catch(e){setTimeout("
+    "check,1500)}}</script>";
 
 static_assert(
     sizeof(OTA_PAGE) <= 3072,
