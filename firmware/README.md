@@ -213,17 +213,17 @@ responder and worker; stopping a session leaves the worker idle for reuse.
   the main loop; the telemetry handler delegates sensor synchronization to
   `TelemetryService`.
 - One HTTP worker owns one listener and handles one client at a time. It uses a
-  6144-byte RTOS stack allocated at startup, a 96-byte request-line buffer, a
-  2048-byte total header limit, and a 512-byte response-body buffer. Header reads
+  8192-byte RTOS stack allocated at startup, a 96-byte request-line buffer, a
+  2048-byte total header limit, and a 3072-byte response-body buffer. Header reads
   and response writes each have a two-second deadline. Status and content-type
   strings must remain valid until the response is sent.
 - This is a small request-line handler API, not a full HTTP framework: request
   bodies, persistent connections, and WebSockets are not supported. Discovery's
   current platform backend supports one advertised service per device.
-- The current firmware does not expose an OTA endpoint. The
-  [local OTA design](../docs/core-local-ota-design.md) proposes signed,
-  physically authorized firmware uploads backed by a transport-independent Core
-  staging API.
+- The firmware exposes signed, physically authorized OTA APIs and an optional
+  same-origin page at `/ota`, backed by the transport-independent Core staging
+  API. OTA remains disabled until a reviewed trust key and canonical version are
+  provisioned; see the [local OTA guide](AZ3166/src/ota/README.md).
 - Cloud uploads, NTP, and Wi-Fi maintenance remain synchronous in the main loop.
   The watchdog still monitors that loop; threads do not remove Wi-Fi bandwidth
   limits or make an arbitrary blocking handler safe.
