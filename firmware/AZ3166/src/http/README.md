@@ -101,6 +101,24 @@ observe cancellation. Cancellation is cooperative: streaming handlers must keep
 their own work bounded and check `LocalHttpBodyStream::cancelled()` while waiting
 outside `read()`.
 
+`LocalHttpStreamingRequest` also carries bounded views of `Authorization`,
+`Host`, and `Origin`, plus the accepted socket's peer IPv4 address. Header names
+are matched case-insensitively; surrounding HTTP whitespace is removed from
+values. Each header reports `ABSENT`, `VALID`, `DUPLICATE`, or `MALFORMED`, so a
+security policy never has to infer whether an empty value or conflicting copy
+was supplied. Duplicate and malformed headers expose an empty value. Values are
+bounded to 63, 127, and 255 bytes respectively; a value that does not fit is
+rejected before handler dispatch. Embedded NUL, control, and non-ASCII bytes are
+also rejected or marked malformed before application use.
+
+Peer lookup reports either `LOCAL_HTTP_PEER_IPV4_VALID` or
+`LOCAL_HTTP_PEER_IPV4_UNAVAILABLE`; the address uses the same host-order
+most-significant-octet-first representation as `update()`. Metadata pointers
+refer to worker-owned fixed buffers and remain valid only for the duration of
+the current `LocalHttpStreamingHandler::handle()` call. A handler must copy any
+value it needs afterward. Existing `LocalHttpHandler` routes still receive only
+the request line and do not trigger peer lookup.
+
 ## Advertisement and Ownership
 
 Pass `mbed::callback(&discovery, &LocalDiscovery::update)` as the optional final
@@ -131,6 +149,12 @@ constructor argument to connect an existing discovery object. See the
   synchronized. `receiveBytes()` returns a positive byte count, zero for
   would-block, `LocalWebServer::RECEIVE_DISCONNECTED` for an orderly peer close,
   or `LocalWebServer::RECEIVE_ERROR` for a backend failure.
+- `peerIpv4()` receives an accepted client descriptor and must either return a
+  host-order IPv4 address or return `false` without retaining the output
+  reference. The production lwIP adapter validates the `getpeername()` result,
+  exact address size, and `AF_INET` family. A lookup failure is passed to the
+  streaming handler as unavailable metadata rather than fabricated as an
+  address.
 
 ## Limits and Dependencies
 
@@ -138,10 +162,11 @@ constructor argument to connect an existing discovery object. See the
 - Ordinary clients are handled one at a time. Configuring streaming adds one
   6144-byte worker stack and permits one body request concurrently with bounded
   listener requests; it does not permit concurrent body uploads.
-- Request line: 96 bytes; total request headers: 2048 bytes; response body:
-  512 bytes; prefetched body: at most 128 bytes. Header reads and response writes
-  each have a two-second deadline. Body size, idle deadline, and total deadline
-  are explicit constructor limits.
+- Request line: 96 bytes; total request headers: 2048 bytes; `Authorization`:
+  63 bytes; `Host`: 127 bytes; `Origin`: 255 bytes; response body: 512 bytes;
+  prefetched body: at most 128 bytes. Header reads and response writes each have
+  a two-second deadline. Body size, idle deadline, and total deadline are
+  explicit constructor limits.
 - Responses include `Content-Length` and `Connection: close`; partial writes are
   handled. Bodies may contain binary data within the supplied buffer limit.
 - Persistent connections, chunked transfer coding, WebSockets, TLS, and
@@ -159,7 +184,8 @@ From the repository root, compile the focused suite:
 ```
 
 The suite covers routing adapters, worker execution, listener lifecycle,
-callback binding, partial I/O, binary responses, bounds, timeouts, and cleanup.
+callback binding, request metadata, peer lookup, prefetched bodies, partial I/O,
+binary responses, bounds, timeouts, and cleanup.
 Board runs use `-Action Run -Port COMx` with the detected ST-Link port and restore
 production afterward. Do not treat a compile-only result as a runtime pass.
 

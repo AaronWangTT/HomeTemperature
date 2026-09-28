@@ -110,6 +110,11 @@ public:
     int readyCount = 0;
     int acceptCount = 0;
     int lookupCount = 0;
+    int peerResult = 0;
+    socklen_t peerReturnedSize = sizeof(sockaddr_in);
+    uint8_t peerFamily = AF_INET;
+    uint32_t peerAddress = 0xC0000263UL;
+    int peerLookupCount = 0;
     int closeCount = 0;
 
     void closeSocket(int) override { ++closeCount; }
@@ -141,6 +146,20 @@ protected:
         }
         *length = returnedSize;
         return optionResult;
+    }
+
+    int getPeerName(int descriptor, sockaddr *address,
+                    socklen_t *length) override {
+        ++peerLookupCount;
+        lookupContract &= descriptor == 20 && address != NULL &&
+            length != NULL && *length == sizeof(sockaddr_in);
+        if (address != NULL && length != NULL) {
+            sockaddr_in *peer = reinterpret_cast<sockaddr_in *>(address);
+            peer->sin_family = peerFamily;
+            peer->sin_addr.s_addr = htonl(peerAddress);
+            *length = peerReturnedSize;
+        }
+        return peerResult;
     }
 };
 
@@ -203,6 +222,32 @@ void testNativeAcceptReadinessFailures() {
     expect(operations.readyCount == 2 && operations.acceptCount == 0 &&
                operations.lookupCount == 0 && operations.closeCount == 0,
            "idle or invalid readiness never calls accept or SO_ERROR");
+}
+
+void testNativePeerIpv4Lookup() {
+    NativeAcceptOperations operations;
+    uint32_t address = 0;
+    expect(operations.peerIpv4(20, address) &&
+               address == operations.peerAddress &&
+               operations.lookupContract && operations.peerLookupCount == 1,
+           "native peer lookup validates and converts an IPv4 socket address");
+
+    operations.peerResult = -1;
+    address = 0xFFFFFFFFUL;
+    expect(!operations.peerIpv4(20, address) && address == 0,
+           "failed getpeername does not expose an address");
+
+    operations.peerResult = 0;
+    operations.peerReturnedSize = sizeof(sockaddr_in) - 1;
+    address = 0xFFFFFFFFUL;
+    expect(!operations.peerIpv4(20, address) && address == 0,
+           "short getpeername results are rejected");
+
+    operations.peerReturnedSize = sizeof(sockaddr_in);
+    operations.peerFamily = AF_UNSPEC;
+    address = 0xFFFFFFFFUL;
+    expect(!operations.peerIpv4(20, address) && address == 0,
+           "non-IPv4 getpeername results are rejected");
 }
 
 void testDisconnectedPolling() {
@@ -292,6 +337,7 @@ struct FakeHttpPlatform {
     int handlerMode;
     int streamingHandlerCount;
     int streamingReadStatus;
+    int peerLookupCount;
     int receiveCount;
     int receiveStep;
     int receiveDuration;
@@ -301,6 +347,12 @@ struct FakeHttpPlatform {
     size_t receiveChunkSize;
     size_t streamedLength;
     uint32_t streamingGeneration;
+    uint32_t peerAddress;
+    uint32_t streamingPeerAddress;
+    LocalHttpRequestMetadataStatus streamingAuthorizationStatus;
+    LocalHttpRequestMetadataStatus streamingHostStatus;
+    LocalHttpRequestMetadataStatus streamingOriginStatus;
+    LocalHttpPeerIpv4Status streamingPeerStatus;
     bool listenerOpen;
     bool advertised;
     bool clientQueued;
@@ -310,6 +362,7 @@ struct FakeHttpPlatform {
     bool blockSend;
     bool disconnectWhenDrained;
     bool errorWhenDrained;
+    bool peerLookupSuccess;
     size_t inputLength;
     size_t inputOffset;
     size_t outputLength;
@@ -318,6 +371,9 @@ struct FakeHttpPlatform {
     char input[2300];
     char output[1024];
     char streamedBody[128];
+    char streamingAuthorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
+    char streamingHost[LocalHttpStreamingRequest::HOST_CAPACITY];
+    char streamingOrigin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
 };
 
 FakeHttpPlatform fake = {};
@@ -343,6 +399,7 @@ public:
     int acceptClient(int listener) override;
     int receiveBytes(int client, char *buffer, size_t size) override;
     int sendBytes(int client, const char *buffer, size_t size) override;
+    bool peerIpv4(int client, uint32_t &address) override;
     void closeSocket(int descriptor) override;
     bool supportsConcurrentSockets() const override {
         return concurrentSockets_;
@@ -363,6 +420,8 @@ void resetHttpPlatform() {
     fake.openResult = 10;
     fake.receiveChunkSize = 7;
     fake.receiveDurationStartOffset = SIZE_MAX;
+    fake.peerLookupSuccess = true;
+    fake.peerAddress = 0xC0000263UL;
     fakeMutex.unlock();
     while (progress.wait(0) > 0) {}
     while (openGate.wait(0) > 0) {}
@@ -482,6 +541,15 @@ int FakeLocalWebServerOperations::sendBytes(int, const char *buffer, size_t size
     fake.output[fake.outputLength] = '\0';
     fakeMutex.unlock();
     return static_cast<int>(sent);
+}
+
+bool FakeLocalWebServerOperations::peerIpv4(int client, uint32_t &address) {
+    fakeMutex.lock();
+    ++fake.peerLookupCount;
+    bool success = fake.peerLookupSuccess && client == 20;
+    address = success ? fake.peerAddress : 0;
+    fakeMutex.unlock();
+    return success;
 }
 
 void FakeLocalWebServerOperations::closeSocket(int descriptor) {
@@ -721,6 +789,30 @@ public:
         ++fake.streamingHandlerCount;
         fake.streamingThread = osThreadGetId();
         fake.streamingGeneration = request.generation;
+        fake.streamingAuthorizationStatus = request.authorization.status;
+        fake.streamingHostStatus = request.host.status;
+        fake.streamingOriginStatus = request.origin.status;
+        fake.streamingPeerStatus = request.peerIpv4.status;
+        fake.streamingPeerAddress = request.peerIpv4.address;
+        size_t authorizationLength =
+            request.authorization.length < sizeof(fake.streamingAuthorization) - 1
+                ? request.authorization.length
+                : sizeof(fake.streamingAuthorization) - 1;
+        memcpy(fake.streamingAuthorization, request.authorization.value,
+               authorizationLength);
+        fake.streamingAuthorization[authorizationLength] = '\0';
+        size_t hostLength =
+            request.host.length < sizeof(fake.streamingHost) - 1
+                ? request.host.length
+                : sizeof(fake.streamingHost) - 1;
+        memcpy(fake.streamingHost, request.host.value, hostLength);
+        fake.streamingHost[hostLength] = '\0';
+        size_t originLength =
+            request.origin.length < sizeof(fake.streamingOrigin) - 1
+                ? request.origin.length
+                : sizeof(fake.streamingOrigin) - 1;
+        memcpy(fake.streamingOrigin, request.origin.value, originLength);
+        fake.streamingOrigin[originLength] = '\0';
         fake.streamingReadStatus = LOCAL_HTTP_BODY_DATA;
         fake.streamedLength = 0;
         fakeMutex.unlock();
@@ -1167,6 +1259,116 @@ void testStreamingFramingAndPrefetchedBody() {
     expect(binaryPreserved, "binary body bytes retain their exact values");
 }
 
+void testStreamingRequestMetadata() {
+    resetHttpPlatform();
+    ExampleHandler handler;
+    ExampleStreamingHandler streamingHandler;
+    LocalHttpStreamingLimits limits = {128, 2000, 10000};
+    LocalWebServer server(
+        handler, streamingHandler, limits, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+
+    fakeMutex.lock();
+    fake.receiveChunkSize = 128;
+    fakeMutex.unlock();
+    const char exact[] =
+        "POST /stream HTTP/1.1\r\n"
+        "aUtHoRiZaTiOn:\tOTA 0123456789abcdef0123456789abcdef \r\n"
+        "HOST: Device.Local\r\n"
+        "origin: http://device.local\r\n"
+        "Content-Length: 3\r\n\r\nabc";
+    queueRequest(exact, sizeof(exact) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1),
+           "exact metadata request completes");
+    fakeMutex.lock();
+    bool exactMetadata =
+        fake.streamingAuthorizationStatus == LOCAL_HTTP_METADATA_VALID &&
+        strcmp(fake.streamingAuthorization,
+               "OTA 0123456789abcdef0123456789abcdef") == 0 &&
+        fake.streamingHostStatus == LOCAL_HTTP_METADATA_VALID &&
+        strcmp(fake.streamingHost, "Device.Local") == 0 &&
+        fake.streamingOriginStatus == LOCAL_HTTP_METADATA_VALID &&
+        strcmp(fake.streamingOrigin, "http://device.local") == 0 &&
+        fake.streamingPeerStatus == LOCAL_HTTP_PEER_IPV4_VALID &&
+        fake.streamingPeerAddress == 0xC0000263UL &&
+        fake.streamedLength == 3 && memcmp(fake.streamedBody, "abc", 3) == 0;
+    fakeMutex.unlock();
+    expect(exactMetadata,
+           "security header names are case-insensitive and values, peer, and prefetched body are exact");
+
+    const char duplicate[] =
+        "POST /stream HTTP/1.1\r\n"
+        "Authorization: first\r\nAuthorization: second\r\n"
+        "Host: first\r\nhost: second\r\n"
+        "Origin: first\r\nORIGIN: second\r\n"
+        "Content-Length: 0\r\n\r\n";
+    queueRequest(duplicate, sizeof(duplicate) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 2),
+           "duplicate metadata request completes");
+    fakeMutex.lock();
+    bool duplicateMetadata =
+        fake.streamingAuthorizationStatus == LOCAL_HTTP_METADATA_DUPLICATE &&
+        fake.streamingHostStatus == LOCAL_HTTP_METADATA_DUPLICATE &&
+        fake.streamingOriginStatus == LOCAL_HTTP_METADATA_DUPLICATE &&
+        fake.streamingAuthorization[0] == '\0' &&
+        fake.streamingHost[0] == '\0' && fake.streamingOrigin[0] == '\0';
+    fakeMutex.unlock();
+    expect(duplicateMetadata,
+           "duplicate security headers are distinct and expose no ambiguous value");
+
+    const char malformed[] =
+        "POST /stream HTTP/1.1\r\n"
+        "Authorization: \t\r\nHost:\t\r\nOrigin: \x01\r\n"
+        "Content-Length: 0\r\n\r\n";
+    queueRequest(malformed, sizeof(malformed) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 3),
+           "malformed metadata request completes");
+    fakeMutex.lock();
+    bool malformedMetadata =
+        fake.streamingAuthorizationStatus == LOCAL_HTTP_METADATA_MALFORMED &&
+        fake.streamingHostStatus == LOCAL_HTTP_METADATA_MALFORMED &&
+        fake.streamingOriginStatus == LOCAL_HTTP_METADATA_MALFORMED;
+    fakeMutex.unlock();
+    expect(malformedMetadata,
+           "empty and control-bearing security headers are marked malformed");
+
+    fakeMutex.lock();
+    fake.peerLookupSuccess = false;
+    fakeMutex.unlock();
+    const char absent[] =
+        "POST /stream HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+    queueRequest(absent, sizeof(absent) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 4),
+           "request without optional metadata completes");
+    fakeMutex.lock();
+    bool absentMetadata =
+        fake.streamingAuthorizationStatus == LOCAL_HTTP_METADATA_ABSENT &&
+        fake.streamingHostStatus == LOCAL_HTTP_METADATA_ABSENT &&
+        fake.streamingOriginStatus == LOCAL_HTTP_METADATA_ABSENT &&
+        fake.streamingPeerStatus == LOCAL_HTTP_PEER_IPV4_UNAVAILABLE &&
+        fake.streamingPeerAddress == 0;
+    fakeMutex.unlock();
+    expect(absentMetadata,
+           "absent headers and peer lookup failure remain explicit");
+
+    char overlength[256];
+    const char prefix[] =
+        "POST /stream HTTP/1.1\r\nAuthorization: ";
+    size_t offset = sizeof(prefix) - 1;
+    memcpy(overlength, prefix, offset);
+    memset(overlength + offset, 'a',
+           LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY);
+    offset += LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY;
+    const char suffix[] = "\r\nContent-Length: 0\r\n\r\n";
+    memcpy(overlength + offset, suffix, sizeof(suffix) - 1);
+    offset += sizeof(suffix) - 1;
+    queueRequest(overlength, offset);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 5) &&
+               outputContains("HTTP/1.1 400 Bad Request") &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 4,
+           "security header values at capacity are rejected before dispatch");
+}
+
 void testLegacyRouteFramingCompatibility() {
     resetHttpPlatform();
     ExampleHandler handler;
@@ -1220,6 +1422,8 @@ void testLegacyRouteFramingCompatibility() {
                outputContains("HTTP/1.1 200 OK") &&
                fakeCount(&FakeHttpPlatform::handlerCount) == 4,
            "legacy handlers retain bare carriage-return tolerance");
+    expect(fakeCount(&FakeHttpPlatform::peerLookupCount) == 0,
+           "legacy routes do not perform streaming peer metadata lookup");
 
     const char streamingBareCarriageReturn[] =
         "POST /stream HTTP/1.1\r\nX-Test: a\rb\r\n"
@@ -1542,6 +1746,7 @@ void setup() {
     testNativeAcceptErrorLookup();
     testNativeAcceptInvalidErrorLookup();
     testNativeAcceptReadinessFailures();
+    testNativePeerIpv4Lookup();
     testDisconnectedPolling();
     testTelemetryHandler();
     testSocketScopeAndReset();
@@ -1559,6 +1764,7 @@ void setup() {
     testRequestLineBoundary();
     testRequestBoundsAndDisconnect();
     testStreamingFramingAndPrefetchedBody();
+    testStreamingRequestMetadata();
     testLegacyRouteFramingCompatibility();
     testStreamingFaultsAndGenerationCancellation();
     testStreamingListenerResponsiveness();
