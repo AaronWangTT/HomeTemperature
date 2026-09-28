@@ -1,6 +1,6 @@
 {
     "env": {
-        "AZ3166_CORE": "${env:LOCALAPPDATA}/Arduino15/packages/AZ3166/hardware/stm32f4/3.0.0"
+        "AZ3166_CORE": "${env:LOCALAPPDATA}/Arduino15/packages/AZ3166/hardware/stm32f4/3.1.2"
     },
     "configurations": [
         {

@@ -2,17 +2,16 @@
 
 Status: proposed
 
-Baseline: AZ3166 Core 3.0.0
+Baseline: AZ3166 Core 3.1.2
 
-Target: a future maintained AZ3166 Core release after 3.0.0 and a later
-HomeTemperature integration
+Target: HomeTemperature integration on the maintained Core staging API
 
 ## 1. Decision
 
 Support local firmware upload without requiring the device to download an image
 from a remote URL.
 
-The Core should provide a transport-independent, streaming OTA staging API that
+Core 3.1.2 provides a transport-independent, streaming OTA staging API that
 writes a verified application image to the existing external Flash OTA
 partition and activates it through the existing bootloader contract.
 HomeTemperature should provide the local HTTP endpoint, physical authorization,
@@ -21,11 +20,31 @@ product policy, progress reporting, and reboot coordination.
 The initial implementation must not replace the bootloader or claim rollback
 support. A failed update must remain recoverable through ST-Link.
 
-## 2. Core 3.0.0 Findings
+This Core migration adopts the staging engine only. It does not add
+HomeTemperature upload routes or browser UI, automatic reboot, A/B rollback,
+boot-attempt counters, or health-confirmation logic, and the package contains no
+private signing key.
+
+## 2. Core 3.1.2 Findings
 
 The Core's
-[`OTAFirmwareUpdate`](https://github.com/AaronWangTT/devkit-sdk/blob/6cd046137cb3e054a343e9a4a5a5323cf566f3e6/libraries/OTA/src/OTAFirmwareUpdate.cpp)
-library exposes two operations:
+[`OTAStaging`](https://github.com/AaronWangTT/devkit-sdk/blob/3.1.2/libraries/OTA/src/OTAStaging.h)
+library exposes a signed streaming workflow:
+
+- `OTAStagingBegin()` accepts the complete package size, a trusted P-256 public
+  key, admission and cancellation callbacks, and caller context.
+- `OTAStagingWritePackage()` authenticates the fixed `AZPKG001` header and raw
+  P-256 `r || s` signature before admission or erasing the OTA partition, then
+  streams the application image in bounded writes.
+- `OTAStagingFinish()` validates the payload digest, CRC16/XMODEM, vectors,
+  canonical compatibility descriptor, and a complete external-Flash read-back.
+- `OTAStagingActivate()` requires the current verified session generation and
+  digest, verifies persisted boot metadata, and restores the prior entry when a
+  failed activation can be proven recoverable.
+- `OTAStagingAbort()` invalidates a receiving or ready session.
+
+The older `OTAFirmwareUpdate` compatibility API remains available and
+deprecated:
 
 - `OTADownloadFirmware()` performs an HTTP or HTTPS GET, writes response chunks
   directly to `MICO_PARTITION_OTA_TEMP`, and computes the MICO CRC16.
@@ -34,7 +53,7 @@ library exposes two operations:
   reboot.
 
 The application image is a raw `.bin` linked at `0x0800C000`. Inspection of the
-Core 3.0.0 partition table shows:
+Core 3.1.2 partition table shows:
 
 | Partition | Storage | Start | Capacity |
 | --- | --- | ---: | ---: |
@@ -44,8 +63,8 @@ Core 3.0.0 partition table shows:
 The runtime value returned by `MicoFlashGetInfo(MICO_PARTITION_OTA_TEMP)` must
 remain authoritative; applications must not duplicate these constants.
 
-The existing implementation is useful as a proof of the bootloader path, but
-it is too narrow for a safe local uploader:
+The deprecated raw-image implementation remains too narrow for a safe local
+uploader:
 
 - download transport, staging, checksum, and activation are one workflow;
 - state is held in global variables and is not reentrant;
@@ -172,14 +191,12 @@ device-side physical initiation, accepted once from the first matching local
 request, hidden immediately after claim/expiry, and rate limited to three
 failed attempts per window.
 
-Core 3.0.0 includes the Mbed TLS sources for SHA-256, ECDSA, secp256r1, and
-public-key parsing, but its effective `mbed_config.h` enables only SHA-256.
-ECDSA P-256 with SHA-256 is the preferred initial signature scheme only after a
-future Core release enables and links the required ECP, ECDSA, bignum, ASN.1,
-and public-key parsing modules. Core CI must compile and execute a
-known-answer signature verification test and record the resulting flash and RAM
-cost. Signature policy and the trusted public key belong to the application,
-while the Core provides bounded parsing and verification.
+Core 3.1.2 enables and links the Mbed TLS SHA-256, ECP, ECDSA, bignum, ASN.1,
+OID, and public-key parsing modules needed for P-256 verification. Its
+production signature adapter is covered by direct known-answer host tests,
+including tampered digest/signature, wrong-key, and malformed-key rejection.
+Signature policy and the trusted public key remain application-owned, while
+the Core provides bounded parsing and verification.
 
 Firmware versions use exactly three decimal components,
 `MAJOR.MINOR.PATCH`. Each component is in the range 0 through 65535, has no
@@ -624,7 +641,7 @@ dropped connection never leads to the session's `activate()` method.
 
 ## 10. Boot and Recovery Limitations
 
-The shipped bootloader is provided as a binary, and Core 3.0.0 exposes no
+The shipped bootloader is provided as a binary, and Core 3.1.2 exposes no
 rollback, boot-attempt counter, confirmed-image, or automatic recovery API.
 The initial local OTA feature must therefore be documented as staged
 replacement, not fail-safe A/B OTA.
@@ -743,7 +760,7 @@ separate recovery and manufacturing review.
    bootloader copy.
 4. Record which failures recover automatically and which require ST-Link.
 
-### Phase 2: Add the Core staging engine
+### Phase 2: Add the Core staging engine (completed in Core 3.1.2)
 
 1. Add the transport-independent begin/write/finish/abort/activate API.
 2. Add partition discovery, erase, bounds checks, CRC16, SHA-256, read-back,
@@ -808,12 +825,10 @@ cannot override this production gate.
 5. Restore through ST-Link after every intentionally failed scenario.
 6. Publish and checksum-pin the enhanced Core only after those gates pass.
 
-### Recommended pull-request sequence
+### Remaining pull-request sequence
 
-1. Core staging API and fault-injection tests.
-2. HomeTemperature HTTP request-body streaming and lifecycle hardening.
-3. Core release and HomeTemperature version-pin update.
-4. HomeTemperature OTA controller and HTTP API.
-5. Host package builder and command-line uploader.
-6. Browser upload page.
-7. Hardware acceptance evidence and final enablement.
+1. HomeTemperature HTTP request-body streaming and lifecycle hardening.
+2. HomeTemperature OTA controller and HTTP API.
+3. Host package builder and command-line uploader.
+4. Browser upload page.
+5. Hardware acceptance evidence and final enablement.
