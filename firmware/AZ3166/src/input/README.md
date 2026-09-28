@@ -11,7 +11,7 @@ mapping.
 | --- | --- |
 | [ButtonDebouncer.h](ButtonDebouncer.h) | Track raw and stable pressed states and emit an edge after the debounce interval. |
 | [ButtonController.h](ButtonController.h) | Sample two active-low pins and return application-facing button events. |
-| `ButtonEvents` | Report `uploadRequested` and `toggleUploadPause` independently. |
+| `ButtonEvents` | Report `uploadRequested`, `toggleUploadPause`, or the consumed `otaRequested` chord. |
 
 ### ButtonDebouncer
 
@@ -31,8 +31,14 @@ inputs and records their initial levels. `update()` reads GPIO and `millis()`;
 `updateFromInputs()` accepts already-normalized pressed states and a timestamp.
 
 The controller reports events but does not call the cloud uploader. The
-application decides how those events affect scheduling. Both flags may be set
-when the buttons are pressed together.
+application decides how those events affect scheduling. A simultaneous press is
+held pending while the controller distinguishes a short chord from an OTA hold:
+
+- releasing both buttons before `otaHoldIntervalMs` emits the normal
+  `uploadRequested` and `toggleUploadPause` actions;
+- holding both buttons through `otaHoldIntervalMs` emits one `otaRequested`
+  event and consumes both cloud actions;
+- continuing to hold the chord does not repeat any event.
 
 ## Reuse in Another Sketch
 
@@ -42,7 +48,7 @@ For the board's two user buttons:
 #include <Arduino.h>
 #include "src/input/ButtonController.h"
 
-ButtonController buttons(USER_BUTTON_A, USER_BUTTON_B, 50);
+ButtonController buttons(USER_BUTTON_A, USER_BUTTON_B, 50, 2000);
 
 void setup() {
     Serial.begin(115200);
@@ -56,6 +62,9 @@ void loop() {
     }
     if (events.toggleUploadPause) {
         Serial.println("Button B pressed");
+    }
+    if (events.otaRequested) {
+        Serial.println("Two-second A+B OTA hold");
     }
 }
 ```
@@ -84,11 +93,13 @@ the application currently uses 50 milliseconds.
   depends on Arduino/AZ3166 GPIO types and assumes active-low inputs.
 - The controller uses `INPUT`, not an internal pull-up mode. The supplied board
   pins must have appropriate electrical biasing; adapt that setup for other pins.
-- The controller's event names and startup log reflect this application's upload
-  controls. Reuse `ButtonDebouncer` when you need neutral input semantics.
+- The controller's event names, OTA hold interval, and startup log reflect this
+  application's upload controls. Reuse `ButtonDebouncer` when you need neutral
+  input semantics.
 - Neither component starts a thread or buffers missed input. Long blocking work
-  between samples can delay or miss presses. Long-press, double-click, repeat,
-  and release notifications are not implemented.
+  between samples can delay or miss presses. The simultaneous OTA hold is the
+  only long-press policy; double-click, repeat, and general release
+  notifications are not implemented.
 - Timestamp arithmetic assumes an unsigned millisecond counter with the same
   width as `uint32_t`; do not reset the time source while preserving old state.
 

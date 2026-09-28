@@ -34,6 +34,7 @@ struct LocalOtaSnapshot {
 
 typedef uint32_t (*LocalOtaClock)();
 typedef void (*LocalOtaBeforeApplyValidation)(void *context);
+typedef void (*LocalOtaUploadHandoffHook)(bool afterFinish, void *context);
 
 class LocalOtaController {
 public:
@@ -55,10 +56,13 @@ public:
         const char *currentVersion,
         LocalOtaClock clock,
         LocalOtaBeforeApplyValidation beforeApplyValidation = NULL,
-        void *applyValidationContext = NULL);
+        void *applyValidationContext = NULL,
+        LocalOtaUploadHandoffHook uploadHandoffHook = NULL,
+        void *uploadHandoffContext = NULL);
     ~LocalOtaController();
 
     bool begin();
+    void shutdown();
     bool openChallenge();
     bool claim(
         const char *challenge,
@@ -99,6 +103,9 @@ private:
         uint32_t now,
         uint32_t &generation) const;
     bool queuedApplyValidLocked(uint32_t now) const;
+    bool uploadCanAdvanceLocked(
+        uint32_t expectedGeneration,
+        LocalOtaState expectedState) const;
     bool requestCancellationLocked(uint32_t expectedGeneration);
     void fail(OTAStagingError error, bool fatal);
     void releaseLease(uint32_t generation);
@@ -118,6 +125,8 @@ private:
     LocalOtaClock clock_;
     LocalOtaBeforeApplyValidation beforeApplyValidation_;
     void *applyValidationContext_;
+    LocalOtaUploadHandoffHook uploadHandoffHook_;
+    void *uploadHandoffContext_;
     mutable rtos::Mutex mutex_;
     rtos::Thread worker_;
     rtos::Semaphore commandSignal_;
@@ -133,6 +142,7 @@ private:
     uint32_t challengeDeadline_;
     uint32_t capabilityDeadline_;
     uint32_t leaseDeadline_;
+    uint32_t reservedGeneration_;
     uint8_t challenge_[4];
     uint8_t capability_[16];
     uint8_t failedClaims_;

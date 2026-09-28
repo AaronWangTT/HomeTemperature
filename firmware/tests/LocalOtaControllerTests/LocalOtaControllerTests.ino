@@ -606,6 +606,235 @@ void testActivatedAwaitingResponseShutdown() {
     network.endCloud();
 }
 
+void testShutdownReleasesPreActivationReservations() {
+    uint8_t key[] = {1};
+
+    {
+        fakeNow = 0;
+        FakeCore core;
+        FakeEntropy entropy;
+        FakeDisplay display;
+        NetworkMaintenanceCoordinator network;
+        LocalOtaController controller(
+            core, entropy, display, network, key, sizeof(key),
+            "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
+        controller.begin();
+        controller.openChallenge();
+        char capability[33];
+        controller.claim("01020304", 0x0a000001, 10, capability);
+        char authorization[37];
+        snprintf(authorization, sizeof(authorization), "OTA %s", capability);
+        LocalHttpRequest request = makeRequest(
+            "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 10);
+        expect(network.tryBeginCloud(), "waiting shutdown holds a cloud lease");
+        FakeBody body(385);
+        LocalHttpStreamingRequest streaming =
+            makeStreamingRequest(request.requestLine, 385, 10, request);
+        UploadContext upload = {&controller, streaming, &body, false};
+        rtos::Thread thread;
+        thread.start(mbed::callback(uploadThread, static_cast<void *>(&upload)));
+        waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+        controller.shutdown();
+        thread.join();
+        expect(!network.otaBusy(),
+               "waiting shutdown releases its generation-bound OTA reservation");
+        network.endCloud();
+        expect(network.tryBeginCloud(),
+               "cloud becomes available after waiting shutdown");
+        network.endCloud();
+    }
+
+    {
+        fakeNow = 0;
+        FakeCore core;
+        FakeEntropy entropy;
+        FakeDisplay display;
+        NetworkMaintenanceCoordinator network;
+        LocalOtaController controller(
+            core, entropy, display, network, key, sizeof(key),
+            "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
+        controller.begin();
+        controller.openChallenge();
+        char capability[33];
+        controller.claim("01020304", 0x0a000001, 11, capability);
+        char authorization[37];
+        snprintf(authorization, sizeof(authorization), "OTA %s", capability);
+        LocalHttpRequest request = makeRequest(
+            "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 11);
+        IdleBody body(385);
+        LocalHttpStreamingRequest streaming =
+            makeStreamingRequest(request.requestLine, 385, 11, request);
+        UploadContext upload = {&controller, streaming, &body, false};
+        rtos::Thread thread;
+        thread.start(mbed::callback(uploadThread, static_cast<void *>(&upload)));
+        waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+        controller.update(11);
+        waitForState(controller, LOCAL_OTA_RECEIVING);
+        controller.shutdown();
+        thread.join();
+        expect(core.aborts == 1 && !network.otaBusy() &&
+                   network.tryBeginCloud(),
+               "receiving shutdown aborts Core and releases cloud exclusion");
+        network.endCloud();
+    }
+
+    {
+        fakeNow = 0;
+        FakeCore core;
+        FakeEntropy entropy;
+        FakeDisplay display;
+        NetworkMaintenanceCoordinator network;
+        LocalOtaController controller(
+            core, entropy, display, network, key, sizeof(key),
+            "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
+        controller.begin();
+        controller.openChallenge();
+        char capability[33];
+        controller.claim("01020304", 0x0a000001, 12, capability);
+        char authorization[37];
+        snprintf(authorization, sizeof(authorization), "OTA %s", capability);
+        LocalHttpRequest request = makeRequest(
+            "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 12);
+        FakeBody body(385);
+        LocalHttpStreamingRequest streaming =
+            makeStreamingRequest(request.requestLine, 385, 12, request);
+        UploadContext upload = {&controller, streaming, &body, false};
+        rtos::Thread thread;
+        thread.start(mbed::callback(uploadThread, static_cast<void *>(&upload)));
+        waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+        controller.update(12);
+        thread.join();
+        expect(controller.snapshot().state == LOCAL_OTA_READY,
+               "ready shutdown test stages an image");
+        controller.shutdown();
+        expect(core.aborts == 1 && !network.otaBusy() &&
+                   network.tryBeginCloud(),
+               "ready shutdown aborts Core and releases cloud exclusion");
+        network.endCloud();
+    }
+}
+
+struct UploadHandoffContext {
+    LocalOtaController *controller;
+    LocalHttpRequest request;
+    bool triggerAfterFinish;
+    bool invalidateNetwork;
+    bool triggered;
+};
+
+void invalidateUploadHandoff(bool afterFinish, void *rawContext) {
+    UploadHandoffContext *context =
+        static_cast<UploadHandoffContext *>(rawContext);
+    if (context->triggered || afterFinish != context->triggerAfterFinish) {
+        return;
+    }
+    context->triggered = true;
+    if (context->invalidateNetwork) {
+        context->controller->update(context->request.networkGeneration + 1);
+    } else {
+        context->controller->cancel(context->request);
+    }
+}
+
+void runUploadHandoffRace(
+    bool afterFinish,
+    bool invalidateNetwork,
+    const char *name) {
+    fakeNow = 0;
+    FakeCore core;
+    FakeEntropy entropy;
+    FakeDisplay display;
+    NetworkMaintenanceCoordinator network;
+    uint8_t key[] = {1};
+    UploadHandoffContext hook = {};
+    LocalOtaController controller(
+        core, entropy, display, network, key, sizeof(key),
+        "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock,
+        NULL, NULL, invalidateUploadHandoff, &hook);
+    controller.begin();
+    controller.openChallenge();
+    char capability[33];
+    controller.claim("01020304", 0x0a000001, 13, capability);
+    char authorization[37];
+    snprintf(authorization, sizeof(authorization), "OTA %s", capability);
+    LocalHttpRequest request = makeRequest(
+        "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 13);
+    hook.controller = &controller;
+    hook.request = request;
+    hook.triggerAfterFinish = afterFinish;
+    hook.invalidateNetwork = invalidateNetwork;
+    FakeBody body(385);
+    LocalHttpStreamingRequest streaming =
+        makeStreamingRequest(request.requestLine, 385, 13, request);
+    UploadContext upload = {&controller, streaming, &body, false};
+    rtos::Thread thread;
+    thread.start(mbed::callback(uploadThread, static_cast<void *>(&upload)));
+    waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+    controller.update(13);
+    thread.join();
+    expect(hook.triggered && !upload.result &&
+               controller.snapshot().state == LOCAL_OTA_IDLE &&
+               core.aborts == 1 &&
+               core.finishes == (afterFinish ? 1 : 0) &&
+               network.tryBeginCloud(),
+           name);
+    network.endCloud();
+}
+
+void testUploadVerificationHandoffInvalidation() {
+    runUploadHandoffRace(
+        false, false,
+        "cancel before Verifying aborts without calling finish");
+    runUploadHandoffRace(
+        false, true,
+        "network invalidation before Verifying aborts without calling finish");
+    runUploadHandoffRace(
+        true, false,
+        "cancel during finish wins before Ready publication");
+    runUploadHandoffRace(
+        true, true,
+        "network invalidation during finish wins before Ready publication");
+}
+
+void testFatalActivationShutdownRetainsReservation() {
+    fakeNow = 0;
+    FakeCore core;
+    core.activationResult = OTA_ERROR_ACTIVATION_UNCERTAIN;
+    FakeEntropy entropy;
+    FakeDisplay display;
+    NetworkMaintenanceCoordinator network;
+    uint8_t key[] = {1};
+    LocalOtaController controller(
+        core, entropy, display, network, key, sizeof(key),
+        "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
+    controller.begin();
+    controller.openChallenge();
+    char capability[33];
+    controller.claim("01020304", 0x0a000001, 14, capability);
+    char authorization[37];
+    snprintf(authorization, sizeof(authorization), "OTA %s", capability);
+    LocalHttpRequest request = makeRequest(
+        "POST /api/ota HTTP/1.1", authorization, 1, 0x0a000001, 14);
+    FakeBody body(385);
+    LocalHttpStreamingRequest streaming =
+        makeStreamingRequest(request.requestLine, 385, 14, request);
+    UploadContext upload = {&controller, streaming, &body, false};
+    rtos::Thread thread;
+    thread.start(mbed::callback(uploadThread, static_cast<void *>(&upload)));
+    waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+    controller.update(14);
+    thread.join();
+    request.requestLine = "POST /api/ota/apply HTTP/1.1";
+    OTAStagingError result = OTA_OK;
+    expect(controller.apply(request, result) &&
+               result == OTA_ERROR_ACTIVATION_UNCERTAIN &&
+               controller.snapshot().state == LOCAL_OTA_FATAL,
+           "uncertain activation enters fatal maintenance");
+    controller.shutdown();
+    expect(network.otaBusy() && !network.tryBeginCloud(),
+           "fatal shutdown deliberately retains OTA network exclusion");
+}
+
 void testClaimAndCancelHttpRoutes() {
     fakeNow = 0;
     FakeCore core;
@@ -717,6 +946,9 @@ void setup() {
     testFinalApplyRevalidationRaces();
     testTypedErrorsAndRebootCloudPolicy();
     testActivatedAwaitingResponseShutdown();
+    testShutdownReleasesPreActivationReservations();
+    testUploadVerificationHandoffInvalidation();
+    testFatalActivationShutdownRetainsReservation();
     testClaimAndCancelHttpRoutes();
     testExpiryAndNetworkGenerationCancelReadyWorker();
 }
