@@ -38,7 +38,12 @@ function Invoke-Az3166TestSuite {
     if ($Action -eq "Run" -and [string]::IsNullOrWhiteSpace($Port)) {
         throw "Run requires an explicit ST-Link port, for example: -Port COM3"
     }
-
+    if (
+        $Action -eq "Run" -and
+        $env:HOME_TEMPERATURE_STLINK_SERIAL -notmatch "^[0-9A-Fa-f]{24}$"
+    ) {
+        throw "Run requires HOME_TEMPERATURE_STLINK_SERIAL as exactly 24 hexadecimal characters."
+    }
     $invokeBuild = {
         param(
             [string]$BuildAction,
@@ -49,7 +54,13 @@ function Invoke-Az3166TestSuite {
             Action = $BuildAction
             Sketch = $Sketch
         }
-        if (-not [string]::IsNullOrWhiteSpace($Port)) {
+        $restoringProduction = (
+            $BuildAction -eq "Restore" -and
+            $Sketch -eq $productionSketch
+        )
+        if ($restoringProduction) {
+            $arguments.StLinkSerial = $env:HOME_TEMPERATURE_STLINK_SERIAL
+        } elseif (-not [string]::IsNullOrWhiteSpace($Port)) {
             $arguments.Port = $Port
         }
 
@@ -134,7 +145,7 @@ function Invoke-Az3166TestSuite {
                 $testError = $_
             } finally {
                 Write-Host "Restoring production firmware..."
-                & $invokeBuild "Upload" $productionSketch
+                & $invokeBuild "Restore" $productionSketch
             }
 
             if ($null -ne $testError) {

@@ -81,6 +81,9 @@ OTA also requires `HOME_TEMPERATURE_FIRMWARE_VERSION` to be supplied as the
 canonical `MAJOR.MINOR.PATCH` version for the exact signed image. An absent
 version disables OTA; release tooling must generate and verify it rather than
 using a fallback.
+Use the [OTA host tooling](../tools/ota/README.md) to generate the public build
+configuration, compile with the retained descriptor at image offset `0x200`,
+and produce the signed package.
 
 ## Local Discovery
 
@@ -264,8 +267,13 @@ Run all suites on a connected board and restore production firmware after each
 suite only when a full hardware regression is required:
 
 ```powershell
+$env:HOME_TEMPERATURE_STLINK_SERIAL = "00112233445566778899AABB"
 & .\firmware\tests\run-all-tests.ps1 -Action Run -Port COM3
 ```
+
+The restore action selects the exact ST-Link and compiles the repository's
+default fail-closed, OTA-disabled production image. It rejects custom OTA build
+configuration.
 
 An upload is successful only when the command exits zero and OpenOCD reports
 `Verified OK`. The AZ3166 3.1.2 build can emit a repeated four-byte `.bss`

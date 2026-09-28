@@ -345,14 +345,18 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
     LocalOtaHttpHandler handler(fallback, controller);
     expect(handler.handles("POST /api/ota HTTP/1.1") &&
                handler.handles("POST /api/ota/session HTTP/1.1") &&
+               handler.handles("POST /api/ota/apply HTTP/1.1") &&
                !handler.handles("GET /api/telemetry HTTP/1.1"),
            "only OTA body routes transfer to the streaming worker");
     char responseBody[256];
     LocalHttpResponse response =
         handler.handleRequest(valid, responseBody, sizeof(responseBody));
     expect(strcmp(response.status, "200 OK") == 0 &&
-               strstr(responseBody, "\"state\":\"Ready\"") != NULL,
-           "authorized status route reports Ready");
+               strstr(responseBody, "\"state\":\"Ready\"") != NULL &&
+               strstr(responseBody, "\"generation\":7") != NULL &&
+               strstr(responseBody,
+                      "\"digest\":\"4200000000000000000000000000000000000000000000000000000000000000\"") != NULL,
+           "authorized status reports the Core generation and digest");
 
     LocalHttpRequest malformedStatus = valid;
     malformedStatus.hasTransferEncoding = true;
@@ -364,12 +368,20 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
 
     LocalHttpRequest malformedApply = valid;
     malformedApply.requestLine = "POST /api/ota/apply HTTP/1.1";
-    malformedApply.prefetchedLength = 1;
-    response = handler.handleRequest(
-        malformedApply, responseBody, sizeof(responseBody));
+    malformedApply.contentType = "text/plain";
+    malformedApply.contentTypeCount = 1;
+    const char applyJson[] =
+        "{\"generation\":7,\"digest\":\""
+        "4200000000000000000000000000000000000000000000000000000000000000\"}";
+    TextBody malformedApplyBody(applyJson);
+    LocalHttpStreamingRequest malformedApplyRequest = makeStreamingRequest(
+        malformedApply.requestLine, strlen(applyJson), 1, malformedApply);
+    response = handler.handle(
+        malformedApplyRequest, malformedApplyBody,
+        responseBody, sizeof(responseBody));
     expect(strcmp(response.status, "400 Bad Request") == 0 &&
                core.activates == 0,
-           "apply rejects prefetched body bytes before mutation");
+           "apply rejects an invalid content type before mutation");
 
     LocalHttpRequest malformedCancel = valid;
     malformedCancel.requestLine = "DELETE /api/ota HTTP/1.1";
@@ -383,7 +395,25 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
 
     LocalHttpRequest apply = valid;
     apply.requestLine = "POST /api/ota/apply HTTP/1.1";
-    response = handler.handleRequest(apply, responseBody, sizeof(responseBody));
+    apply.contentType = "application/json";
+    apply.contentTypeCount = 1;
+    const char wrongApplyJson[] =
+        "{\"generation\":7,\"digest\":\""
+        "4300000000000000000000000000000000000000000000000000000000000000\"}";
+    TextBody wrongApplyBody(wrongApplyJson);
+    LocalHttpStreamingRequest wrongApply = makeStreamingRequest(
+        apply.requestLine, strlen(wrongApplyJson), 1, apply);
+    response = handler.handle(
+        wrongApply, wrongApplyBody, responseBody, sizeof(responseBody));
+    expect(strcmp(response.status, "409 Conflict") == 0 &&
+               core.activates == 0,
+           "apply rejects a digest that does not match the staged image");
+
+    TextBody applyBody(applyJson);
+    LocalHttpStreamingRequest applyRequest = makeStreamingRequest(
+        apply.requestLine, strlen(applyJson), 1, apply);
+    response = handler.handle(
+        applyRequest, applyBody, responseBody, sizeof(responseBody));
     expect(strcmp(response.status, "202 Accepted") == 0 &&
                core.activates == 1 && response.afterAttempt != NULL,
            "apply is executed by the OTA worker and returns 202");

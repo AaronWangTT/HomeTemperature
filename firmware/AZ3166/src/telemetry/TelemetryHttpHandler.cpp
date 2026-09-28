@@ -54,6 +54,22 @@ LocalHttpResponse TelemetryHttpHandler::handle(
         return {"500 Internal Server Error", "application/json", 0};
     }
     body[0] = '\0';
+    if (requestLine != NULL &&
+        strcmp(requestLine, AppConfig::VERSION_REQUEST) == 0) {
+        int length = snprintf(
+            body,
+            bodySize,
+            "{\"firmwareVersion\":\"%s\"}",
+            AppConfig::OTA_FIRMWARE_VERSION);
+        if (length < 0 || static_cast<size_t>(length) >= bodySize) {
+            return errorResponse(
+                "500 Internal Server Error",
+                "{\"error\":\"payload formatting failed\"}",
+                body,
+                bodySize);
+        }
+        return {"200 OK", "application/json", static_cast<size_t>(length)};
+    }
     if (routeRequest(requestLine) != LOCAL_ROUTE_TELEMETRY) {
         return errorResponse("404 Not Found", "{\"error\":\"not found\"}",
                              body, bodySize);

@@ -76,6 +76,19 @@ Certificate trust and issuance chains can change independently of this
 repository. Deployers must verify the server's current chain before building
 firmware and update the trust anchor when required.
 
+## Local OTA Host Tooling
+
+The separately installed command-line OTA tooling uses these direct runtime
+dependencies:
+
+| Component | Version used | License | Source |
+| --- | --- | --- | --- |
+| Python | 3.12.11 in CI | PSF License | <https://www.python.org/> |
+| cryptography | 50.0.1 | Apache-2.0 OR BSD-3-Clause | <https://github.com/pyca/cryptography> |
+
+Their transitive dependencies and binary distributions retain their upstream
+licenses.
+
 ## Server Runtime
 
 The server image installs or runs the following direct dependencies; they are

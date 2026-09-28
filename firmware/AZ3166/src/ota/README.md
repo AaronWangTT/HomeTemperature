@@ -10,6 +10,11 @@ OTA is also disabled unless the build supplies
 `HOME_TEMPERATURE_FIRMWARE_VERSION` as the canonical `MAJOR.MINOR.PATCH`
 version embedded in the exact image. There is no default version because a
 stale fallback would permit replay or downgrade of signed firmware.
+The production sketch uses the repository OTA linker to retain its 256-byte
+`AZOTA001` descriptor at image offset `0x200`. Generate the public release
+configuration and invoke the build through the host-tool workflow in
+`tools/ota/README.md`; a normal build emits a fail-closed descriptor that
+cannot be signed by a configured key.
 
 Hold both device buttons for two seconds to display an eight-lowercase-hex
 challenge for 30 seconds. A successful `POST /api/ota/session` claim returns a
@@ -25,6 +30,14 @@ The routes are `POST /api/ota/session`, `POST /api/ota`,
 must use one `Content-Length` and `application/octet-stream`; transfer encoding,
 multipart upload, ranges, and resume are unsupported.
 
+Successful upload and `Ready` status responses include the controller
+generation and staged payload digest. Apply requires the exact canonical JSON
+generation and digest selected by the operator; the device compares both with
+its retained Core session before activation.
+`GET /api/version` is a read-only, unauthenticated version probe used by the
+command-line client after reboot; it does not expose a capability or enable
+OTA.
+
 One controller worker is the only caller of Core staging methods. It keeps the
 Core session through `Ready` and activation, while the HTTP listener remains
 available for status and cancellation. `NetworkMaintenanceCoordinator` lets an
@@ -33,6 +46,15 @@ terminal. Capability expiry and address-generation changes cancel the matching
 session. A successful apply posts reboot only after the HTTP response attempt.
 An uncertain activation remains in fatal maintenance and requires ST-Link
 recovery.
+
+Successful upload and `Ready` status responses include the Core staging
+generation and lowercase payload SHA-256 digest. The command-line client
+requires both to match its locally verified package and sends both in the
+separate authenticated apply request.
+
+Build, verify, upload, activate, and confirm packages with the repository-owned
+host tool documented in
+[`tools/ota/README.md`](../../../../tools/ota/README.md).
 
 Compile the deterministic controller, authorization, lease, route, upload,
 apply, cancellation, expiry, and shutdown seams with:

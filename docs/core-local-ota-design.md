@@ -555,7 +555,7 @@ Suggested endpoints:
 | `POST /api/ota/session` | Submit the physically initiated, OLED-displayed challenge and atomically receive a capability. |
 | `POST /api/ota` | With the capability, stream one signed OTA package using `application/octet-stream`. |
 | `GET /api/ota/status` | With the capability, return state, accepted bytes, total bytes, and last error. |
-| `POST /api/ota/apply` | With the capability, activate a completely verified staged image. |
+| `POST /api/ota/apply` | With the capability and canonical generation/digest JSON, activate only that completely verified staged image. |
 | `DELETE /api/ota` | With the capability, request cancellation before activation. |
 
 The first version requires exactly one `Content-Length` header. After trimming
@@ -800,6 +800,16 @@ separate recovery and manufacturing review.
 6. Preserve the raw `.bin` and complete Flash image needed for ST-Link
    recovery.
 
+The repository-owned `tools/ota/ota_cli.py` implements the package builder,
+verifier, and trusted-LAN client. It checks the final raw image, exact
+descriptor copy, Core 3.1.2 vectors and layout, DER SPKI key identity, payload
+digest, and raw fixed-width signature. Test keys are generated only at test
+time. Build configuration, signing, upload, and apply enforce the immutable
+reviewed key-ID set in `tools/ota/production_key_ids.py`. Production remains
+fail-closed while that set is empty and until the wired bootstrap provisions
+the matching reviewed public key. Standalone verification accepts an explicit
+inspection key but cannot create, upload, or activate a package.
+
 The first OTA-capable HomeTemperature release must be installed through the
 wired ST-Link workflow. That trusted bootstrap installs the public key and local
 OTA implementation used to authenticate subsequent uploads. The wired release
@@ -826,6 +836,13 @@ cannot override this production gate.
 4. Add the command-line uploader before enabling the optional browser page.
 5. Keep activation separate from upload and require the job ID plus staged
    digest.
+
+The command-line uploader claims the physical challenge, verifies and uploads
+the raw package body with the capability header, checks that the live Ready
+generation matches the operator-selected generation and that the supplied
+digest matches the locally verified package, sends both expected values in the
+activation request, and confirms the expected version through the read-only
+`/api/version` probe after reboot.
 
 ### Phase 6: Validate and release
 
