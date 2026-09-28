@@ -36,7 +36,6 @@ private:
     static bool validBodylessRequest(const LocalHttpRequest &request);
     static bool readSmallBody(
         LocalHttpBodyStream &stream, char *body, size_t capacity, size_t &length);
-    static bool parseChallenge(const char *body, char challenge[9]);
     static bool parseApply(
         const char *body,
         uint32_t &generation,

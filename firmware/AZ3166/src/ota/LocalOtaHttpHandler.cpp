@@ -11,23 +11,18 @@ const char OTA_PAGE[] =
     "content=\"width=device-width\"><title>AZ3166 OTA</title><style>"
     "body{font:16px system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem}"
     "input,button{font:inherit;margin:.3rem;padding:.5rem}pre{white-space:pre-wrap}"
-    "</style><h1>AZ3166 Local OTA</h1><p>Hold both device buttons, then enter "
-    "the displayed challenge.</p><label>Challenge <input id=c maxlength=8 "
-    "placeholder=challenge></label><button onclick=claim()>Claim</button><br>"
-    "<label>Signed package <input id=f type=file></label>"
+    "</style><h1>AZ3166 Local OTA</h1><label>Signed package "
+    "<input id=f type=file></label>"
     "<button onclick=upload()>Upload</button><button onclick=apply()>Apply</button>"
-    "<pre id=o>Idle</pre><script>let k,g,d,v;const q=(p,x={})=>fetch(p,x).then("
+    "<pre id=o>Idle</pre><script>let g,d;const q=(p,x={})=>fetch(p,x).then("
     "async r=>{let j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j"
-    "}),h=()=>({Authorization:'OTA '+k});async function claim(){try{let j=await q("
-    "'/api/ota/session',{method:'POST',headers:{'Content-Type':'application/json'},"
-    "body:JSON.stringify({challenge:c.value})});k=j.capability;o.textContent='Armed'"
-    "}catch(e){o.textContent=e}}async function upload(){try{let j=await q("
-    "'/api/ota',{method:'POST',headers:{...h(),'Content-Type':"
+    "});async function upload(){try{let j=await q('/api/ota',{method:'POST',"
+    "headers:{'Content-Type':"
     "'application/octet-stream'},body:f.files[0]});g=j.generation;d=j.digest;"
     "o.textContent=JSON.stringify(j,null,2)}catch(e){o.textContent=e}}async function "
-    "apply(){try{let s=await q('/api/ota/status',{headers:h()});if(s.generation!==g"
+    "apply(){try{let s=await q('/api/ota/status');if(s.generation!==g"
     "||s.digest!==d)throw Error('staged image changed');await q('/api/ota/apply',"
-    "{method:'POST',headers:{...h(),'Content-Type':'application/json'},body:JSON."
+    "{method:'POST',headers:{'Content-Type':'application/json'},body:JSON."
     "stringify({generation:g,digest:d})});o.textContent='Rebooting';setTimeout("
     "check,1500)}catch(e){o.textContent=e}}async function check(){try{let j=await "
     "q('/api/version');o.textContent='Firmware '+j.firmwareVersion}catch(e){"
@@ -155,11 +150,6 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
         return json("400 Bad Request", "{\"error\":\"invalid request\"}",
                     body, bodySize);
     }
-    uint32_t generation;
-    if (!controller_.authorize(request, generation)) {
-        return json("401 Unauthorized", "{\"error\":\"unauthorized\"}",
-                    body, bodySize);
-    }
     if (exactRoute(request.requestLine, "GET", "/api/ota/status")) {
         LocalOtaSnapshot status = controller_.snapshot();
         uint32_t stagedGeneration = 0;
@@ -181,7 +171,7 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
             digest);
     }
     if (exactRoute(request.requestLine, "DELETE", "/api/ota")) {
-        if (!controller_.cancel(request)) {
+        if (!controller_.cancel()) {
             return json("409 Conflict", "{\"error\":\"cannot cancel\"}",
                         body, bodySize);
         }
@@ -193,8 +183,7 @@ LocalHttpResponse LocalOtaHttpHandler::handleRequest(
 }
 
 bool LocalOtaHttpHandler::handles(const char *requestLine) {
-    return exactRoute(requestLine, "POST", "/api/ota/session") ||
-        exactRoute(requestLine, "POST", "/api/ota") ||
+    return exactRoute(requestLine, "POST", "/api/ota") ||
         exactRoute(requestLine, "POST", "/api/ota/apply");
 }
 
@@ -220,19 +209,6 @@ bool LocalOtaHttpHandler::readSmallBody(
     return true;
 }
 
-bool LocalOtaHttpHandler::parseChallenge(
-    const char *body, char challenge[9]) {
-    static const char PREFIX[] = "{\"challenge\":\"";
-    if (body == NULL || strncmp(body, PREFIX, sizeof(PREFIX) - 1) != 0 ||
-        strlen(body) != sizeof(PREFIX) - 1 + 8 + 2 ||
-        strcmp(body + sizeof(PREFIX) - 1 + 8, "\"}") != 0) {
-        return false;
-    }
-
-    memcpy(challenge, body + sizeof(PREFIX) - 1, 8);
-    challenge[8] = '\0';
-    return true;
-}
 
 bool LocalOtaHttpHandler::parseApply(
     const char *body,
@@ -308,41 +284,6 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
         response.allowUnreadRequestBody = true;
         return response;
     }
-    if (exactRoute(request.requestLine, "POST", "/api/ota/session")) {
-        if (request.metadata.authorizationCount != 0 ||
-            request.contentLength > 64 ||
-            request.metadata.contentTypeCount != 1 ||
-            strcmp(request.metadata.contentType, "application/json") != 0) {
-            LocalHttpResponse response = json(
-                "400 Bad Request", "{\"error\":\"invalid claim\"}",
-                responseBody, responseBodySize);
-            response.allowUnreadRequestBody = true;
-            return response;
-        }
-        char requestBody[65];
-        size_t length;
-        char challenge[9];
-        char capability[33];
-        if (!readSmallBody(body, requestBody, sizeof(requestBody), length) ||
-            !parseChallenge(requestBody, challenge) ||
-            !controller_.claim(
-                challenge, request.metadata.peerAddress,
-                request.metadata.networkGeneration, capability)) {
-            return json("401 Unauthorized", "{\"error\":\"unauthorized\"}",
-                        responseBody, responseBodySize);
-        }
-        return json("201 Created", "{\"capability\":\"%s\"}",
-                    responseBody, responseBodySize, capability);
-    }
-
-    uint32_t generation;
-    if (!controller_.authorize(request.metadata, generation)) {
-        LocalHttpResponse response = json(
-            "401 Unauthorized", "{\"error\":\"unauthorized\"}",
-            responseBody, responseBodySize);
-        response.allowUnreadRequestBody = true;
-        return response;
-    }
     if (exactRoute(request.requestLine, "POST", "/api/ota/apply")) {
         if (request.contentLength > 128 ||
             request.metadata.contentTypeCount != 1 ||
@@ -370,7 +311,7 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
                         responseBody, responseBodySize);
         }
         OTAStagingError result;
-        if (!controller_.apply(request.metadata, result)) {
+        if (!controller_.apply(result)) {
             return json("409 Conflict", "{\"error\":\"not ready\"}",
                         responseBody, responseBodySize);
         }

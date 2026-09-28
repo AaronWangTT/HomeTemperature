@@ -39,7 +39,6 @@ static const unsigned long WIFI_RETRY_MAX_MS = 60000UL;
 static const unsigned long NTP_RETRY_INTERVAL_MS = 60000UL;
 
 static const unsigned long BUTTON_DEBOUNCE_INTERVAL_MS = 50UL;
-static const unsigned long OTA_BUTTON_HOLD_INTERVAL_MS = 2000UL;
 static const size_t OTA_MAX_PACKAGE_SIZE = 1000000UL;
 static const unsigned long OTA_UPLOAD_IDLE_TIMEOUT_MS = 5000UL;
 static const unsigned long OTA_UPLOAD_TOTAL_TIMEOUT_MS = 600000UL;

@@ -23,8 +23,8 @@ from a remote URL.
 Core 3.1.2 provides a transport-independent, streaming OTA staging API that
 writes a verified application image to the existing external Flash OTA
 partition and activates it through the existing bootloader contract.
-HomeTemperature should provide the local HTTP endpoint, physical authorization,
-product policy, progress reporting, and reboot coordination.
+HomeTemperature provides the trusted-LAN HTTP endpoint, product policy,
+progress reporting, and reboot coordination.
 
 The initial implementation must not replace the bootloader or claim rollback
 support. A failed update must remain recoverable through ST-Link.
@@ -151,56 +151,19 @@ to equal the digest of the configured trust anchor before admission.
 
 ## 5. Security Model
 
-A permanently available unauthenticated firmware endpoint is not acceptable,
-even on a trusted LAN. CRC16 is not a security control, and TLS alone would not
-prove that an uploaded image was authorized.
+The implemented trusted-LAN design intentionally has no physical gesture,
+OLED challenge, password, session exchange, or capability token. Any LAN
+client can invoke the OTA endpoints. This is an availability tradeoff: another
+LAN client can start or cancel work, so the service must not be exposed beyond
+the trusted local network.
 
-The proposed design requires both:
-
-1. **Physical presence:** the operator first holds both device buttons to open
-   a 30-second claim window. The device generates and displays an eight-digit
-   hexadecimal challenge on its OLED. The intended browser submits that
-   challenge and receives one five-minute OTA capability.
-2. **Signed firmware:** each package is signed offline. The firmware contains
-   only the public verification key; the private key must never be stored in
-   this repository or on the device.
-
-The challenge and confirmed session capability are generated through
-the Core's Mbed HAL `trng_init()`, `trng_get_bytes()`, and `trng_free()` API.
-The challenge uses 4 random bytes and the capability uses a separate 16 random
-bytes. Generation succeeds only when `trng_get_bytes()` returns zero and reports
-the complete requested length. Initialization failure, a short result, or any
-generator error rejects authorization and leaves OTA disabled; time values,
-`Arduino::random()`, device IDs, and partially filled output must never be used
-as fallback entropy.
-
-The capability is bound to the requesting local address and OTA generation,
-compared in constant time, and never logged. It remains valid across the normal
-HTTP connection closes between upload, status, and apply requests. It is
-invalidated on expiry, explicit cancel, successful activation, Wi-Fi/address
-generation change, or an abnormal disconnect before the upload reaches
-`Ready`. Every upload, detailed-status, apply, and cancel request requires that
-capability. The server emits no CORS permission for these routes and rejects
-conflicting `Host` or `Origin` values. Plain HTTP cannot prevent a local passive
-observer from stealing a capability, so the feature remains restricted to a
-trusted LAN.
-
-The wire representation is exactly:
-
-```http
-Authorization: OTA <32 lowercase hexadecimal characters>
-```
-
-The server accepts exactly one such header, decodes it to 16 bytes, and compares
-all bytes with the active capability in constant time. It rejects missing,
-duplicate, malformed, expired, wrong-address, or wrong-generation credentials
-with `401 Unauthorized` before reading an upload body or mutating OTA state.
-Capabilities are forbidden in URLs, cookies, request bodies, response bodies
-other than the successful claim, and logs. The browser retains the capability
-only in memory. The challenge is not a capability: it is displayed only after
-device-side physical initiation, accepted once from the first matching local
-request, hidden immediately after claim/expiry, and rate limited to three
-failed attempts per window.
+Firmware authenticity and compatibility do not depend on HTTP authorization.
+Each package is signed offline; the firmware contains only the reviewed public
+verification key, while the private key must never be stored in this repository
+or on the device. Core rejects packages that fail signature, product, board,
+version, bounds, vector-table, digest, or full Flash read-back validation.
+Activation additionally requires the caller-selected generation and digest to
+match the retained verified Core session.
 
 Core 3.1.2 enables and links the Mbed TLS SHA-256, ECP, ECDSA, bignum, ASN.1,
 OID, and public-key parsing modules needed for P-256 verification. Its
@@ -407,8 +370,7 @@ Exact names are not prescribed, but the Core implementation should own:
 - assigning a nonzero session generation and retaining the current staged
   generation and SHA-256 internally;
 - accepting activation only when the supplied generation and digest match the
-  Core's current `Ready` state, then consuming that capability so it cannot be
-  replayed;
+  Core's current `Ready` state;
 - writing and verifying boot-table activation metadata;
 - restoring and verifying the previous boot-table entry after any failed
   activation write, with a distinct uncertain result if restoration cannot be
@@ -469,19 +431,9 @@ upload request to its worker, query a snapshot, or enqueue cancel/apply
 commands. The dedicated OTA worker is the sole caller of the Core package
 session and the sole writer to OTA Flash and boot metadata.
 
-Only device-side initiation can open a claim window. The HTTP server cannot
-create or extend it. During that window, `POST /api/ota/session` accepts an exact
-JSON object containing the displayed challenge, subject to request-size and
-attempt limits. The first correct submission atomically closes the window,
-clears the display, binds the new capability to that request's source address
-and generation, and returns it. Wrong submissions reveal only authorization
-failure; no endpoint reports the challenge or whether another value was closer.
-
-The input layer adds a distinct simultaneous-button hold event for OTA
-initiation. That chord is consumed before the existing `uploadRequested` and
-`toggleUploadPause` events reach their cloud handlers. It opens a new challenge
-window only when OTA is idle; otherwise it follows an explicitly tested
-maintenance policy. A chord that is too short follows the normal button policy.
+The HTTP routes are always available while OTA is configured. Button A and
+button B retain only their cloud-upload and pause functions; there is no OTA
+button chord or display dependency.
 
 Before a cloud upload starts, the main loop atomically acquires a shared
 coordinator lease and marks the cloud operation in flight; it releases that
@@ -495,25 +447,21 @@ cancels the reservation without touching Flash.
 Cancellation sets a generation-bound flag under the controller mutex; only the
 OTA worker observes that flag and calls `abort()`. After `finish()` verifies
 staging and publishes `Ready`, the joinable OTA worker remains alive, owns the
-Core session, and waits on a bounded command signal. An authorized apply request
-queues the expected capability generation and digest plus a one-shot completion
-object; it does not change the state to `Applying`. When the worker receives the
-command, it reacquires the controller mutex and atomically revalidates the live
-capability bytes, source address, generation, deadline, cancellation state, and
-`Ready` digest immediately before claiming `Applying`. Expiry, cancellation, or
-network-generation invalidation clears or supersedes queued apply state and
-always wins that ordering.
+Core session, and waits on a bounded command signal. An apply request carries
+the expected generation and digest; the handler compares both with the retained
+`Ready` image before queuing a one-shot completion object. The worker
+revalidates generation and cancellation state immediately before claiming
+`Applying`.
 
 The worker then calls `activate()`, publishes success, verified failure, or
-uncertain state, signals the completion object, and only then exits. An
-authorized cancel request wakes it to abort and exit. HTTP handlers never call
-Core session methods.
+uncertain state, signals the completion object, and only then exits. A cancel
+request wakes it to abort and exit. HTTP handlers never call Core session
+methods.
 
-Capability expiry and Wi-Fi/address generation changes enqueue the same
-generation-bound cancellation signal, including while the worker waits in
-`Ready`. The worker wakes, calls `abort()`, clears staged `Ready` state and
-capability material, releases the exclusive network lease, and exits. Stale
-timeout or network events from an older generation cannot cancel a newer
+Wi-Fi/address generation changes enqueue the same generation-bound cancellation
+signal, including while the worker waits in `Ready`. The worker wakes, calls
+`abort()`, clears staged `Ready` state, releases the exclusive network lease,
+and exits. Stale network events from an older generation cannot cancel a newer
 session.
 
 The apply handler waits outside all mutexes on the completion object with a
@@ -538,7 +486,7 @@ follows the same bootloader path and applies the already authenticated staged
 image.
 
 A verified activation failure restores and confirms the previous boot-table
-entry, clears the staged image/session and capability, releases the lease, does
+entry, clears the staged image/session, releases the lease, does
 not schedule reboot, and requires a new upload before another activation
 attempt. `OTA_ACTIVATION_UNCERTAIN` instead enters a fatal
 maintenance state: cloud and OTA mutations remain disabled, no success or
@@ -551,12 +499,11 @@ Suggested endpoints:
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /ota` | Serve the upload page; mutations remain disabled until a displayed challenge is claimed. |
-| `POST /api/ota/session` | Submit the physically initiated, OLED-displayed challenge and atomically receive a capability. |
-| `POST /api/ota` | With the capability, stream one signed OTA package using `application/octet-stream`. |
-| `GET /api/ota/status` | With the capability, return state, accepted bytes, total bytes, and last error. |
-| `POST /api/ota/apply` | With the capability and canonical generation/digest JSON, activate only that completely verified staged image. |
-| `DELETE /api/ota` | With the capability, request cancellation before activation. |
+| `GET /ota` | Serve the trusted-LAN upload page. |
+| `POST /api/ota` | Stream one signed OTA package using `application/octet-stream`. |
+| `GET /api/ota/status` | Return state, accepted bytes, total bytes, digest, and last error. |
+| `POST /api/ota/apply` | With canonical generation/digest JSON, activate only that completely verified staged image. |
+| `DELETE /api/ota` | Request cancellation before activation. |
 
 The first version requires exactly one `Content-Length` header. After trimming
 optional surrounding HTTP whitespace, its value must be a nonempty sequence of
@@ -703,20 +650,10 @@ separate recovery and manufacturing review.
 
 ### HomeTemperature tests
 
-- OTA routes are unavailable outside the physical authorization window;
-- only a device-side button chord opens a challenge window;
-- the OLED challenge is random, time limited, rate limited, single use, and
-  never exposed by another endpoint or log;
-- the first correct challenge submission receives a source-bound capability;
-- the OTA initiation chord is consumed before cloud button actions;
-- TRNG initialization, generation, and short-output failures fail closed;
-- capability expiry, source binding, constant-time comparison, and replay
-  rejection work as specified;
-- expiry and Wi-Fi/address generation changes wake a `Ready` worker, clear the
+- Wi-Fi/address generation changes wake a `Ready` worker, clear the
   staged session, release the lease, and cannot cancel a newer generation;
-- capabilities are rejected in query strings, cookies, and bodies, and missing,
-  duplicate, or malformed authorization headers fail before body reads;
-- the authorization window expires and permits only one update;
+- public trusted-LAN routes preserve exact methods, paths, framing, and
+  same-origin browser checks;
 - malformed HTTP requests and unsupported transfer encodings are rejected;
 - missing, duplicate, conflicting, malformed, overflowing, undersized, and
   oversized `Content-Length` fields fail before request ownership transfer;
@@ -735,7 +672,7 @@ separate recovery and manufacturing review.
   thread-safe backend and independent fake backends;
 - shutdown during every Flash, hash, signature, Ready-wait, and activation step
   completes within the published primitive and join bounds;
-- normal connection close after a completed upload preserves the capability
+- normal connection close after a completed upload preserves the staged session
   through the separate apply or cancel request;
 - the response completes before reboot;
 - successful activation schedules reboot after the response attempt even when
@@ -831,14 +768,12 @@ cannot override this production gate.
 ### Phase 5: Integrate HomeTemperature
 
 1. Add the OTA controller, status model, and exact routes.
-2. Add the physical authorization gesture and expiration window.
-3. Coordinate OTA with cloud uploads, discovery, and reboot.
-4. Add the command-line uploader before enabling the optional browser page.
-5. Keep activation separate from upload and require the job ID plus staged
+2. Coordinate OTA with cloud uploads, discovery, and reboot.
+3. Add the command-line uploader before enabling the optional browser page.
+4. Keep activation separate from upload and require the job ID plus staged
    digest.
 
-The command-line uploader claims the physical challenge, verifies and uploads
-the raw package body with the capability header, checks that the live Ready
+The command-line uploader verifies and uploads the raw package body, checks that the live Ready
 generation matches the operator-selected generation and that the supplied
 digest matches the locally verified package, sends both expected values in the
 activation request, and confirms the expected version through the read-only

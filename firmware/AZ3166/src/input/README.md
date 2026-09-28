@@ -11,7 +11,7 @@ mapping.
 | --- | --- |
 | [ButtonDebouncer.h](ButtonDebouncer.h) | Track raw and stable pressed states and emit an edge after the debounce interval. |
 | [ButtonController.h](ButtonController.h) | Sample two active-low pins and return application-facing button events. |
-| `ButtonEvents` | Report `uploadRequested`, `toggleUploadPause`, or a consumed `otaRequested` chord. |
+| `ButtonEvents` | Report `uploadRequested` and `toggleUploadPause`. |
 
 ### ButtonDebouncer
 
@@ -31,10 +31,8 @@ inputs and records their initial levels. `update()` reads GPIO and `millis()`;
 `updateFromInputs()` accepts already-normalized pressed states and a timestamp.
 
 The controller reports events but does not call the cloud uploader. The
-application decides how those events affect scheduling. Holding both buttons
-for the configured OTA interval emits one `otaRequested` event and consumes the
-cloud upload/pause actions. If the chord is released before that interval, the
-deferred individual press events are emitted instead.
+application decides how those events affect scheduling. Simultaneous presses
+preserve both normal button actions; there is no special OTA chord.
 
 ## Reuse in Another Sketch
 

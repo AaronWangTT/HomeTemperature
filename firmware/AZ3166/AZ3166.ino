@@ -38,12 +38,8 @@ LocalDiscovery localDiscovery(
 TelemetryHttpHandler telemetryHttpHandler(telemetryService);
 NetworkMaintenanceCoordinator networkMaintenance;
 Az3166OtaCore otaCore;
-Az3166OtaEntropy otaEntropy;
-Az3166OtaDisplay otaDisplay;
 LocalOtaController otaController(
     otaCore,
-    otaEntropy,
-    otaDisplay,
     networkMaintenance,
     HOME_TEMPERATURE_OTA_PUBLIC_KEY_DER,
     HOME_TEMPERATURE_OTA_PUBLIC_KEY_DER_SIZE,
@@ -86,8 +82,7 @@ CloudUploadController cloudUploads(
 ButtonController buttons(
     USER_BUTTON_A,
     USER_BUTTON_B,
-    AppConfig::BUTTON_DEBOUNCE_INTERVAL_MS,
-    AppConfig::OTA_BUTTON_HOLD_INTERVAL_MS);
+    AppConfig::BUTTON_DEBOUNCE_INTERVAL_MS);
 ConnectivityManager connectivity(
     AppConfig::WIFI_STATUS_INTERVAL_MS,
     AppConfig::WIFI_RETRY_INITIAL_MS,
@@ -101,10 +96,6 @@ OtaRebootCoordinator otaReboot(AppConfig::OTA_REBOOT_DELAY_MS);
 // Event handlers for button and connectivity events
 // Event driven as next step
 void handleButtonEvents(const ButtonEvents &events) {
-    if (events.otaRequested) {
-        otaController.openChallenge();
-        return;
-    }
     if (events.uploadRequested) {
         cloudUploads.requestManualUpload();
     }
