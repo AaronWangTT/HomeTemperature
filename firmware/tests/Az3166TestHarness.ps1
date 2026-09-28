@@ -38,6 +38,18 @@ function Invoke-Az3166TestSuite {
     if ($Action -eq "Run" -and [string]::IsNullOrWhiteSpace($Port)) {
         throw "Run requires an explicit ST-Link port, for example: -Port COM3"
     }
+    if (
+        $Action -eq "Run" -and
+        $env:HOME_TEMPERATURE_STLINK_SERIAL -notmatch "^[0-9A-Fa-f]{24}$"
+    ) {
+        throw "Run requires HOME_TEMPERATURE_STLINK_SERIAL as exactly 24 hexadecimal characters."
+    }
+    if (
+        $Action -eq "Run" -and
+        $env:HOME_TEMPERATURE_STLINK_SERIAL -notmatch "^[0-9A-Fa-f]{24}$"
+    ) {
+        throw "Run requires HOME_TEMPERATURE_STLINK_SERIAL as exactly 24 hexadecimal characters."
+    }
 
     $invokeBuild = {
         param(
@@ -54,11 +66,6 @@ function Invoke-Az3166TestSuite {
             $Sketch -eq $productionSketch
         )
         if ($restoringProduction) {
-            if ([string]::IsNullOrWhiteSpace(
-                $env:HOME_TEMPERATURE_STLINK_SERIAL
-            )) {
-                throw "Production restore requires environment variable HOME_TEMPERATURE_STLINK_SERIAL."
-            }
             $arguments.StLinkSerial = $env:HOME_TEMPERATURE_STLINK_SERIAL
         } elseif (-not [string]::IsNullOrWhiteSpace($Port)) {
             $arguments.Port = $Port
