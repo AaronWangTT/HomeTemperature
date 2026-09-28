@@ -9,10 +9,10 @@
 namespace {
 
 const uint32_t IO_TIMEOUT_MS = 2000UL;
-const uint32_t WORKER_STACK_SIZE = 6144;
-const uint32_t STREAMING_WORKER_STACK_SIZE = 6144;
+const uint32_t WORKER_STACK_SIZE = 8192;
+const uint32_t STREAMING_WORKER_STACK_SIZE = 8192;
 const size_t REQUEST_LINE_SIZE = 96;
-const size_t RESPONSE_BODY_SIZE = 512;
+const size_t RESPONSE_BODY_SIZE = 3072;
 const size_t MAX_HEADER_BYTES = 2048;
 
 bool asciiEqualIgnoreCase(const char *value, size_t length, const char *expected) {

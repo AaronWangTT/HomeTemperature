@@ -343,6 +343,19 @@ void testAuthorizationLeaseUploadRoutesAndApply() {
 
     FallbackHandler fallback;
     LocalOtaHttpHandler handler(fallback, controller);
+    char pageBody[3072];
+    LocalHttpRequest page = makeRequest("GET /ota HTTP/1.1", "", 0);
+    LocalHttpResponse pageResponse =
+        handler.handleRequest(page, pageBody, sizeof(pageBody));
+    expect(strcmp(pageResponse.status, "200 OK") == 0 &&
+               strcmp(pageResponse.contentType, "text/html; charset=utf-8") == 0 &&
+               strstr(pageBody, "AZ3166 Local OTA") != NULL &&
+               strstr(pageBody, "/api/ota/apply") != NULL,
+           "OTA page exposes the same-origin signed upload workflow");
+    page.requestLine = "GET /ota?unsafe=1 HTTP/1.1";
+    pageResponse = handler.handleRequest(page, pageBody, sizeof(pageBody));
+    expect(strcmp(pageResponse.status, "404 Not Found") == 0,
+           "OTA page rejects query-string route aliases");
     expect(handler.handles("POST /api/ota HTTP/1.1") &&
                handler.handles("POST /api/ota/session HTTP/1.1") &&
                handler.handles("POST /api/ota/apply HTTP/1.1") &&

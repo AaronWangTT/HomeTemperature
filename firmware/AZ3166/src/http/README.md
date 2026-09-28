@@ -166,11 +166,12 @@ constructor argument to connect an existing discovery object. See the
 ## Limits and Dependencies
 
 - AZ3166 Core 3.1.2, Mbed RTOS, and lwIP are required by the default backend.
-- Ordinary clients are handled one at a time. Configuring streaming adds one
-  6144-byte worker stack and permits one body request concurrently with bounded
-  listener requests; it does not permit concurrent body uploads.
+- The listener worker has an 8192-byte stack and handles ordinary clients one
+  at a time. Configuring streaming adds a second 8192-byte worker stack and
+  permits one body request concurrently with bounded listener requests; it does
+  not permit concurrent body uploads.
 - Request line: 96 bytes; total request headers: 2048 bytes; `Authorization`:
-  63 bytes; `Host`: 127 bytes; `Origin`: 255 bytes; response body: 512 bytes;
+  63 bytes; `Host`: 127 bytes; `Origin`: 255 bytes; response body: 3072 bytes;
   prefetched body: at most 128 bytes. Header reads and response writes each have
   a two-second deadline. Body size, idle deadline, and total deadline are
   explicit constructor limits.
@@ -195,6 +196,10 @@ From the repository root, compile the focused suite:
 The suite covers routing adapters, worker execution, listener lifecycle,
 callback binding, request metadata, peer lookup, prefetched bodies, partial I/O,
 binary responses, bounds, timeouts, and cleanup.
+The production and focused sketches compile with both 8192-byte HTTP worker
+stacks and the 3072-byte response arrays; production currently remains below
+41% Flash and 22% global RAM. Compile-only validation does not measure runtime
+stack high-water marks, which remain part of hardware acceptance.
 Board runs use `-Action Run -Port COMx` with the detected ST-Link port and restore
 production afterward. Do not treat a compile-only result as a runtime pass.
 

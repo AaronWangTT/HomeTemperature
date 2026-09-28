@@ -844,6 +844,11 @@ digest matches the locally verified package, sends both expected values in the
 activation request, and confirms the expected version through the read-only
 `/api/version` probe after reboot.
 
+The optional `/ota` page is a same-origin client of these same endpoints. It
+does not parse, sign, buffer, or otherwise create a second firmware staging
+path; package authenticity and device-side generation/digest binding remain
+enforced by the existing API and Core staging engine.
+
 ### Phase 6: Validate and release
 
 1. Run Core unit and hardware tests.
