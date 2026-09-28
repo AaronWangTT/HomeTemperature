@@ -389,6 +389,17 @@ class CliTests(unittest.TestCase):
             "Production Upload requires -OtaPublicKey, -FirmwareVersion, and -SourceCommit.",
             script,
         )
+        self.assertIn('$Action -eq "Upload" -or $Action -eq "Restore"', script)
+        self.assertIn("trap {", script)
+
+    def test_hardware_harness_uses_fail_closed_restore_action(self) -> None:
+        harness = (
+            Path(__file__).resolve().parents[3]
+            / "firmware"
+            / "tests"
+            / "Az3166TestHarness.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('& $invokeBuild "Restore" $productionSketch', harness)
 
     def test_rejects_noncanonical_apply_digest(self) -> None:
         digest = hashlib.sha256(self.package.read_bytes()[384:]).hexdigest().upper()

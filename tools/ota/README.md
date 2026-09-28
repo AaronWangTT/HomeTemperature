@@ -72,6 +72,11 @@ The wrapper generates the configuration from the public key and release
 metadata, requires its descriptor key ID to be allowlisted, and uses
 `-StLinkSerial` to select the exact probe.
 
+Hardware test runners use the separate `Restore` action after an on-board
+suite. It compiles and validates the repository's default fail-closed,
+OTA-disabled production firmware before restoring it through the attached
+ST-Link; it cannot provision or enable an OTA trust key.
+
 Build a signed package:
 
 ```powershell
