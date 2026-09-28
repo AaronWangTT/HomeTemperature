@@ -1416,12 +1416,12 @@ void testStreamingRequestMetadata() {
     fakeMutex.lock();
     bool malformedDuplicateMetadata =
         fake.streamingAuthorizationStatus == LOCAL_HTTP_METADATA_MALFORMED &&
-        fake.streamingHostStatus == LOCAL_HTTP_METADATA_MALFORMED &&
+        fake.streamingHostStatus == LOCAL_HTTP_METADATA_DUPLICATE &&
         fake.streamingAuthorization[0] == '\0' &&
         fake.streamingHost[0] == '\0';
     fakeMutex.unlock();
     expect(malformedDuplicateMetadata,
-           "empty and control-bearing duplicates clear valid stored metadata");
+           "empty and control-bearing duplicates remain non-valid and clear stored metadata");
 }
 
 void testLegacyRouteFramingCompatibility() {
