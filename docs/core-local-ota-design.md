@@ -662,7 +662,8 @@ separate recovery and manufacturing review.
 - disconnect and cancellation are handled by the upload worker without
   cross-thread Core session calls;
 - the joinable OTA worker retains Core session ownership while waiting in
-  `Ready`, executes apply/cancel commands, and exits only at a terminal state;
+  `Ready`, executes apply/cancel commands, and remains available until orderly
+  server shutdown;
 - concurrent listener and OTA socket operations pass with the production
   thread-safe backend and independent fake backends;
 - shutdown during every Flash, hash, signature, Ready-wait, and activation step
@@ -672,6 +673,8 @@ separate recovery and manufacturing review.
 - the response completes before reboot;
 - successful activation schedules reboot after the response attempt even when
   that response fails or the client disconnects;
+- a successful activation latches the reboot request and rejects new uploads
+  until reset, including during the delayed-reboot window;
 - verified activation failure restores the prior boot entry and clears the
   staged session before permitting a new upload, while an uncertain activation
   enters fatal maintenance and blocks release;

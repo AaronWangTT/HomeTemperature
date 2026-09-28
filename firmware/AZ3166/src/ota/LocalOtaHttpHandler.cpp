@@ -35,7 +35,8 @@ const char OTA_PAGE[] =
     "check,1500)}catch(e){o.textContent=e}}async function check(){try{let j=await "
     "q('/api/version');if(j.firmwareVersion!==old){o.textContent='Firmware '+j."
     "firmwareVersion;return}let s=await q('/api/ota/status');if(['Error','Fatal']"
-    ".includes(s.state)){o.textContent=s.lastError||s.state;return}}catch(e){if("
+    ".includes(s.state)){o.textContent=s.lastError||s.state;return}if(s.state==="
+    "'Applying')o.textContent='Applying and writing boot metadata…'}catch(e){if("
     "Date.now()>until){o.textContent='Update check timed out: '+e;return}}if(Date."
     "now()>until){o.textContent='Update check timed out';return}setTimeout(check,"
     "1500)}</script>";

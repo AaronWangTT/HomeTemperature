@@ -103,7 +103,7 @@ bool LocalOtaController::upload(
         std::lock_guard<rtos::Mutex> lock(mutex_);
         if ((state_ != LOCAL_OTA_IDLE && state_ != LOCAL_OTA_ERROR) ||
             request.contentLength < OTA_PACKAGE_PAYLOAD_OFFSET + 1 ||
-            command_ != WORKER_NONE) {
+            command_ != WORKER_NONE || rebootPending_) {
             return false;
         }
         ++generation_;
@@ -256,9 +256,7 @@ void LocalOtaController::responseAttempted(bool) {
 
 bool LocalOtaController::takeRebootRequest() {
     std::lock_guard<rtos::Mutex> lock(mutex_);
-    bool pending = rebootPending_;
-    rebootPending_ = false;
-    return pending;
+    return rebootPending_;
 }
 
 int LocalOtaController::admit(

@@ -355,9 +355,13 @@ void testLeaseUploadRoutesAndApply() {
                core.activates == 0 && response.afterAttempt != NULL,
            "apply returns 202 before boot metadata persistence begins");
     response.afterAttempt(false, response.afterAttemptContext);
-    expect(waitForState(controller, LOCAL_OTA_IDLE) &&
-               core.activates == 1 && controller.takeRebootRequest(),
+    expect(waitForState(controller, LOCAL_OTA_IDLE) && core.activates == 1 &&
+               controller.takeRebootRequest(),
            "response completion releases activation and posts reboot");
+    FakeBody replacementBody(385);
+    expect(!controller.upload(uploadRequest, replacementBody) &&
+               controller.takeRebootRequest(),
+           "committed activation blocks uploads until reset");
     expect(network.tryBeginCloud(),
            "terminal activation releases the network lease");
     network.endCloud();
