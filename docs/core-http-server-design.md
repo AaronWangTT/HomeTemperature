@@ -130,16 +130,16 @@ that:
 
 `LocalHttpHandler`, `LocalHttpResponse`, and `TelemetryHttpHandler` should remain
 application-owned so telemetry behavior stays independent of the transport.
-The application should retain its 512-byte response limit, exact
+The application retains a bounded 3072-byte response limit, exact
 `Content-Length`, `Connection: close`, and current 200, 400, 404, 500, and 503
 response behavior.
 
 ## 6. Compatibility and Resources
 
 Core 3.1.2 uses a singleton HTTPD, fixed port 80, and an 8192-byte worker stack.
-HomeTemperature currently uses one configurable listener and a 6144-byte worker
-stack. Before adoption, compare linked flash, `.data`, `.bss`, heap low-water
-mark, and worker stack usage.
+HomeTemperature currently uses one configurable listener plus separate
+listener and streaming workers with 8192-byte stacks. Before adoption, compare
+linked flash, `.data`, `.bss`, heap low-water mark, and worker stack usage.
 
 The first enhanced Core release may remain single-instance, but that limitation
 must be explicit. Duplicate route registration, unregister, stop, restart, and

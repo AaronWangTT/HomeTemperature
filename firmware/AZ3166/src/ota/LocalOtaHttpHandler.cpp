@@ -21,9 +21,9 @@ const char OTA_PAGE[] =
     "}),h=()=>({Authorization:'OTA '+k});async function claim(){try{let j=await q("
     "'/api/ota/session',{method:'POST',headers:{'Content-Type':'application/json'},"
     "body:JSON.stringify({challenge:c.value})});k=j.capability;o.textContent='Armed'"
-    "}catch(e){o.textContent=e}}async function upload(){try{let b=await f.files[0]"
-    ".arrayBuffer(),j=await q('/api/ota',{method:'POST',headers:{...h(),"
-    "'Content-Type':'application/octet-stream'},body:b});g=j.generation;d=j.digest;"
+    "}catch(e){o.textContent=e}}async function upload(){try{let j=await q("
+    "'/api/ota',{method:'POST',headers:{...h(),'Content-Type':"
+    "'application/octet-stream'},body:f.files[0]});g=j.generation;d=j.digest;"
     "o.textContent=JSON.stringify(j,null,2)}catch(e){o.textContent=e}}async function "
     "apply(){try{let s=await q('/api/ota/status',{headers:h()});if(s.generation!==g"
     "||s.digest!==d)throw Error('staged image changed');await q('/api/ota/apply',"
@@ -32,6 +32,10 @@ const char OTA_PAGE[] =
     "check,1500)}catch(e){o.textContent=e}}async function check(){try{let j=await "
     "q('/api/version');o.textContent='Firmware '+j.firmwareVersion}catch(e){"
     "setTimeout(check,1500)}}</script>";
+
+static_assert(
+    sizeof(OTA_PAGE) <= 3072,
+    "OTA page exceeds the bounded HTTP response buffer");
 
 }
 
