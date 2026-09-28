@@ -405,13 +405,19 @@ public:
                 idleWaiting_ = true;
                 idleWaitStarted_ = receiveStarted;
             }
-            if (completed - idleWaitStarted_ >= limits_.idleTimeoutMs) {
+            if (completed - started_ >= limits_.totalTimeoutMs ||
+                completed - idleWaitStarted_ >= limits_.idleTimeoutMs) {
                 return LOCAL_HTTP_BODY_TIMEOUT;
             }
             rtos::Thread::wait(1);
-            return server_.isStreamingCurrent(generation_)
-                ? LOCAL_HTTP_BODY_DATA
-                : LOCAL_HTTP_BODY_CANCELLED;
+            if (!server_.isStreamingCurrent(generation_)) {
+                return LOCAL_HTTP_BODY_CANCELLED;
+            }
+            uint32_t afterWait = operations_.currentTime();
+            return afterWait - started_ >= limits_.totalTimeoutMs ||
+                   afterWait - idleWaitStarted_ >= limits_.idleTimeoutMs
+                ? LOCAL_HTTP_BODY_TIMEOUT
+                : LOCAL_HTTP_BODY_DATA;
         }
         if (static_cast<size_t>(count) > capacity ||
             static_cast<size_t>(count) > remaining_) {

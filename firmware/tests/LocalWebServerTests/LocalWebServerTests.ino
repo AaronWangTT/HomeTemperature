@@ -1704,6 +1704,24 @@ void testStreamingFaultsAndGenerationCancellation() {
         resetHttpPlatform();
         ExampleHandler handler;
         ExampleStreamingHandler streamingHandler;
+        LocalHttpStreamingLimits limits = {64, 5000, 1500};
+        LocalWebServer server(
+            handler, streamingHandler, limits, 8080, 5000, httpOperations());
+        server.update(true, 0xC0000201UL);
+        fakeMutex.lock();
+        fake.receiveStep = 2000;
+        fakeMutex.unlock();
+        const char stalled[] =
+            "POST /stream HTTP/1.1\r\nContent-Length: 3\r\n\r\n";
+        queueRequest(stalled, sizeof(stalled) - 1);
+        expect(waitForStreamingStatus(LOCAL_HTTP_BODY_TIMEOUT),
+               "zero-byte reads enforce the total deadline immediately");
+    }
+
+    {
+        resetHttpPlatform();
+        ExampleHandler handler;
+        ExampleStreamingHandler streamingHandler;
         LocalHttpStreamingLimits limits = {64, 1000, 10000};
         LocalWebServer server(
             handler, streamingHandler, limits, 8080, 5000, httpOperations());
