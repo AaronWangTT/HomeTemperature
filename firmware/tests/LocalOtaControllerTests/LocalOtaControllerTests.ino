@@ -46,7 +46,7 @@ public:
         strcpy(metadata.productId, "HomeTemperature");
         strcpy(metadata.boardId, "MXCHIP_AZ3166");
         strcpy(metadata.firmwareVersion, "1.0.1");
-        return admission(&metadata, context) == 0
+        return admission(&metadata, context) != 0
             ? OTA_OK : OTA_ERROR_ADMISSION_REJECTED;
     }
     OTAStagingError write(const uint8_t *, size_t) override {
