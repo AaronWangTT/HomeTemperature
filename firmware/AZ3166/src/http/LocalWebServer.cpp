@@ -76,7 +76,7 @@ bool copySecurityHeader(
            (value[length - 1] == ' ' || value[length - 1] == '\t')) {
         --length;
     }
-    if (length >= capacity) {
+    if (status == LOCAL_HTTP_METADATA_TOO_LONG || length >= capacity) {
         status = LOCAL_HTTP_METADATA_TOO_LONG;
         destination[0] = '\0';
         destinationLength = 0;
@@ -84,6 +84,8 @@ bool copySecurityHeader(
     }
     if (length == 0) {
         status = LOCAL_HTTP_METADATA_MALFORMED;
+        destination[0] = '\0';
+        destinationLength = 0;
         return true;
     }
     if (status != LOCAL_HTTP_METADATA_ABSENT) {
@@ -96,6 +98,8 @@ bool copySecurityHeader(
         unsigned char current = static_cast<unsigned char>(value[index]);
         if ((current < 32 && current != '\t') || current >= 127) {
             status = LOCAL_HTTP_METADATA_MALFORMED;
+            destination[0] = '\0';
+            destinationLength = 0;
             return true;
         }
     }

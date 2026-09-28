@@ -1327,7 +1327,9 @@ void testStreamingRequestMetadata() {
     bool malformedMetadata =
         fake.streamingAuthorizationStatus == LOCAL_HTTP_METADATA_MALFORMED &&
         fake.streamingHostStatus == LOCAL_HTTP_METADATA_MALFORMED &&
-        fake.streamingOriginStatus == LOCAL_HTTP_METADATA_MALFORMED;
+        fake.streamingOriginStatus == LOCAL_HTTP_METADATA_MALFORMED &&
+        fake.streamingAuthorization[0] == '\0' &&
+        fake.streamingHost[0] == '\0' && fake.streamingOrigin[0] == '\0';
     fakeMutex.unlock();
     expect(malformedMetadata,
            "empty and control-bearing security headers are marked malformed");
@@ -1383,6 +1385,24 @@ void testStreamingRequestMetadata() {
                outputContains("HTTP/1.1 400 Bad Request") &&
                fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 4,
            "over-capacity duplicate security headers are rejected before dispatch");
+
+    const char overlengthFirstPrefix[] =
+        "POST /stream HTTP/1.1\r\nAuthorization: ";
+    offset = sizeof(overlengthFirstPrefix) - 1;
+    memcpy(duplicateOverlength, overlengthFirstPrefix, offset);
+    memset(duplicateOverlength + offset, 'a',
+           LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY);
+    offset += LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY;
+    const char shorterDuplicateSuffix[] =
+        "\r\nAuthorization: second\r\nContent-Length: 0\r\n\r\n";
+    memcpy(duplicateOverlength + offset, shorterDuplicateSuffix,
+           sizeof(shorterDuplicateSuffix) - 1);
+    offset += sizeof(shorterDuplicateSuffix) - 1;
+    queueRequest(duplicateOverlength, offset);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 7) &&
+               outputContains("HTTP/1.1 400 Bad Request") &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 4,
+           "a shorter duplicate cannot overwrite an over-capacity rejection");
 }
 
 void testLegacyRouteFramingCompatibility() {
