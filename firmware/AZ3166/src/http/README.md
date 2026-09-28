@@ -78,10 +78,12 @@ Existing `LocalHttpHandler` implementations remain request-line handlers. To
 accept a bounded body without buffering it in RAM, also implement
 `LocalHttpStreamingHandler` and use a streaming constructor with explicit
 `LocalHttpStreamingLimits`. `handles()` selects body routes on the listener
-worker. A selected request requires exactly one canonical decimal
-`Content-Length`; duplicate or malformed lengths, any `Transfer-Encoding`,
-lengths over `maxContentLength`, and prefetched bytes beyond the declared length
-are rejected before ownership transfer.
+worker. A selected request requires CRLF framing and exactly one canonical
+decimal `Content-Length`; duplicate or malformed lengths, any
+`Transfer-Encoding`, lengths over `maxContentLength`, and prefetched bytes
+beyond the declared length are rejected before ownership transfer. Existing
+request-line handlers retain the legacy LF-only framing accepted before body
+streaming was added.
 
 The listener transfers the accepted socket and all bytes already read after
 `\r\n\r\n` to one joinable streaming worker. `LocalHttpBodyStream::read()`

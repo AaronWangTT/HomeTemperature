@@ -292,9 +292,11 @@ struct FakeHttpPlatform {
     int handlerMode;
     int streamingHandlerCount;
     int streamingReadStatus;
+    int receiveCount;
     int receiveStep;
     int receiveDuration;
     size_t receiveDurationStartOffset;
+    size_t firstReceiveLength;
     int sendStep;
     size_t receiveChunkSize;
     size_t streamedLength;
@@ -434,6 +436,7 @@ int FakeLocalWebServerOperations::acceptClient(int) {
 
 int FakeLocalWebServerOperations::receiveBytes(int, char *buffer, size_t size) {
     fakeMutex.lock();
+    ++fake.receiveCount;
     if (fake.inputOffset >= fake.receiveDurationStartOffset) {
         fake.now += fake.receiveDuration;
     }
@@ -441,6 +444,9 @@ int FakeLocalWebServerOperations::receiveBytes(int, char *buffer, size_t size) {
     size_t received = remaining < size ? remaining : size;
     if (received > fake.receiveChunkSize) {
         received = fake.receiveChunkSize;
+    }
+    if (fake.receiveCount == 1) {
+        fake.firstReceiveLength = received;
     }
     memcpy(buffer, fake.input + fake.inputOffset, received);
     fake.inputOffset += received;
@@ -1110,10 +1116,12 @@ void testStreamingFramingAndPrefetchedBody() {
     bool preserved = fake.streamingHandlerCount == 1 &&
         fake.streamingReadStatus == LOCAL_HTTP_BODY_COMPLETE &&
         fake.streamedLength == 6 &&
-        memcmp(fake.streamedBody, "abcdef", 6) == 0;
+        memcmp(fake.streamedBody, "abcdef", 6) == 0 &&
+        fake.receiveCount == 1 &&
+        fake.firstReceiveLength == sizeof(prefetched) - 1;
     fakeMutex.unlock();
     expect(preserved,
-           "body bytes prefetched with the header are delivered before socket reads");
+           "one receive containing headers and body transfers only the prefetched body");
 
     const char *invalidRequests[] = {
         "POST /stream HTTP/1.1\r\nHost: example\r\n\r\n",
@@ -1184,6 +1192,25 @@ void testLegacyRouteFramingCompatibility() {
                fakeCount(&FakeHttpPlatform::handlerCount) == 2 &&
                fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 0,
            "legacy handlers remain isolated from streaming-only framing rules");
+
+    fakeMutex.lock();
+    fake.receiveStep = 1000;
+    fakeMutex.unlock();
+    const char lfOnly[] =
+        "GET /example HTTP/1.1\nHost: example\n\n";
+    queueRequest(lfOnly, sizeof(lfOnly) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 3) &&
+               outputContains("HTTP/1.1 200 OK") &&
+               fakeCount(&FakeHttpPlatform::handlerCount) == 3,
+           "legacy handlers retain LF-only request framing compatibility");
+
+    const char streamingLfOnly[] =
+        "POST /stream HTTP/1.1\nContent-Length: 3\n\nabc";
+    queueRequest(streamingLfOnly, sizeof(streamingLfOnly) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 4) &&
+               outputContains("HTTP/1.1 400 Bad Request") &&
+               fakeCount(&FakeHttpPlatform::streamingHandlerCount) == 0,
+           "streaming routes still require canonical CRLF framing");
 }
 
 void testStreamingFaultsAndGenerationCancellation() {

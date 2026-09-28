@@ -795,6 +795,7 @@ bool LocalWebServer::readRequest(
     size_t requestLineLength = 0;
     bool requestLineComplete = false;
     bool requestLineCarriageReturn = false;
+    bool canonicalFraming = true;
 
     while (isCurrent(generation) &&
            operations_.currentTime() - requestStart < IO_TIMEOUT_MS) {
@@ -810,23 +811,31 @@ bool LocalWebServer::readRequest(
                 return false;
             }
             receivedBytes[receivedLength++] = current;
+            if (current == '\n' &&
+                (receivedLength < 2 ||
+                 receivedBytes[receivedLength - 2] != '\r')) {
+                canonicalFraming = false;
+            }
             if (!requestLineComplete) {
-                if (requestLineCarriageReturn) {
-                    if (current != '\n') {
-                        return false;
-                    }
+                if (current == '\n') {
                     requestLineComplete = true;
+                    requestLineCarriageReturn = false;
+                } else if (requestLineCarriageReturn) {
+                    return false;
                 } else if (current == '\r') {
                     requestLineCarriageReturn = true;
-                } else if (current == '\n' ||
-                           requestLineLength + 1 >= REQUEST_LINE_SIZE) {
+                } else if (requestLineLength + 1 >= REQUEST_LINE_SIZE) {
                     return false;
                 } else {
                     ++requestLineLength;
                 }
             }
-            if (receivedLength >= 4 &&
-                memcmp(receivedBytes + receivedLength - 4, "\r\n\r\n", 4) == 0) {
+            bool canonicalTerminator = receivedLength >= 4 &&
+                memcmp(receivedBytes + receivedLength - 4, "\r\n\r\n", 4) == 0;
+            bool legacyTerminator = receivedLength >= 2 &&
+                memcmp(receivedBytes + receivedLength - 2, "\n\n", 2) == 0;
+            if (canonicalTerminator || legacyTerminator) {
+                canonicalFraming = canonicalFraming && canonicalTerminator;
                 headerLength = receivedLength;
                 size_t trailing = static_cast<size_t>(received - offset - 1);
                 if (trailing > MAX_PREFETCH_BYTES) {
@@ -850,29 +859,36 @@ bool LocalWebServer::readRequest(
         return false;
     }
 
-    const char *firstLineEnd = NULL;
-    for (size_t index = 0; index + 1 < headerLength; ++index) {
-        if (receivedBytes[index] == '\r' && receivedBytes[index + 1] == '\n') {
-            firstLineEnd = receivedBytes + index;
+    size_t firstLineNext = 0;
+    for (size_t index = 0; index < headerLength; ++index) {
+        if (receivedBytes[index] == '\n') {
+            firstLineNext = index + 1;
             break;
         }
     }
-    if (firstLineEnd == NULL) {
+    if (firstLineNext == 0) {
         return false;
     }
-    requestLineLength =
-        static_cast<size_t>(firstLineEnd - receivedBytes);
+    requestLineLength = firstLineNext - 1;
+    if (requestLineLength > 0 &&
+        receivedBytes[requestLineLength - 1] == '\r') {
+        --requestLineLength;
+    }
     if (requestLineLength == 0 || requestLineLength >= sizeof(request.requestLine)) {
         return false;
     }
     memcpy(request.requestLine, receivedBytes, requestLineLength);
     request.requestLine[requestLineLength] = '\0';
 
-    request.bodyFramingValid = true;
+    request.bodyFramingValid = canonicalFraming;
     request.hasContentLength = false;
     request.hasTransferEncoding = false;
     request.contentLength = 0;
-    size_t position = requestLineLength + 2;
+    if (!canonicalFraming) {
+        return true;
+    }
+
+    size_t position = firstLineNext;
     size_t headersEnd = headerLength - 2;
     while (position < headersEnd) {
         size_t lineEnd = position;
