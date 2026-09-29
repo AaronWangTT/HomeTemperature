@@ -3,24 +3,24 @@
 Status: application controller/API implemented; production provisioning and
 hardware acceptance remain gated
 
-Baseline: AZ3166 Core 3.1.2
+Baseline: AZ3166 Core 3.1.3
 
 Target: HomeTemperature integration on the maintained Core staging API
 
 Implementation note (2026-09-28): `firmware/AZ3166/src/ota/` now implements the
-Phase 5 controller and routes against the exact Core 3.1.2 `OTAStaging` C API.
+Phase 5 controller and routes against the exact Core 3.1.3 `OTAStaging` C API.
 The checked-in public-key configuration is intentionally empty, so production
 OTA remains disabled until a reviewed wired bootstrap provisions a trusted
-public key. Package-builder and browser-page work remain separate, and the
-hardware acceptance requirements in section 11 are not satisfied by the
-compile-only application tests.
+public key. The package builder and browser page use the same signed-package
+API, and the hardware acceptance requirements in section 11 are not satisfied
+by the compile-only application tests.
 
 ## 1. Decision
 
 Support local firmware upload without requiring the device to download an image
 from a remote URL.
 
-Core 3.1.2 provides a transport-independent, streaming OTA staging API that
+Core 3.1.3 provides a transport-independent, streaming OTA staging API that
 writes a verified application image to the existing external Flash OTA
 partition and activates it through the existing bootloader contract.
 HomeTemperature provides the trusted-LAN HTTP endpoint, product policy,
@@ -30,16 +30,15 @@ The initial implementation must not replace the bootloader or claim rollback
 support. A failed update must remain recoverable through ST-Link.
 
 The earlier Core-only migration adopted the staging engine without application
-routes. Phase 5 now adds the HomeTemperature controller, API routes, physical
-authorization, and delayed reboot coordination. Browser UI, A/B rollback,
-boot-attempt counters, health-confirmation logic, and production trust
-provisioning remain out of scope, and the package contains no private signing
-key.
+routes. Phase 5 now adds the HomeTemperature controller, trusted-LAN API routes,
+browser UI, and delayed reboot coordination. A/B rollback, boot-attempt
+counters, health-confirmation logic, and production trust provisioning remain
+out of scope, and the package contains no private signing key.
 
-## 2. Core 3.1.2 Findings
+## 2. Core 3.1.3 Findings
 
 The Core's
-[`OTAStaging`](https://github.com/AaronWangTT/devkit-sdk/blob/3.1.2/libraries/OTA/src/OTAStaging.h)
+[`OTAStaging`](https://github.com/AaronWangTT/devkit-sdk/blob/3.1.3/libraries/OTA/src/OTAStaging.h)
 library exposes a signed streaming workflow:
 
 - `OTAStagingBegin()` accepts the complete package size, a trusted P-256 public
@@ -64,7 +63,7 @@ deprecated:
   reboot.
 
 The application image is a raw `.bin` linked at `0x0800C000`. Inspection of the
-Core 3.1.2 partition table shows:
+Core 3.1.3 partition table shows:
 
 | Partition | Storage | Start | Capacity |
 | --- | --- | ---: | ---: |
@@ -165,7 +164,7 @@ version, bounds, vector-table, digest, or full Flash read-back validation.
 Activation additionally requires the caller-selected generation and digest to
 match the retained verified Core session.
 
-Core 3.1.2 enables and links the Mbed TLS SHA-256, ECP, ECDSA, bignum, ASN.1,
+Core 3.1.3 enables and links the Mbed TLS SHA-256, ECP, ECDSA, bignum, ASN.1,
 OID, and public-key parsing modules needed for P-256 verification. Its
 production signature adapter is covered by direct known-answer host tests,
 including tampered digest/signature, wrong-key, and malformed-key rejection.
@@ -449,14 +448,17 @@ OTA worker observes that flag and calls `abort()`. After `finish()` verifies
 staging and publishes `Ready`, the joinable OTA worker remains alive, owns the
 Core session, and waits on a bounded command signal. An apply request carries
 the expected generation and digest; the handler compares both with the retained
-`Ready` image before queuing a one-shot completion object. The worker
+`Ready` image before queuing a one-shot activation command. The worker
 revalidates generation and cancellation state immediately before claiming
 `Applying`.
 
-The worker then calls `activate()`, publishes success, verified failure, or
-uncertain state, signals the completion object, and only then exits. A cancel
-request wakes it to abort and exit. HTTP handlers never call Core session
-methods.
+The handler queues activation without a completion object. Its
+response-attempt callback wakes the worker only after the `202 Accepted`
+response has been attempted. The worker then calls `activate()` and records
+success, verified failure, or uncertain state independently of the request
+lifetime. On success it latches a reboot request; the long-lived worker remains
+available until controller shutdown. A cancel request wakes it to abort the
+staged session. HTTP handlers never call Core session methods.
 
 Wi-Fi/address generation changes enqueue the same generation-bound cancellation
 signal, including while the worker waits in `Ready`. The worker wakes, calls
@@ -464,26 +466,22 @@ signal, including while the worker waits in `Ready`. The worker wakes, calls
 and exits. Stale network events from an older generation cannot cancel a newer
 session.
 
-The apply handler waits outside all mutexes on the completion object with a
-documented activation deadline. Verified success produces `202 Accepted`, then
-the handler attempts that response and posts reboot. A verified failure after
-the old boot entry is restored produces `500 Internal Server Error` and requires
-a new upload. `OTA_ACTIVATION_UNCERTAIN`, completion timeout, or loss of the
-worker produces `503 Service Unavailable`, enters fatal maintenance, and does
-not claim that no pending boot entry exists. The completion object is owned
-until both the handler and worker release their references, so timeout cannot
-leave the worker signaling freed memory.
+The apply handler atomically validates the selected generation and digest,
+queues activation, and returns `202 Accepted` before boot metadata persistence
+begins. Its response-attempt callback releases the worker to persist the
+boot-table entry. This ordering avoids blocking or resetting the HTTP response
+while MiCO rewrites its redundant parameter partitions. The client then polls
+`/api/version`; only the new signed version confirms completion.
 
 Cloud scheduling reads the same synchronized snapshot and skips new uploads
 while OTA is busy. No mutex is held during socket I/O, Flash operations,
 hashing, signature verification, callbacks, command waits, or reboot.
 
-After activation succeeds, a bootable pending update intentionally exists while
-the old application is still running. The HTTP handler makes one bounded
-attempt to send the final response and then posts reboot to the main loop
-regardless of whether that send succeeds. A reset or power loss in this window
-follows the same bootloader path and applies the already authenticated staged
-image.
+After the apply response attempt, the worker creates the bootable pending
+update. The application requests reset if the Core call returns; on this MiCO
+platform parameter persistence can itself run until the watchdog resets the
+device. Both paths enter the same bootloader copy flow for the already
+authenticated staged image.
 
 A verified activation failure restores and confirms the previous boot-table
 entry, clears the staged image/session, releases the lease, does
@@ -599,7 +597,7 @@ dropped connection never leads to the session's `activate()` method.
 
 ## 10. Boot and Recovery Limitations
 
-The shipped bootloader is provided as a binary, and Core 3.1.2 exposes no
+The shipped bootloader is provided as a binary, and Core 3.1.3 exposes no
 rollback, boot-attempt counter, confirmed-image, or automatic recovery API.
 The initial local OTA feature must therefore be documented as staged
 replacement, not fail-safe A/B OTA.
@@ -639,8 +637,9 @@ separate recovery and manufacturing review.
 - repeated begin, abort, finish, and activation calls;
 - apply queued immediately before expiry, cancellation, and address-generation
   changes, proving invalidation wins before `Applying`;
-- apply completion success, verified failure, uncertain result, timeout, and
-  handler-timeout lifetime;
+- apply response attempted before activation starts, plus activation success
+  with a latched reboot request, verified failure, and uncertain result,
+  independently of the handler lifetime;
 - `finish()` reaches `Ready` without touching boot metadata, while only
   `activate()` writes and verifies that metadata;
 - exact read-back of the new boot-table entry and restoration of the previous
@@ -667,7 +666,8 @@ separate recovery and manufacturing review.
 - disconnect and cancellation are handled by the upload worker without
   cross-thread Core session calls;
 - the joinable OTA worker retains Core session ownership while waiting in
-  `Ready`, executes apply/cancel commands, and exits only at a terminal state;
+  `Ready`, executes apply/cancel commands, and remains available until orderly
+  server shutdown;
 - concurrent listener and OTA socket operations pass with the production
   thread-safe backend and independent fake backends;
 - shutdown during every Flash, hash, signature, Ready-wait, and activation step
@@ -677,6 +677,8 @@ separate recovery and manufacturing review.
 - the response completes before reboot;
 - successful activation schedules reboot after the response attempt even when
   that response fails or the client disconnects;
+- a successful activation latches the reboot request and rejects new uploads
+  until reset, including during the delayed-reboot window;
 - verified activation failure restores the prior boot entry and clears the
   staged session before permitting a new upload, while an uncertain activation
   enters fatal maintenance and blocks release;
@@ -708,7 +710,7 @@ separate recovery and manufacturing review.
    bootloader copy.
 4. Record which failures recover automatically and which require ST-Link.
 
-### Phase 2: Add the Core staging engine (completed in Core 3.1.2)
+### Phase 2: Add the Core staging engine (completed in Core 3.1.3)
 
 1. Add the transport-independent begin/write/finish/abort/activate API.
 2. Add partition discovery, erase, bounds checks, CRC16, SHA-256, read-back,
@@ -739,7 +741,7 @@ separate recovery and manufacturing review.
 
 The repository-owned `tools/ota/ota_cli.py` implements the package builder,
 verifier, and trusted-LAN client. It checks the final raw image, exact
-descriptor copy, Core 3.1.2 vectors and layout, DER SPKI key identity, payload
+descriptor copy, Core 3.1.3 vectors and layout, DER SPKI key identity, payload
 digest, and raw fixed-width signature. Test keys are generated only at test
 time. Build configuration, signing, upload, and apply enforce the immutable
 reviewed key-ID set in `tools/ota/production_key_ids.py`. Production remains
@@ -782,7 +784,11 @@ activation request, and confirms the expected version through the read-only
 The optional `/ota` page is a same-origin client of these same endpoints. It
 does not parse, sign, buffer, or otherwise create a second firmware staging
 path; package authenticity and device-side generation/digest binding remain
-enforced by the existing API and Core staging engine.
+enforced by the existing API and Core staging engine. After apply is accepted,
+the page retries transient probe failures while polling both `/api/version` and
+`/api/ota/status`; it reports terminal `Error` or `Fatal` states immediately
+and stops with an explicit timeout if neither reboot nor a terminal failure is
+observed.
 
 ### Phase 6: Validate and release
 

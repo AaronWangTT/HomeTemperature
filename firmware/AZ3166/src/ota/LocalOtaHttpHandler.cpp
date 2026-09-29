@@ -14,19 +14,32 @@ const char OTA_PAGE[] =
     "</style><h1>AZ3166 Local OTA</h1><label>Signed package "
     "<input id=f type=file></label>"
     "<button onclick=upload()>Upload</button><button onclick=apply()>Apply</button>"
-    "<pre id=o>Idle</pre><script>let g,d;const q=(p,x={})=>fetch(p,x).then("
+    "<pre id=o>Idle</pre><script>let g,d,old,until;const q=(p,x={})=>fetch(p,x).then("
     "async r=>{let j=await r.json();if(!r.ok)throw Error(j.error||r.status);return j"
-    "});async function upload(){try{let j=await q('/api/ota',{method:'POST',"
+    "});let poll;async function watch(){try{let s=await q('/api/ota/status');"
+    "o.textContent=s.state+' '+s.acceptedBytes+'/'+s.totalBytes;"
+    "if(!['Ready','Error','Fatal','Idle'].includes(s.state))poll=setTimeout(watch,"
+    "750)}catch(e){o.textContent=e}}async function upload(){try{o.textContent="
+    "'Uploading package…';poll=setTimeout(watch,750);let j=await q('/api/ota',"
+    "{method:'POST',"
     "headers:{'Content-Type':"
     "'application/octet-stream'},body:f.files[0]});g=j.generation;d=j.digest;"
     "o.textContent=JSON.stringify(j,null,2)}catch(e){o.textContent=e}}async function "
-    "apply(){try{let s=await q('/api/ota/status');if(s.generation!==g"
+    "apply(){try{old=(await q('/api/version')).firmwareVersion;"
+    "o.textContent='Applying and writing boot metadata…';let s=await q("
+    "'/api/ota/status');if(s.generation!==g"
     "||s.digest!==d)throw Error('staged image changed');await q('/api/ota/apply',"
     "{method:'POST',headers:{'Content-Type':'application/json'},body:JSON."
-    "stringify({generation:g,digest:d})});o.textContent='Rebooting';setTimeout("
+    "stringify({generation:g,digest:d})});until=Date.now()+180000;"
+    "o.textContent='Rebooting';setTimeout("
     "check,1500)}catch(e){o.textContent=e}}async function check(){try{let j=await "
-    "q('/api/version');o.textContent='Firmware '+j.firmwareVersion}catch(e){"
-    "setTimeout(check,1500)}}</script>";
+    "q('/api/version');if(j.firmwareVersion!==old){o.textContent='Firmware '+j."
+    "firmwareVersion;return}let s=await q('/api/ota/status');if(['Error','Fatal']"
+    ".includes(s.state)){o.textContent=s.lastError||s.state;return}if(s.state==="
+    "'Applying')o.textContent='Applying and writing boot metadata…'}catch(e){if("
+    "Date.now()>until){o.textContent='Update check timed out: '+e;return}}if(Date."
+    "now()>until){o.textContent='Update check timed out';return}setTimeout(check,"
+    "1500)}</script>";
 
 static_assert(
     sizeof(OTA_PAGE) <= 3072,
@@ -311,17 +324,18 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
                         responseBody, responseBodySize);
         }
         OTAStagingError result;
+        void *responseContext = NULL;
         if (!controller_.apply(
-                expectedGeneration, expectedDigest, result)) {
+                expectedGeneration, expectedDigest, result, responseContext)) {
             return json("409 Conflict", "{\"error\":\"not ready\"}",
                         responseBody, responseBodySize);
         }
         if (result == OTA_OK) {
             LocalHttpResponse response = json(
-                "202 Accepted", "{\"status\":\"reboot scheduled\"}",
+                "202 Accepted", "{\"status\":\"apply queued\"}",
                 responseBody, responseBodySize);
-            response.afterAttempt = afterApplyResponse;
-            response.afterAttemptContext = &controller_;
+            response.afterAttempt = LocalOtaController::responseAttempted;
+            response.afterAttemptContext = responseContext;
             return response;
         }
         if (result == OTA_ERROR_ACTIVATION_UNCERTAIN) {
@@ -371,8 +385,4 @@ LocalHttpResponse LocalOtaHttpHandler::handle(
         static_cast<unsigned long>(stagedGeneration),
         static_cast<unsigned long>(status.acceptedBytes),
         digest);
-}
-
-void LocalOtaHttpHandler::afterApplyResponse(bool sent, void *context) {
-    static_cast<LocalOtaController *>(context)->responseAttempted(sent);
 }

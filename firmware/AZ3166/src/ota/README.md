@@ -1,6 +1,6 @@
 # Local OTA Controller
 
-`LocalOtaController` implements the application side of the Core 3.1.2
+`LocalOtaController` implements the application side of the Core 3.1.3
 `OTAStaging` protocol. OTA is disabled when
 `config/ota_public_key.h` has no DER RFC 5480 P-256 public key. That file must
 contain only the public verification key; package signing keys stay in the
@@ -42,8 +42,10 @@ One controller worker is the only caller of Core staging methods. It keeps the
 Core session through `Ready` and activation, while the HTTP listener remains
 available for status and cancellation. `NetworkMaintenanceCoordinator` lets an
 in-flight cloud upload finish, then excludes new cloud work until OTA is
-terminal. Address-generation changes cancel the matching session. A successful
-apply posts reboot only after the HTTP response attempt.
+terminal. Address-generation changes cancel the matching session. Apply returns
+`202 Accepted` first; the response-attempt callback then releases the worker to
+persist boot metadata. The client confirms completion through `/api/version`
+after the ensuing reset and bootloader copy.
 An uncertain activation remains in fatal maintenance and requires ST-Link
 recovery.
 

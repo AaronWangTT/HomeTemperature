@@ -136,7 +136,7 @@ class OtaHandler(BaseHTTPRequestHandler):
             }
         ):
             self.__class__.applied = True
-            self._json(202, {"status": "reboot scheduled"})
+            self._json(202, {"status": "apply queued"})
         else:
             self._json(401, {"error": "unauthorized"})
 

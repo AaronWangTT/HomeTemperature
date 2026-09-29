@@ -8,10 +8,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/976bbeba67fab6da5676e8685fe4a132a93f3501/package_azureboard_index.json"
-$coreVersion = "3.1.2"
+$boardManagerUrl = "https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/786a8e9b2088a18858bc2dccda341fe7f5a59619/package_azureboard_index.json"
+$coreVersion = "3.1.3"
 $core = "AZ3166:stm32f4:$coreVersion"
-$coreArchiveSha256 = "3f45783bb736c9934dc5993076eb619e4877333f05a1c2f81feffe76e97f644f"
+$coreArchiveSha256 = "9b44581f73cd435e29216293eba7bedc59fe5eb61e5cd71b0aba92758f79007c"
 $compilerVersion = "5_4-2016q3"
 $openOcdVersion = "0.10.0"
 $arduinoVersion = "1.8.19"

@@ -35,8 +35,6 @@ typedef void (*LocalOtaBeforeApplyValidation)(void *context);
 class LocalOtaController {
 public:
     static const uint32_t NETWORK_LEASE_WAIT_MS = 10000UL;
-    static const uint32_t APPLY_WAIT_MS =
-        OTA_STAGING_ACTIVATION_MAX_MS + 2000UL;
 
     LocalOtaController(
         LocalOtaCore &core,
@@ -58,7 +56,8 @@ public:
     bool apply(
         uint32_t expectedGeneration,
         const uint8_t expectedDigest[OTA_SHA256_SIZE],
-        OTAStagingError &result);
+        OTAStagingError &result,
+        void *&responseContext);
     bool cancel();
     void update(uint32_t networkGeneration);
     LocalOtaSnapshot snapshot() const;
@@ -67,7 +66,7 @@ public:
     bool readyImage(
         uint32_t &generation,
         uint8_t digest[OTA_SHA256_SIZE]) const;
-    void responseAttempted(bool sent);
+    static void responseAttempted(bool sent, void *context);
     bool takeRebootRequest();
 
 private:
@@ -77,6 +76,12 @@ private:
         WORKER_APPLY,
         WORKER_CANCEL,
         WORKER_SHUTDOWN
+    };
+
+    struct ApplyResponseContext {
+        LocalOtaController *controller;
+        uint32_t controllerGeneration;
+        bool active;
     };
 
     static int admit(const OTAStagingMetadata *metadata, void *context);
@@ -107,7 +112,6 @@ private:
     rtos::Thread worker_;
     rtos::Semaphore commandSignal_;
     rtos::Semaphore uploadCompletion_;
-    rtos::Semaphore applyCompletion_;
     bool workerStarted_;
     bool shutdown_;
     WorkerCommand command_;
@@ -117,19 +121,18 @@ private:
     uint32_t leaseDeadline_;
     bool cancelRequested_;
     bool uploadCompleted_;
-    bool applyCompleted_;
-    bool activationAwaitingResponse_;
     bool rebootPending_;
     LocalHttpBodyStream *uploadBody_;
     size_t packageSize_;
     size_t acceptedBytes_;
     OTAStagedImageInfo staged_;
     OTAStagingError lastError_;
-    OTAStagingError applyResult_;
     struct {
         bool pending;
+        bool responseReleased;
         uint32_t controllerGeneration;
     } queuedApply_;
+    ApplyResponseContext applyResponseContexts_[2];
 };
 
 #endif

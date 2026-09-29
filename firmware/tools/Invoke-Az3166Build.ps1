@@ -32,8 +32,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$coreVersion = "3.1.2"
-$coreArchiveSha256 = "3f45783bb736c9934dc5993076eb619e4877333f05a1c2f81feffe76e97f644f"
+$coreVersion = "3.1.3"
+$coreArchiveSha256 = "9b44581f73cd435e29216293eba7bedc59fe5eb61e5cd71b0aba92758f79007c"
 $libraryVersion = "1.1.1"
 $libraryArchiveSha256 = "7c65dc64220ed25be7e55a8e11ac138210c4502977fc72808730251e373ddd80"
 $compilerVersion = "5_4-2016q3"

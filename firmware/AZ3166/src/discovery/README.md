@@ -93,7 +93,7 @@ reconciliation for its listener.
 
 ## Limits and Dependencies
 
-- Default transport: AZ3166 Core 3.1.2 `AZ3166MulticastUDP` on
+- Default transport: AZ3166 Core 3.1.3 `AZ3166MulticastUDP` on
   `224.0.0.251:5353`; this implementation is IPv4-only.
 - Responder: checksum-pinned ArduinoMDNS 1.1.1 installed under
   `.tools/sketchbook/libraries`; build helpers select that sketchbook explicitly.

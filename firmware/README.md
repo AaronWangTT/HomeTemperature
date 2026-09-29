@@ -12,7 +12,7 @@ The checked configuration is:
 | Component | Version |
 | --- | --- |
 | Arduino IDE | 1.8.19 |
-| Board package | `AZ3166:stm32f4:3.1.2` |
+| Board package | `AZ3166:stm32f4:3.1.3` |
 | ArduinoMDNS | 1.1.1 |
 | FQBN | `AZ3166:stm32f4:MXCHIP_AZ3166` |
 | GNU Arm toolchain | `5_4-2016q3` from the board package |
@@ -21,12 +21,12 @@ The checked configuration is:
 The board package index is:
 
 ```text
-https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/976bbeba67fab6da5676e8685fe4a132a93f3501/package_azureboard_index.json
+https://raw.githubusercontent.com/AaronWangTT/azureiotdevkit_tools/786a8e9b2088a18858bc2dccda341fe7f5a59619/package_azureboard_index.json
 ```
 
-That immutable index declares the 4,980,128-byte `AZ3166-3.1.2-base.zip` with
+That immutable index declares the 4,980,128-byte `AZ3166-3.1.3-base.zip` with
 SHA-256
-`3f45783bb736c9934dc5993076eb619e4877333f05a1c2f81feffe76e97f644f`.
+`9b44581f73cd435e29216293eba7bedc59fe5eb61e5cd71b0aba92758f79007c`.
 Arduino Board Manager verifies the Core, GNU Arm toolchain, and OpenOCD
 archives while installing them. The installer separately verifies ArduinoMDNS
 1.1.1 with SHA-256
@@ -41,7 +41,7 @@ On Windows, install Arduino IDE 1.8.19 and the pinned Core with:
 The script reuses an existing Arduino IDE from `-ArduinoExecutable`,
 `ARDUINO_IDE_PATH`, a standard Program Files installation, or `PATH`. If none is
 found, it downloads Arduino IDE 1.8.19 into `.tools\arduino-1.8.19` before
-installing `AZ3166:stm32f4:3.1.2`. It installs ArduinoMDNS 1.1.1 under
+installing `AZ3166:stm32f4:3.1.3`. It installs ArduinoMDNS 1.1.1 under
 `.tools\sketchbook\libraries` and all build helpers select that repository-local
 sketchbook explicitly.
 
@@ -113,7 +113,7 @@ listener is ready, and withdraws it when the listener stops. Cloud uploads stay
 in the main loop but no longer prevent HTTP polling. Shared sensor acquisition
 is protected by a short mutex; network operations never hold that sensor lock.
 ArduinoMDNS 1.1.1 supplies the responder protocol and lifecycle API. AZ3166
-Core 3.1.2 supplies the bounded, nonblocking multicast UDP transport;
+Core 3.1.3 supplies the bounded, nonblocking multicast UDP transport;
 dependency source, release provenance, and LGPL terms are described in the
 repository's third-party notices.
 
@@ -276,7 +276,7 @@ default fail-closed, OTA-disabled production image. It rejects custom OTA build
 configuration.
 
 An upload is successful only when the command exits zero and OpenOCD reports
-`Verified OK`. The AZ3166 3.1.2 build can emit a repeated four-byte `.bss`
+`Verified OK`. The AZ3166 3.1.3 build can emit a repeated four-byte `.bss`
 alignment warning; resource usage and runtime tests must still be checked after
 link-layout changes.
 

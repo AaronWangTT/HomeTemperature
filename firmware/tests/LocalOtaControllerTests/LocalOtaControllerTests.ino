@@ -272,7 +272,9 @@ void testLeaseUploadRoutesAndApply() {
     expect(strcmp(pageResponse.status, "200 OK") == 0 &&
                strcmp(pageResponse.contentType, "text/html; charset=utf-8") == 0 &&
                strstr(pageBody, "AZ3166 Local OTA") != NULL &&
-               strstr(pageBody, "/api/ota/apply") != NULL,
+               strstr(pageBody, "/api/ota/apply") != NULL &&
+               strstr(pageBody, "['Error','Fatal']") != NULL &&
+               strstr(pageBody, "Update check timed out") != NULL,
            "OTA page exposes the same-origin signed upload workflow");
     page.requestLine = "GET /ota?unsafe=1 HTTP/1.1";
     pageResponse = handler.handleRequest(page, pageBody, sizeof(pageBody));
@@ -350,13 +352,17 @@ void testLeaseUploadRoutesAndApply() {
     response = handler.handle(
         applyRequest, applyBody, responseBody, sizeof(responseBody));
     expect(strcmp(response.status, "202 Accepted") == 0 &&
-               core.activates == 1 && response.afterAttempt != NULL,
-           "apply is executed by the OTA worker and returns 202");
-    expect(!controller.takeRebootRequest(),
-           "reboot waits for the response-attempt callback");
+               strstr(responseBody, "\"status\":\"apply queued\"") != NULL &&
+               core.activates == 0 && response.afterAttempt != NULL,
+           "apply reports queued before boot metadata persistence begins");
     response.afterAttempt(false, response.afterAttemptContext);
-    expect(controller.takeRebootRequest(),
-           "reboot is posted after the final response attempt, even on send failure");
+    expect(waitForState(controller, LOCAL_OTA_IDLE) && core.activates == 1 &&
+               controller.takeRebootRequest(),
+           "response completion releases activation and posts reboot");
+    FakeBody replacementBody(385);
+    expect(!controller.upload(uploadRequest, replacementBody) &&
+               controller.takeRebootRequest(),
+           "committed activation blocks uploads until reset");
     expect(network.tryBeginCloud(),
            "terminal activation releases the network lease");
     network.endCloud();
@@ -456,10 +462,13 @@ void runApplyRace(int raceValue, const char *name) {
     hook.race = race;
     OTAStagingError result = OTA_OK;
     uint8_t digest[OTA_SHA256_SIZE] = {0x42};
-    bool accepted = controller.apply(7, digest, result);
-    expect(accepted && result == OTA_ERROR_CANCELLED &&
+    void *responseContext = NULL;
+    bool accepted = controller.apply(7, digest, result, responseContext);
+    LocalOtaController::responseAttempted(false, responseContext);
+    expect(accepted && result == OTA_OK &&
+               waitForState(controller, LOCAL_OTA_IDLE) &&
                core.activates == 0 &&
-               controller.snapshot().state == LOCAL_OTA_IDLE,
+               !controller.takeRebootRequest(),
            name);
 }
 
@@ -470,6 +479,119 @@ void testFinalApplyRevalidationRaces() {
     runApplyRace(
         APPLY_RACE_NETWORK,
         "network generation change wins immediately before Ready to Applying");
+}
+
+void testStaleSignalCannotReleaseLaterApply() {
+    fakeNow = 0;
+    FakeCore core;
+    NetworkMaintenanceCoordinator network;
+    uint8_t key[] = {1};
+    LocalOtaController controller(
+        core, network, key, sizeof(key),
+        "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
+    controller.begin();
+    LocalHttpRequest valid = makeRequest(
+        "POST /api/ota HTTP/1.1", "", 0, 0x0a000001, 8);
+    LocalHttpStreamingRequest request =
+        makeStreamingRequest(valid.requestLine, 385, 8, valid);
+    FakeBody firstBody(385);
+    UploadContext firstUpload = {&controller, request, &firstBody, false};
+    rtos::Thread firstThread;
+    firstThread.start(
+        mbed::callback(uploadThread, static_cast<void *>(&firstUpload)));
+    waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+    controller.update(8);
+    firstThread.join();
+
+    OTAStagingError result = OTA_OK;
+    uint8_t digest[OTA_SHA256_SIZE] = {0x42};
+    void *firstResponseContext = NULL;
+    expect(controller.apply(
+               7, digest, result, firstResponseContext) &&
+               controller.cancel(),
+           "cancel can invalidate an apply before its response callback");
+    expect(waitForState(controller, LOCAL_OTA_IDLE) && core.activates == 0,
+           "cancelled apply does not activate before its delayed callback");
+
+    request.metadata.networkGeneration = 8;
+    FakeBody secondBody(385);
+    UploadContext secondUpload = {&controller, request, &secondBody, false};
+    rtos::Thread secondThread;
+    secondThread.start(
+        mbed::callback(uploadThread, static_cast<void *>(&secondUpload)));
+    waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+    controller.update(8);
+    secondThread.join();
+    void *secondResponseContext = NULL;
+    expect(controller.apply(
+               7, digest, result, secondResponseContext),
+           "a replacement apply can be queued after cancellation");
+    LocalOtaController::responseAttempted(false, firstResponseContext);
+    delay(20);
+    expect(core.activates == 0 &&
+               controller.snapshot().state == LOCAL_OTA_READY,
+           "a stale response callback cannot release a later apply");
+    LocalOtaController::responseAttempted(false, secondResponseContext);
+    expect(waitForState(controller, LOCAL_OTA_IDLE) && core.activates == 1 &&
+               controller.takeRebootRequest(),
+           "the matching response callback releases the later apply");
+}
+
+void runPostResponseActivationFailure(
+    OTAStagingError activationResult,
+    LocalOtaState expectedState,
+    bool expectedLeaseBusy,
+    const char *name) {
+    fakeNow = 0;
+    FakeCore core;
+    core.activationResult = activationResult;
+    NetworkMaintenanceCoordinator network;
+    uint8_t key[] = {1};
+    LocalOtaController controller(
+        core, network, key, sizeof(key),
+        "HomeTemperature", "MXCHIP_AZ3166", "1.0.0", readClock);
+    controller.begin();
+    LocalHttpRequest valid = makeRequest(
+        "POST /api/ota HTTP/1.1", "", 0, 0x0a000001, 10);
+    LocalHttpStreamingRequest request =
+        makeStreamingRequest(valid.requestLine, 385, 10, valid);
+    FakeBody body(385);
+    UploadContext upload = {&controller, request, &body, false};
+    rtos::Thread thread;
+    thread.start(mbed::callback(uploadThread, static_cast<void *>(&upload)));
+    waitForState(controller, LOCAL_OTA_WAITING_FOR_NETWORK_LEASE);
+    controller.update(10);
+    thread.join();
+
+    OTAStagingError result = OTA_OK;
+    uint8_t digest[OTA_SHA256_SIZE] = {0x42};
+    void *responseContext = NULL;
+    bool accepted = controller.apply(7, digest, result, responseContext);
+    LocalOtaController::responseAttempted(false, responseContext);
+    LocalOtaSnapshot snapshot;
+    bool reachedExpected = false;
+    for (int i = 0; i < 100; ++i) {
+        snapshot = controller.snapshot();
+        if (snapshot.state == expectedState) {
+            reachedExpected = true;
+            break;
+        }
+        delay(2);
+    }
+    expect(accepted && reachedExpected && core.activates == 1 &&
+               snapshot.lastError == activationResult &&
+               !controller.takeRebootRequest() &&
+               network.otaBusy() == expectedLeaseBusy,
+           name);
+}
+
+void testPostResponseActivationFailures() {
+    runPostResponseActivationFailure(
+        OTA_ERROR_ACTIVATION, LOCAL_OTA_ERROR, false,
+        "verified activation failure releases the lease without reboot");
+    runPostResponseActivationFailure(
+        OTA_ERROR_ACTIVATION_UNCERTAIN, LOCAL_OTA_FATAL, true,
+        "uncertain activation remains fatal with lease held and no reboot");
 }
 
 void testTypedErrorsAndRebootCloudPolicy() {
@@ -563,6 +685,8 @@ void setup() {
     testLeaseUploadRoutesAndApply();
     testWaitingLeaseAndIdleReadCancellation();
     testFinalApplyRevalidationRaces();
+    testStaleSignalCannotReleaseLaterApply();
+    testPostResponseActivationFailures();
     testTypedErrorsAndRebootCloudPolicy();
     testPublicCancelHttpRoute();
     testNetworkGenerationCancelsReadyWorker();
