@@ -84,8 +84,11 @@ dependencies:
 | Component | Version used | License | Source |
 | --- | --- | --- | --- |
 | Python | 3.12.11 in CI | PSF License | <https://www.python.org/> |
-| az3166-ota | 1.0.0 at commit `ee8718a38353e474e53cc4e5f6d96e93adb71dae` | MIT | <https://github.com/AaronWangTT/devkit-sdk/tree/ee8718a38353e474e53cc4e5f6d96e93adb71dae/tools/ota> |
+| az3166-ota | 1.0.0, commit `ee8718a38353e474e53cc4e5f6d96e93adb71dae` | MIT | <https://github.com/AaronWangTT/devkit-sdk/releases/tag/az3166-ota-v1.0.0> |
 | cryptography | 50.0.1 (transitive dependency; also imported by the HomeTemperature policy adapter) | Apache-2.0 OR BSD-3-Clause | <https://github.com/pyca/cryptography> |
+
+The immutable `az3166-ota` wheel is 11,877 bytes with SHA-256
+`7cc2c775c70c48d937b24a5ba29526ccdaaaf5fa3b11416ebb6ab5f57acab763`.
 
 Their transitive dependencies and binary distributions retain their upstream
 licenses.

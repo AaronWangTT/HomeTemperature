@@ -121,7 +121,7 @@ implementation provides a useful architectural reference:
 The transport-independent `AZPKG001` parser, image validator, signer, verifier,
 golden compatibility vectors, and P-256 key-pair generator are owned by the
 `devkit-sdk` `az3166-ota` host package. HomeTemperature pins that package to an
-immutable SDK revision and retains only product/board/layout policy, the
+immutable release artifact and retains only product/board/layout policy, the
 reviewed production key allowlist, firmware descriptor build integration, and
 the trusted-LAN upload/apply client.
 
