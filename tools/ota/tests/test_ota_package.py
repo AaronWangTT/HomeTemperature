@@ -204,19 +204,24 @@ class PackageTests(unittest.TestCase):
                 Path(__file__).parent / "public.der",
             )
 
-    def test_loads_legacy_sec1_private_key_outside_repository(self) -> None:
-        encoded = self.private_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL,
-            serialization.NoEncryption(),
-        )
+    def test_loads_legacy_sec1_private_keys_outside_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "legacy-private.pem"
-            path.write_bytes(encoded)
-            self.assertEqual(
-                load_private_key(path).private_numbers(),
-                self.private_key.private_numbers(),
-            )
+            for encoding, suffix in (
+                (serialization.Encoding.PEM, "pem"),
+                (serialization.Encoding.DER, "der"),
+            ):
+                with self.subTest(encoding=encoding):
+                    encoded = self.private_key.private_bytes(
+                        encoding,
+                        serialization.PrivateFormat.TraditionalOpenSSL,
+                        serialization.NoEncryption(),
+                    )
+                    path = Path(directory) / f"legacy-private.{suffix}"
+                    path.write_bytes(encoded)
+                    self.assertEqual(
+                        load_private_key(path).private_numbers(),
+                        self.private_key.private_numbers(),
+                    )
 
     def test_renders_public_firmware_build_config(self) -> None:
         key_id = hashlib.sha256(self.public_der).hexdigest()
