@@ -4,7 +4,7 @@ The Python CLI applies HomeTemperature product policy while building,
 verifying, uploading, and explicitly applying Core 3.1.3 `AZPKG001` packages.
 The generic package format, validation, signing, verification, golden vectors,
 and key-pair generation come from the separately maintained `az3166-ota`
-package pinned to an immutable `devkit-sdk` commit in `requirements.txt`.
+package pinned by immutable release URL and SHA-256 in `requirements.txt`.
 This repository retains the HomeTemperature descriptor defaults, reviewed key
 allowlist, firmware build configuration, and HTTP client.
 

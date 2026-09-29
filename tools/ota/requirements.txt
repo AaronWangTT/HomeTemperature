@@ -1,1 +1,1 @@
-az3166-ota @ git+https://github.com/AaronWangTT/devkit-sdk.git@cbefb3909c5982992b8864f1aa895a8b5b9bc3af#subdirectory=tools/ota
+az3166-ota @ https://github.com/AaronWangTT/devkit-sdk/releases/download/az3166-ota-v1.0.0/az3166_ota-1.0.0-py3-none-any.whl#sha256=7cc2c775c70c48d937b24a5ba29526ccdaaaf5fa3b11416ebb6ab5f57acab763
