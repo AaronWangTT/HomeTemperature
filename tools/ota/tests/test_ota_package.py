@@ -25,6 +25,7 @@ from ota_package import (  # noqa: E402
     PRODUCT_ID,
     PackageError,
     build_package,
+    generate_key_pair,
     load_public_key,
     load_private_key,
     public_key_der,
@@ -126,7 +127,7 @@ class PackageTests(unittest.TestCase):
             verify_package(self.package, wrong_key.public_key(), wrong_der)
 
     def test_rejects_non_p256_signing_key(self) -> None:
-        with self.assertRaisesRegex(PackageError, "signing key must use P-256"):
+        with self.assertRaisesRegex(PackageError, "private key must use P-256"):
             build_package(
                 self.image,
                 ec.generate_private_key(ec.SECP384R1()),
@@ -197,6 +198,25 @@ class PackageTests(unittest.TestCase):
     def test_rejects_private_key_inside_repository(self) -> None:
         with self.assertRaisesRegex(PackageError, "outside the repository"):
             load_private_key(Path(__file__))
+        with self.assertRaisesRegex(PackageError, "outside the repository"):
+            generate_key_pair(
+                Path(__file__).parent / "private.pem",
+                Path(__file__).parent / "public.der",
+            )
+
+    def test_loads_legacy_sec1_private_key_outside_repository(self) -> None:
+        encoded = self.private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy-private.pem"
+            path.write_bytes(encoded)
+            self.assertEqual(
+                load_private_key(path).private_numbers(),
+                self.private_key.private_numbers(),
+            )
 
     def test_renders_public_firmware_build_config(self) -> None:
         key_id = hashlib.sha256(self.public_der).hexdigest()

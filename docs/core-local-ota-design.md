@@ -118,6 +118,13 @@ implementation provides a useful architectural reference:
 - the host tooling independently validates and signs release artifacts; and
 - the new application must pass health checks before ESP-IDF cancels rollback.
 
+The transport-independent `AZPKG001` parser, image validator, signer, verifier,
+golden compatibility vectors, and P-256 key-pair generator are owned by the
+`devkit-sdk` `az3166-ota` host package. HomeTemperature pins that package to an
+immutable SDK revision and retains only product/board/layout policy, the
+reviewed production key allowlist, firmware descriptor build integration, and
+the trusted-LAN upload/apply client.
+
 Adopt those boundaries and failure semantics, but not the ESP32-S3 storage
 assumptions. That platform has two internal application slots, OTA selection
 metadata, signed-image support, and bootloader rollback. AZ3166 has one internal

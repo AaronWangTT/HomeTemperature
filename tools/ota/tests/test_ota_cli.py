@@ -171,6 +171,28 @@ class CliTests(unittest.TestCase):
         with patch.object(sys, "argv", ["ota_cli.py", *arguments]):
             return ota_cli.main()
 
+    def test_generates_key_pair_outside_repository(self) -> None:
+        private_key = Path(self.directory.name) / "generated-private.pem"
+        public_key = Path(self.directory.name) / "generated-public.der"
+        self.assertEqual(
+            self.run_cli(
+                "generate-key",
+                "--private-key",
+                str(private_key),
+                "--public-key",
+                str(public_key),
+            ),
+            0,
+        )
+        loaded_private = serialization.load_pem_private_key(
+            private_key.read_bytes(), None
+        )
+        loaded_public = serialization.load_der_public_key(public_key.read_bytes())
+        self.assertEqual(
+            loaded_private.public_key().public_numbers(),
+            loaded_public.public_numbers(),
+        )
+
     def test_upload_status_apply_and_version_verification(self) -> None:
         common = (
             "--base-url",
