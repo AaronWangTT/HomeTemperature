@@ -1,1 +1,1 @@
-az3166-ota @ git+https://github.com/AaronWangTT/devkit-sdk.git@cbefb3909c5982992b8864f1aa895a8b5b9bc3af#subdirectory=tools/ota
+az3166-ota @ git+https://github.com/AaronWangTT/devkit-sdk.git@ee8718a38353e474e53cc4e5f6d96e93adb71dae#subdirectory=tools/ota
