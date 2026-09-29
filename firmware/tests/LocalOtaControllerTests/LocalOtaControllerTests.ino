@@ -274,6 +274,9 @@ void testLeaseUploadRoutesAndApply() {
                strstr(pageBody, "AZ3166 Local OTA") != NULL &&
                strstr(pageBody, "/api/ota/apply") != NULL &&
                strstr(pageBody, "['Error','Fatal']") != NULL &&
+               strstr(pageBody, "cache:'no-store'") != NULL &&
+               strstr(pageBody, "Device offline; waiting for Wi-Fi and web server") != NULL &&
+               strstr(pageBody, "Device online; waiting for new firmware") != NULL &&
                strstr(pageBody, "Update check timed out") != NULL,
            "OTA page exposes the same-origin signed upload workflow");
     page.requestLine = "GET /ota?unsafe=1 HTTP/1.1";
