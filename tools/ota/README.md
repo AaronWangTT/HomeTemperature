@@ -1,7 +1,12 @@
-# Local OTA Host Tooling
+# HomeTemperature Local OTA Tooling
 
-The Python CLI builds, verifies, uploads, and explicitly applies Core 3.1.3
-`AZPKG001` packages. It has no browser UI and stores no credentials.
+The Python CLI applies HomeTemperature product policy while building,
+verifying, uploading, and explicitly applying Core 3.1.3 `AZPKG001` packages.
+The generic package format, validation, signing, verification, golden vectors,
+and key-pair generation come from the separately maintained `az3166-ota`
+package pinned to an immutable `devkit-sdk` commit in `requirements.txt`.
+This repository retains the HomeTemperature descriptor defaults, reviewed key
+allowlist, firmware build configuration, and HTTP client.
 
 Install the one pinned cryptographic dependency in an isolated environment:
 
@@ -12,8 +17,25 @@ python -m venv .venv
 
 ## Keys and release image
 
-Generate and protect a P-256 signing key outside this repository. Pass the
-private-key path explicitly with `--private-key` or set
+Generate and protect a P-256 signing key outside this repository:
+
+```powershell
+python .\tools\ota\ota_cli.py generate-key `
+  --private-key C:\secure\ota-private.pem `
+  --public-key C:\secure\ota-public.der
+```
+
+The command creates an unencrypted PKCS#8 PEM private key and canonical RFC
+5480 DER public key, refuses existing files by default, and prints only paths
+and the public key ID. Use `--create-parents` explicitly for missing
+directories and `--force` only for an intentional replacement. Pair
+publication is transactional; if replacement cannot complete, recoverable
+backups are retained and reported.
+
+Existing unencrypted P-256 SEC1 PEM/DER signing keys remain accepted for
+backward compatibility. New keys are always generated as PKCS#8 PEM.
+
+Pass the private-key path explicitly with `--private-key` or set
 `HOME_TEMPERATURE_OTA_PRIVATE_KEY` to that path. The CLI never prints private
 key material. Do not commit the key.
 

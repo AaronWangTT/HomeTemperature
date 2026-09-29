@@ -22,6 +22,7 @@ from ota_package import (
     PackageError,
     VerifiedPackage,
     build_package,
+    generate_key_pair,
     load_private_key,
     load_public_key,
     public_key_der,
@@ -236,6 +237,25 @@ def _command_build(args: argparse.Namespace) -> None:
     print(f"wrote {len(package)} bytes to {args.output}")
 
 
+def _command_generate_key(args: argparse.Namespace) -> None:
+    _, key_id = generate_key_pair(
+        args.private_key,
+        args.public_key,
+        overwrite=args.force,
+        create_parents=args.create_parents,
+    )
+    print(
+        json.dumps(
+            {
+                "keyId": key_id,
+                "privateKeyPath": str(args.private_key),
+                "publicKeyPath": str(args.public_key),
+            },
+            separators=(",", ":"),
+        )
+    )
+
+
 def _command_verify(args: argparse.Namespace) -> None:
     _, verified = _load_and_verify(args)
     print(
@@ -408,6 +428,15 @@ def _verify_rebooted_version(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build, verify, and upload AZ3166 OTA packages")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    generate = subparsers.add_parser(
+        "generate-key", help="generate a HomeTemperature OTA signing key pair"
+    )
+    generate.add_argument("--private-key", type=Path, required=True)
+    generate.add_argument("--public-key", type=Path, required=True)
+    generate.add_argument("--force", action="store_true")
+    generate.add_argument("--create-parents", action="store_true")
+    generate.set_defaults(handler=_command_generate_key)
 
     build = subparsers.add_parser("build", help="build and sign a package")
     build.add_argument("--image", type=Path, required=True)

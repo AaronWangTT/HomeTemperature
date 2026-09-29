@@ -1,1 +1,1 @@
-cryptography==50.0.1
+az3166-ota @ git+https://github.com/AaronWangTT/devkit-sdk.git@cbefb3909c5982992b8864f1aa895a8b5b9bc3af#subdirectory=tools/ota
