@@ -74,7 +74,10 @@ this repository.
 Local OTA is fail-closed in a clean checkout because
 `AZ3166/src/config/ota_public_key.h` has an empty trust anchor. Provision only a
 reviewed DER RFC 5480 P-256 **public** key through the wired bootstrap release;
-never add a private signing key. See
+never add a private signing key. The reviewed production public key is
+`../tools/ota/keys/hometemperature-production.der`; release builds inject it
+through the generated build configuration rather than changing the fail-closed
+header. See
 [the OTA component guide](AZ3166/src/ota/README.md) for its routes and recovery
 limitations.
 OTA also requires `HOME_TEMPERATURE_FIRMWARE_VERSION` to be supplied as the

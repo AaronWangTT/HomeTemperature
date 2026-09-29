@@ -33,9 +33,15 @@ from ota_package import (  # noqa: E402
     render_build_config,
     verify_package,
 )
+from production_key_ids import PRODUCTION_KEY_IDS  # noqa: E402
 
 VERSION = "1.2.3"
 SOURCE = "0123456789abcdef0123456789abcdef01234567"
+PRODUCTION_PUBLIC_KEY = (
+    Path(__file__).resolve().parents[1]
+    / "keys"
+    / "hometemperature-production.der"
+)
 
 
 def _field(value: str, size: int) -> bytes:
@@ -248,6 +254,19 @@ class PackageTests(unittest.TestCase):
         key_id = hashlib.sha256(self.public_der).hexdigest()
         with patch("ota_package.PRODUCTION_KEY_IDS", frozenset({key_id})):
             require_production_key(self.public_der)
+
+    def test_reviewed_production_key_matches_allowlist(self) -> None:
+        public_key, public_der = load_public_key(PRODUCTION_PUBLIC_KEY)
+        key_id = hashlib.sha256(public_der).hexdigest()
+        self.assertIsInstance(public_key.curve, ec.SECP256R1)
+        self.assertEqual(
+            PRODUCTION_KEY_IDS,
+            frozenset(
+                {"dd000f358407dbdeaaedc31e49706cd10aaf18984b223dc11443e07513dc136f"}
+            ),
+        )
+        self.assertIn(key_id, PRODUCTION_KEY_IDS)
+        require_production_key(public_der)
 
 if __name__ == "__main__":
     unittest.main()

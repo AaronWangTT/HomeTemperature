@@ -42,8 +42,11 @@ key material. Do not commit the key.
 Production operations are fail-closed. Add the lowercase SHA-256 of the
 canonical public-key DER to the reviewed
 `tools/ota/production_key_ids.py` allowlist before generating build
-configuration, signing, uploading, or applying. The allowlist is intentionally
-empty until the production trust anchor is approved.
+configuration, signing, uploading, or applying. The currently provisioned
+production identity is the reviewed public key at
+`tools/ota/keys/hometemperature-production.der`, with key ID
+`dd000f358407dbdeaaedc31e49706cd10aaf18984b223dc11443e07513dc136f`.
+The corresponding private key remains outside the repository.
 
 The raw `.bin` must already contain its retained 256-byte `AZOTA001`
 compatibility descriptor at offset `0x200`. Its canonical product, board,
