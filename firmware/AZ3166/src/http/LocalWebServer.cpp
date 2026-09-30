@@ -892,7 +892,8 @@ void LocalWebServer::runStreaming() {
                 response = {
                     "400 Bad Request", "application/json", strlen(responseBody)
                 };
-            } else if (response.bodyLength > sizeof(responseBody) ||
+            } else if ((response.body == NULL &&
+                        response.bodyLength > sizeof(responseBody)) ||
                        response.status == NULL || response.contentType == NULL) {
                 strcpy(responseBody, "{\"error\":\"invalid response\"}");
                 response = {
@@ -980,7 +981,8 @@ void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
             request.prefetchedLength
         };
         response = handler_.handleRequest(metadata, body, sizeof(body));
-        if (response.bodyLength > sizeof(body) || response.status == NULL ||
+        if ((response.body == NULL && response.bodyLength > sizeof(body)) ||
+            response.status == NULL ||
             response.contentType == NULL) {
             strcpy(body, "{\"error\":\"invalid response\"}");
             response = {"500 Internal Server Error", "application/json", strlen(body)};
@@ -1255,10 +1257,14 @@ bool LocalWebServer::sendResponse(
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(header)) {
         return false;
     }
+    const char *responseBody = response.body == NULL ? body : response.body;
+    if (response.bodyLength > 0 && responseBody == NULL) {
+        return false;
+    }
     uint32_t started = operations.currentTime();
     return sendAll(operations, client, header, static_cast<size_t>(length),
                    generation, started, streaming) &&
-        sendAll(operations, client, body, response.bodyLength,
+        sendAll(operations, client, responseBody, response.bodyLength,
                 generation, started, streaming);
 }
 

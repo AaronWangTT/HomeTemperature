@@ -130,9 +130,9 @@ that:
 
 `LocalHttpHandler`, `LocalHttpResponse`, and `TelemetryHttpHandler` should remain
 application-owned so telemetry behavior stays independent of the transport.
-The application retains a bounded 3072-byte response limit, exact
-`Content-Length`, `Connection: close`, and current 200, 400, 404, 500, and 503
-response behavior.
+The application retains a bounded 3072-byte generated-response limit, supports
+larger process-lifetime read-only assets, and preserves exact `Content-Length`,
+`Connection: close`, and current 200, 400, 404, 500, and 503 response behavior.
 
 ## 6. Compatibility and Resources
 

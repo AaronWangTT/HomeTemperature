@@ -94,11 +94,14 @@ After Wi-Fi, IPv4 acquisition, and successful HTTP listener startup, the firmwar
 advertises this local name:
 
 ```text
-http://az3166.local/api/telemetry
+http://az3166.local/
 ```
 
 It also publishes an `_http._tcp.local.` service on port 80 with the TXT entry
-`path=/api/telemetry`. This application configures those names and records in
+`path=/`. The default page reads live telemetry every 60 seconds and shows the
+device ID, mDNS name, IPv4 address, MAC address, firmware version, and configured
+location. The raw telemetry endpoint remains available at
+`http://az3166.local/api/telemetry`. This application configures those names and records in
 `AppConfig`; the reusable discovery component receives them from its caller.
 The initial version assumes one `az3166` device per LAN, with no runtime alias
 setting or automatic collision renaming. The cloud

@@ -8,6 +8,7 @@
 #include "src/config/AppConfig.h"
 #include "src/http/LocalWebServer.h"
 #include "src/http/Az3166LocalWebServerOperations.h"
+#include "src/http/DeviceHomepageHandler.h"
 #include "src/telemetry/TelemetryHttpHandler.h"
 #include "src/telemetry/TelemetryService.h"
 
@@ -791,10 +792,95 @@ public:
             body[2] = 'b';
             return {"200 OK", "application/octet-stream", 3};
         }
+        if (mode == 4) {
+            static const char staticBody[] = "external";
+            return {
+                "200 OK", "text/plain", sizeof(staticBody) - 1,
+                NULL, NULL, false, staticBody
+            };
+        }
         strcpy(body, "example");
         return {"200 OK", "text/plain", 7};
     }
 };
+
+class HomepageFallbackHandler : public LocalHttpHandler {
+public:
+    int requestCount = 0;
+
+    LocalHttpResponse handle(
+        const char *, char *body, size_t bodySize) override {
+        ++requestCount;
+        const char responseBody[] = "{\"error\":\"fallback\"}";
+        if (body == NULL || sizeof(responseBody) > bodySize) {
+            return {"500 Internal Server Error", "application/json", 0};
+        }
+        memcpy(body, responseBody, sizeof(responseBody));
+        return {"404 Not Found", "application/json", sizeof(responseBody) - 1};
+    }
+};
+
+void testDeviceHomepageHandler() {
+    HomepageFallbackHandler fallback;
+    DeviceHomepageHandler handler(
+        fallback,
+        "az3166",
+        "Living \"Room",
+        "Line\nTwo",
+        "1.2.3",
+        80);
+    expect(handler.begin("az3166-00112233445566778899AABB"),
+           "homepage accepts the bounded device identity");
+
+    const uint8_t macAddress[6] = {0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E};
+    handler.updateNetwork(true, 0xC0000209UL, macAddress);
+
+    char body[512] = "unchanged";
+    LocalHttpResponse response =
+        handler.handle("GET / HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               strcmp(response.contentType, "text/html; charset=utf-8") == 0 &&
+               response.body != NULL && response.bodyLength > 3072 &&
+               strstr(response.body, "/api/device") != NULL &&
+               strstr(response.body, "60-Math.floor") != NULL &&
+               strcmp(body, "unchanged") == 0,
+           "homepage is served directly from static storage with 60-second refresh");
+
+    response = handler.handle("GET /api/device HTTP/1.0", body, sizeof(body));
+    const char expected[] =
+        "{\"deviceId\":\"az3166-00112233445566778899AABB\","
+        "\"mdnsName\":\"az3166.local\","
+        "\"ipAddress\":\"192.0.2.9\","
+        "\"macAddress\":\"00:1A:2B:3C:4D:5E\","
+        "\"firmwareVersion\":\"1.2.3\","
+        "\"location\":\"Living \\\"Room\","
+        "\"region\":\"Line\\u000ATwo\","
+        "\"httpPort\":80,\"online\":true}";
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               strcmp(response.contentType, "application/json") == 0 &&
+               response.body == NULL && strcmp(body, expected) == 0,
+           "device endpoint formats identity, mDNS, IPv4, MAC, version, and location");
+
+    handler.updateNetwork(false, 0, NULL);
+    response = handler.handle("GET /api/device HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               strstr(body, "\"ipAddress\":\"\"") != NULL &&
+               strstr(body, "\"macAddress\":\"00:1A:2B:3C:4D:5E\"") != NULL &&
+               strstr(body, "\"online\":false") != NULL,
+           "device endpoint clears disconnected IP state and retains the stable MAC");
+
+    response = handler.handle(
+        "GET /api/device?ignored=true HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "404 Not Found") == 0 &&
+               fallback.requestCount == 1,
+           "homepage routes reject query strings and preserve fallback handling");
+
+    char tiny[8] = "filled";
+    response = handler.handle("GET /api/device HTTP/1.1", tiny, sizeof(tiny));
+    expect(strcmp(response.status, "500 Internal Server Error") == 0 &&
+               response.bodyLength == 0 && tiny[0] == '\0',
+           "device endpoint fails safely when its response buffer is too small");
+}
 
 class OtaFramingGuardHandler : public LocalHttpHandler {
 public:
@@ -1171,6 +1257,15 @@ void testWorkerRequests() {
         memcmp(fake.output + fake.outputLength - 3, "a\0b", 3) == 0;
     fakeMutex.unlock();
     expect(binary, "binary response bytes are preserved");
+
+    fakeMutex.lock();
+    fake.handlerMode = 4;
+    fakeMutex.unlock();
+    queueRequest(request, sizeof(request) - 1);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 5) &&
+               outputContains("Content-Length: 8\r\n") &&
+               outputContains("\r\n\r\nexternal"),
+           "static response bodies are sent without copying into the worker buffer");
 }
 
 void testRequestLineBoundary() {
@@ -2011,6 +2106,7 @@ void setup() {
     testNativePeerIpv4Lookup();
     testDisconnectedPolling();
     testTelemetryHandler();
+    testDeviceHomepageHandler();
     testSocketScopeAndReset();
     testSocketRelease();
     testSocketMoveOwnership();

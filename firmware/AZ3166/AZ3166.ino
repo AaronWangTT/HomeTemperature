@@ -1,4 +1,5 @@
 #include <ArduinoMDNS.h>
+#include <AZ3166WiFi.h>
 
 #include "src/config/cloud_config.h"
 #include "src/config/AppConfig.h"
@@ -9,6 +10,7 @@
 #include "src/platform/DeviceIdentity.h"
 #include "src/discovery/LocalDiscovery.h"
 #include "src/http/LocalWebServer.h"
+#include "src/http/DeviceHomepageHandler.h"
 #include "src/ota/LocalOtaController.h"
 #include "src/ota/LocalOtaHttpHandler.h"
 #include "src/ota/LocalOtaPlatform.h"
@@ -36,6 +38,13 @@ const LocalDiscoveryService localHttpService = {
 LocalDiscovery localDiscovery(
     AppConfig::LOCAL_DISCOVERY_RETRY_INTERVAL_MS, localHttpService);
 TelemetryHttpHandler telemetryHttpHandler(telemetryService);
+DeviceHomepageHandler deviceHomepageHttpHandler(
+    telemetryHttpHandler,
+    AppConfig::LOCAL_HOSTNAME,
+    AppConfig::LOCAL_LOCATION,
+    AppConfig::LOCAL_REGION,
+    AppConfig::OTA_FIRMWARE_VERSION,
+    AppConfig::LOCAL_TELEMETRY_PORT);
 NetworkMaintenanceCoordinator networkMaintenance;
 Az3166OtaCore otaCore;
 LocalOtaController otaController(
@@ -47,7 +56,7 @@ LocalOtaController otaController(
     AppConfig::OTA_BOARD_ID,
     AppConfig::OTA_FIRMWARE_VERSION,
     millis);
-LocalOtaHttpHandler localHttpHandler(telemetryHttpHandler, otaController);
+LocalOtaHttpHandler localHttpHandler(deviceHomepageHttpHandler, otaController);
 const LocalHttpStreamingLimits otaStreamingLimits = {
     AppConfig::OTA_MAX_PACKAGE_SIZE,
     AppConfig::OTA_UPLOAD_IDLE_TIMEOUT_MS,
@@ -113,6 +122,18 @@ void handleConnectivityEvents(const ConnectivityEvents &events) {
     if (events.wifiConnected) {
         connectivity.printTimeSynchronizationStatus();
     }
+
+    if (events.wifiConnected || events.wifiDisconnected ||
+        events.localAddressChanged) {
+        uint8_t macAddress[6];
+        uint8_t *currentMacAddress = connectivity.isWiFiConnected()
+            ? WiFi.macAddress(macAddress)
+            : NULL;
+        deviceHomepageHttpHandler.updateNetwork(
+            connectivity.isWiFiConnected(),
+            connectivity.localIPv4Address(),
+            currentMacAddress);
+    }
 }
 
 // Setup and main loop functions
@@ -121,6 +142,9 @@ void setup() {
     while (!Serial);
 
     deviceIdentity.begin();
+    if (!deviceHomepageHttpHandler.begin(deviceIdentity.get())) {
+        Serial.println("Device homepage identity initialization failed");
+    }
     buttons.begin();
     Screen.init();
 

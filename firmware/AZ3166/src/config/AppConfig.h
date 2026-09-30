@@ -18,8 +18,16 @@ static const uint16_t LOCAL_TELEMETRY_PORT = 80;
 static const unsigned long LOCAL_WEB_SERVER_RETRY_INTERVAL_MS = 5000UL;
 static const char LOCAL_HOSTNAME[] = "az3166";
 static const char LOCAL_HTTP_SERVICE_NAME[] = "az3166._http";
-static const char LOCAL_HTTP_SERVICE_TXT[] = "\x13" "path=/api/telemetry";
+static const char LOCAL_HTTP_SERVICE_TXT[] = "\x06" "path=/";
 static const unsigned long LOCAL_DISCOVERY_RETRY_INTERVAL_MS = 5000UL;
+#ifndef HOME_TEMPERATURE_LOCATION
+#define HOME_TEMPERATURE_LOCATION "Home"
+#endif
+#ifndef HOME_TEMPERATURE_REGION
+#define HOME_TEMPERATURE_REGION ""
+#endif
+static const char LOCAL_LOCATION[] = HOME_TEMPERATURE_LOCATION;
+static const char LOCAL_REGION[] = HOME_TEMPERATURE_REGION;
 
 static const float TELEMETRY_MIN_TEMPERATURE_C = -50.0f;
 static const float TELEMETRY_MAX_TEMPERATURE_C = 100.0f;

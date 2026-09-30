@@ -12,6 +12,7 @@ credentials, or mDNS.
 | [LocalWebServer.h](LocalWebServer.h) | Worker lifecycle, listener readiness, connectivity reconciliation, and bounded HTTP I/O. |
 | [LocalHttpHandler.h](LocalHttpHandler.h) | Application request handler and response contract: status, content type, and exact body length. |
 | [LocalHttpStreamingHandler.h](LocalHttpStreamingHandler.h) | Optional request-body routing, bounded pull-stream API, and streaming limits. |
+| [DeviceHomepageHandler.h](DeviceHomepageHandler.h) | HomeTemperature's `/` page, `/api/device` metadata route, and synchronized network snapshot. |
 | `LocalWebServerOperations` | Replaceable clock and socket operations for focused tests or another transport adapter. |
 | `LocalHttpServiceUpdate` | Optional typed callback for listener availability, independent of the application handler. |
 
@@ -71,6 +72,14 @@ retains the worker for a later reconnect.
 The existing [TelemetryHttpHandler.h](../telemetry/TelemetryHttpHandler.h) is one
 application adapter, not part of the HTTP engine. Another handler can expose a
 different route, payload, or content type using the same server.
+
+HomeTemperature wraps that adapter with `DeviceHomepageHandler`. It serves a
+static responsive page at `/` directly from process-lifetime read-only storage
+and returns a synchronized device/network snapshot from `/api/device`. The
+sketch calls `begin(deviceId)` after identity initialization and
+`updateNetwork()` after connection, disconnection, or IPv4 changes. The page
+uses browser-local date/time, reads telemetry immediately and every 60 seconds,
+and links to the existing `/ota` route.
 
 ## Optional Request-Body Streaming
 
@@ -171,12 +180,15 @@ constructor argument to connect an existing discovery object. See the
   permits one body request concurrently with bounded listener requests; it does
   not permit concurrent body uploads.
 - Request line: 96 bytes; total request headers: 2048 bytes; `Authorization`:
-  63 bytes; `Host`: 127 bytes; `Origin`: 255 bytes; response body: 3072 bytes;
+  63 bytes; `Host`: 127 bytes; `Origin`: 255 bytes; generated response body: 3072 bytes;
   prefetched body: at most 128 bytes. Header reads and response writes each have
   a two-second deadline. Body size, idle deadline, and total deadline are
   explicit constructor limits.
 - Responses include `Content-Length` and `Connection: close`; partial writes are
   handled. Bodies may contain binary data within the supplied buffer limit.
+  A handler may instead return a process-lifetime, read-only body pointer; this
+  supports larger static assets such as the device homepage without increasing
+  the worker stack. The handler owns that storage until transmission finishes.
 - Persistent connections, chunked transfer coding, WebSockets, and TLS are not
   implemented. Authentication policy belongs to the application handler; the
   OTA handler uses parsed metadata for framing and same-origin checks. Use this

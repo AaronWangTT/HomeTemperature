@@ -92,7 +92,8 @@ those values as behavior changes, not simply cosmetic configuration edits.
 
 | Setting group | Current application choices |
 | --- | --- |
-| Local service | Port 80, `/api/telemetry`, `az3166.local`, matching HTTP service/TXT metadata. |
+| Local service | Port 80, homepage `/`, telemetry `/api/telemetry`, device information `/api/device`, `az3166.local`, and matching HTTP service/TXT metadata. |
+| Device location | `HOME_TEMPERATURE_LOCATION` defaults to `Home`; `HOME_TEMPERATURE_REGION` defaults to an empty string. Supply build definitions for the deployed room/site labels. |
 | Scheduling | Five-minute normal cloud interval and 15-second retry interval. |
 | Connectivity | One-second status sampling, 5-to-60-second Wi-Fi backoff, 60-second NTP retry. |
 | Input and recovery | 50 ms button debounce and 30-second watchdog. |

@@ -103,6 +103,11 @@ response containing the canonical compiled `firmwareVersion`. It does not read
 the sensors and lets the command-line OTA client verify the signed version
 after reboot.
 
+In the complete application, `DeviceHomepageHandler` wraps this adapter to add
+the `/` browser page and `/api/device` metadata endpoint before
+`LocalOtaHttpHandler` adds OTA routes. These wrappers delegate unknown requests,
+so the telemetry and version contracts remain unchanged.
+
 | Condition | Result |
 | --- | --- |
 | Valid reading and payload | `200 OK`, JSON body |

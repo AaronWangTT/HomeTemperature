@@ -13,6 +13,7 @@ struct LocalHttpResponse {
     LocalHttpResponseAttemptCallback afterAttempt;
     void *afterAttemptContext;
     bool allowUnreadRequestBody;
+    const char *body;
 };
 
 struct LocalHttpRequest {
