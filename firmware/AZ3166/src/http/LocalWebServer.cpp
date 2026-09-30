@@ -129,6 +129,26 @@ bool copyHeaderValue(
     return true;
 }
 
+bool appendHeaderValue(
+    const char *value, size_t length, char *destination, size_t capacity) {
+    while (length > 0 && (*value == ' ' || *value == '\t')) {
+        ++value;
+        --length;
+    }
+    while (length > 0 &&
+           (value[length - 1] == ' ' || value[length - 1] == '\t')) {
+        --length;
+    }
+    size_t existingLength = strlen(destination);
+    if (length == 0 || existingLength + 1 + length >= capacity) {
+        return false;
+    }
+    destination[existingLength] = ',';
+    memcpy(destination + existingLength + 1, value, length);
+    destination[existingLength + 1 + length] = '\0';
+    return true;
+}
+
 uint8_t metadataCount(LocalHttpRequestMetadataStatus status) {
     if (status == LOCAL_HTTP_METADATA_ABSENT) {
         return 0;
@@ -978,7 +998,9 @@ void LocalWebServer::serveClient(LocalHttpSocket &client, uint32_t generation) {
             request.hasContentLength,
             request.hasTransferEncoding,
             request.contentLength,
-            request.prefetchedLength
+            request.prefetchedLength,
+            request.ifNoneMatch,
+            request.ifNoneMatchCount
         };
         response = handler_.handleRequest(metadata, body, sizeof(body));
         if ((response.body == NULL && response.bodyLength > sizeof(body)) ||
@@ -1110,6 +1132,8 @@ bool LocalWebServer::readRequest(
     request.contentTypeCount = 0;
     request.contentType[0] = '\0';
     request.hasCookie = false;
+    request.ifNoneMatchCount = 0;
+    request.ifNoneMatch[0] = '\0';
     if (!canonicalFraming) {
         return true;
     }
@@ -1182,6 +1206,19 @@ bool LocalWebServer::readRequest(
             }
         } else if (asciiEqualIgnoreCase(name, nameLength, "cookie")) {
             request.hasCookie = true;
+        } else if (asciiEqualIgnoreCase(name, nameLength, "if-none-match")) {
+            ++request.ifNoneMatchCount;
+            if (request.ifNoneMatchCount == 1) {
+                if (!copyHeaderValue(
+                        value, valueLength, request.ifNoneMatch,
+                        sizeof(request.ifNoneMatch))) {
+                    request.bodyFramingValid = false;
+                }
+            } else if (!appendHeaderValue(
+                           value, valueLength, request.ifNoneMatch,
+                           sizeof(request.ifNoneMatch))) {
+                request.bodyFramingValid = false;
+            }
         }
         position = lineEnd + 2;
     }
@@ -1247,13 +1284,35 @@ bool LocalWebServer::sendResponse(
     const char *body,
     uint32_t generation,
     bool streaming) {
-    char header[256];
+    char header[384];
+    const char *cacheControl = response.cacheControl == NULL
+        ? "" : response.cacheControl;
+    const char *etag = response.etag == NULL ? "" : response.etag;
+    char contentLengthHeader[48] = "";
+    if (strncmp(response.status, "304 ", 4) != 0) {
+        int contentLength = snprintf(
+            contentLengthHeader,
+            sizeof(contentLengthHeader),
+            "Content-Length: %u\r\n",
+            static_cast<unsigned int>(response.bodyLength));
+        if (contentLength <= 0 ||
+            static_cast<size_t>(contentLength) >=
+                sizeof(contentLengthHeader)) {
+            return false;
+        }
+    }
     int length = snprintf(
         header, sizeof(header),
-        "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %u\r\n"
-        "Connection: close\r\n\r\n",
+        "HTTP/1.1 %s\r\nContent-Type: %s\r\n%s"
+        "%s%s%s%s%s%sConnection: close\r\n\r\n",
         response.status, response.contentType,
-        static_cast<unsigned int>(response.bodyLength));
+        contentLengthHeader,
+        response.cacheControl == NULL ? "" : "Cache-Control: ",
+        cacheControl,
+        response.cacheControl == NULL ? "" : "\r\n",
+        response.etag == NULL ? "" : "ETag: ",
+        etag,
+        response.etag == NULL ? "" : "\r\n");
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(header)) {
         return false;
     }

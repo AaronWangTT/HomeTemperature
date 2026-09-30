@@ -143,6 +143,8 @@ private:
         size_t originLength;
         char origin[LocalHttpStreamingRequest::ORIGIN_CAPACITY];
         bool hasCookie;
+        uint8_t ifNoneMatchCount;
+        char ifNoneMatch[96];
     };
 
     struct StreamingJob {

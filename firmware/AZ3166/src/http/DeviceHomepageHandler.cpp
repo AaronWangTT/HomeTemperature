@@ -76,6 +76,17 @@ const q=id=>document.getElementById(id),state={updated:0,nextAttempt:0,inFlight:
 </script></body></html>)HTPAGE";
 
 static_assert(sizeof(HOMEPAGE) < 20000, "Homepage exceeds its flash budget");
+const char HOMEPAGE_CACHE_CONTROL[] = "no-cache";
+const char API_CACHE_CONTROL[] = "no-store";
+
+uint32_t homepageHash() {
+    uint32_t hash = 2166136261UL;
+    for (size_t index = 0; index < sizeof(HOMEPAGE) - 1; ++index) {
+        hash ^= static_cast<uint8_t>(HOMEPAGE[index]);
+        hash *= 16777619UL;
+    }
+    return hash;
+}
 
 bool appendBytes(
     char *body,
@@ -149,6 +160,11 @@ DeviceHomepageHandler::DeviceHomepageHandler(
       connected_(false) {
     deviceId_[0] = '\0';
     macAddress_[0] = '\0';
+    snprintf(
+        homepageEtag_,
+        sizeof(homepageEtag_),
+        "\"homepage-%08lX\"",
+        static_cast<unsigned long>(homepageHash()));
 }
 
 bool DeviceHomepageHandler::begin(const char *deviceId) {
@@ -186,6 +202,7 @@ bool DeviceHomepageHandler::exactGet(
     if (requestLine == NULL || path == NULL) {
         return false;
     }
+
     char expected[96];
     int length = snprintf(
         expected, sizeof(expected), "GET %s HTTP/1.1", path);
@@ -196,6 +213,39 @@ bool DeviceHomepageHandler::exactGet(
     length = snprintf(expected, sizeof(expected), "GET %s HTTP/1.0", path);
     return length > 0 && static_cast<size_t>(length) < sizeof(expected) &&
         strcmp(requestLine, expected) == 0;
+}
+
+bool DeviceHomepageHandler::etagMatches(
+    const char *ifNoneMatch, const char *etag) {
+    if (ifNoneMatch == NULL || etag == NULL) {
+        return false;
+    }
+    const size_t etagLength = strlen(etag);
+    const char *current = ifNoneMatch;
+    while (*current != '\0') {
+        while (*current == ' ' || *current == '\t' || *current == ',') {
+            ++current;
+        }
+        const char *token = current;
+        while (*current != '\0' && *current != ',') {
+            ++current;
+        }
+        const char *end = current;
+        while (end > token && (end[-1] == ' ' || end[-1] == '\t')) {
+            --end;
+        }
+        if (end - token == 1 && token[0] == '*') {
+            return true;
+        }
+        if (end - token >= 2 && token[0] == 'W' && token[1] == '/') {
+            token += 2;
+        }
+        if (static_cast<size_t>(end - token) == etagLength &&
+            memcmp(token, etag, etagLength) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 LocalHttpResponse DeviceHomepageHandler::deviceInfo(
@@ -289,7 +339,31 @@ LocalHttpResponse DeviceHomepageHandler::handle(
     const char *requestLine,
     char *body,
     size_t bodySize) {
+    LocalHttpRequest request = {};
+    request.requestLine = requestLine;
+    return handleRequest(request, body, bodySize);
+}
+
+LocalHttpResponse DeviceHomepageHandler::handleRequest(
+    const LocalHttpRequest &request,
+    char *body,
+    size_t bodySize) {
+    const char *requestLine = request.requestLine;
     if (exactGet(requestLine, "/")) {
+        if (request.ifNoneMatchCount > 0 &&
+            etagMatches(request.ifNoneMatch, homepageEtag_)) {
+            return {
+                "304 Not Modified",
+                "text/html; charset=utf-8",
+                0,
+                NULL,
+                NULL,
+                false,
+                NULL,
+                HOMEPAGE_CACHE_CONTROL,
+                homepageEtag_
+            };
+        }
         return {
             "200 OK",
             "text/html; charset=utf-8",
@@ -297,11 +371,24 @@ LocalHttpResponse DeviceHomepageHandler::handle(
             NULL,
             NULL,
             false,
-            HOMEPAGE
+            HOMEPAGE,
+            HOMEPAGE_CACHE_CONTROL,
+            homepageEtag_
         };
     }
     if (exactGet(requestLine, "/api/device")) {
-        return deviceInfo(body, bodySize);
+        LocalHttpResponse response = deviceInfo(body, bodySize);
+        response.cacheControl = API_CACHE_CONTROL;
+        return response;
     }
-    return fallback_.handle(requestLine, body, bodySize);
+    LocalHttpResponse response =
+        fallback_.handleRequest(request, body, bodySize);
+    if (exactGet(requestLine, "/api/telemetry")) {
+        response.cacheControl = API_CACHE_CONTROL;
+    }
+    return response;
+}
+
+bool DeviceHomepageHandler::requiresRequestMetadata(const char *requestLine) {
+    return fallback_.requiresRequestMetadata(requestLine);
 }

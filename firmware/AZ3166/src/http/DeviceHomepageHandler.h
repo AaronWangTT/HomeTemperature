@@ -26,9 +26,15 @@ public:
         const char *requestLine,
         char *body,
         size_t bodySize) override;
+    LocalHttpResponse handleRequest(
+        const LocalHttpRequest &request,
+        char *body,
+        size_t bodySize) override;
+    bool requiresRequestMetadata(const char *requestLine) override;
 
 private:
     static bool exactGet(const char *requestLine, const char *path);
+    static bool etagMatches(const char *ifNoneMatch, const char *etag);
     LocalHttpResponse deviceInfo(char *body, size_t bodySize);
 
     LocalHttpHandler &fallback_;
@@ -40,6 +46,7 @@ private:
     rtos::Mutex stateMutex_;
     char deviceId_[32];
     char macAddress_[18];
+    char homepageEtag_[64];
     uint32_t address_;
     bool connected_;
 };

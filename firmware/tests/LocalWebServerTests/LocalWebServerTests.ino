@@ -842,6 +842,9 @@ void testDeviceHomepageHandler() {
         handler.handle("GET / HTTP/1.1", body, sizeof(body));
     expect(strcmp(response.status, "200 OK") == 0 &&
                strcmp(response.contentType, "text/html; charset=utf-8") == 0 &&
+               strcmp(response.cacheControl, "no-cache") == 0 &&
+               strncmp(response.etag, "\"homepage-", 10) == 0 &&
+               strlen(response.etag) == 19 &&
                response.body != NULL && response.bodyLength > 3072 &&
                strstr(response.body, "/api/device") != NULL &&
                strstr(response.body, "window.location.hash.slice(1)") != NULL &&
@@ -851,6 +854,32 @@ void testDeviceHomepageHandler() {
                strstr(response.body, "document.execCommand(\"copy\")") != NULL &&
                strcmp(body, "unchanged") == 0,
            "homepage includes bounded refresh scheduling and copy fallback");
+
+    const char *homepageEtag = response.etag;
+    char listedEtag[64];
+    snprintf(
+        listedEtag,
+        sizeof(listedEtag),
+        "W/\"other\", W/%s",
+        homepageEtag);
+    LocalHttpRequest conditionalRequest = {};
+    conditionalRequest.requestLine = "GET / HTTP/1.1";
+    conditionalRequest.ifNoneMatch = listedEtag;
+    conditionalRequest.ifNoneMatchCount = 1;
+    response = handler.handleRequest(
+        conditionalRequest, body, sizeof(body));
+    expect(strcmp(response.status, "304 Not Modified") == 0 &&
+               response.bodyLength == 0 && response.body == NULL &&
+               strcmp(response.cacheControl, "no-cache") == 0 &&
+               strcmp(response.etag, homepageEtag) == 0,
+           "matching weak or listed homepage validators return 304");
+
+    conditionalRequest.ifNoneMatch = "\"homepage-00000000\"";
+    response = handler.handleRequest(
+        conditionalRequest, body, sizeof(body));
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               response.body != NULL && response.bodyLength > 3072,
+           "stale homepage validators receive the current representation");
 
     response = handler.handle("GET /api/device HTTP/1.0", body, sizeof(body));
     const char expected[] =
@@ -864,8 +893,14 @@ void testDeviceHomepageHandler() {
         "\"httpPort\":80,\"online\":true}";
     expect(strcmp(response.status, "200 OK") == 0 &&
                strcmp(response.contentType, "application/json") == 0 &&
+               strcmp(response.cacheControl, "no-store") == 0 &&
                response.body == NULL && strcmp(body, expected) == 0,
            "device endpoint formats identity, mDNS, IPv4, MAC, version, and location");
+
+    response =
+        handler.handle("GET /api/telemetry HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.cacheControl, "no-store") == 0,
+           "dynamic telemetry responses explicitly disable storage");
 
     handler.updateNetwork(false, 0, NULL);
     response = handler.handle("GET /api/device HTTP/1.1", body, sizeof(body));
@@ -878,7 +913,7 @@ void testDeviceHomepageHandler() {
     response = handler.handle(
         "GET /api/device?ignored=true HTTP/1.1", body, sizeof(body));
     expect(strcmp(response.status, "404 Not Found") == 0 &&
-               fallback.requestCount == 1,
+               fallback.requestCount == 2,
            "homepage routes reject query strings and preserve fallback handling");
 
     char tiny[8] = "filled";
@@ -1276,11 +1311,47 @@ void testWorkerRequests() {
         externalBody =
             fake.output[fake.outputLength - 3073 + index] == 'x';
     }
+
     fakeMutex.unlock();
     expect(externalCompleted &&
                outputContains("Content-Length: 3073\r\n") &&
                externalBody,
            "external response bodies larger than the worker buffer are sent intact");
+}
+
+void testHomepageConditionalRequest() {
+    resetHttpPlatform();
+    HomepageFallbackHandler fallback;
+    DeviceHomepageHandler handler(
+        fallback, "az3166", "Home", "", "1.2.3", 80);
+    char body[1];
+    LocalHttpResponse homepage =
+        handler.handle("GET / HTTP/1.1", body, sizeof(body));
+    char request[192];
+    int requestLength = snprintf(
+        request,
+        sizeof(request),
+        "GET / HTTP/1.1\r\n"
+        "Host: az3166.local\r\n"
+        "If-None-Match: \"other\"\r\n"
+        "If-None-Match: %s\r\n\r\n",
+        homepage.etag);
+    expect(
+        requestLength > 0 &&
+            static_cast<size_t>(requestLength) < sizeof(request),
+        "homepage validator fits the conditional request fixture");
+    LocalWebServer server(handler, 8080, 5000, httpOperations());
+    server.update(true, 0xC0000201UL);
+    queueRequest(request, static_cast<size_t>(requestLength));
+    char etagHeader[64];
+    snprintf(etagHeader, sizeof(etagHeader), "ETag: %s\r\n", homepage.etag);
+    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
+               outputContains("HTTP/1.1 304 Not Modified\r\n") &&
+               !outputContains("Content-Length:") &&
+               outputContains("Cache-Control: no-cache\r\n") &&
+               outputContains(etagHeader) &&
+               outputContains("\r\n\r\n"),
+           "server combines repeated validators and sends a bodyless 304 without a length");
 }
 
 void testRequestLineBoundary() {
@@ -2134,6 +2205,7 @@ void setup() {
     testTransientAcceptFailures();
     testAddressChangesDuringStartup();
     testWorkerRequests();
+    testHomepageConditionalRequest();
     testRequestLineBoundary();
     testRequestBoundsAndDisconnect();
     testStreamingFramingAndPrefetchedBody();

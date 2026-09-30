@@ -14,6 +14,8 @@ struct LocalHttpResponse {
     void *afterAttemptContext;
     bool allowUnreadRequestBody;
     const char *body;
+    const char *cacheControl;
+    const char *etag;
 };
 
 struct LocalHttpRequest {
@@ -34,6 +36,8 @@ struct LocalHttpRequest {
     bool hasTransferEncoding;
     size_t contentLength;
     size_t prefetchedLength;
+    const char *ifNoneMatch;
+    uint8_t ifNoneMatchCount;
 };
 
 class LocalHttpHandler {
