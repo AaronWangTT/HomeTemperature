@@ -384,7 +384,7 @@ struct FakeHttpPlatform {
     osThreadId handlerThread;
     osThreadId streamingThread;
     char input[2300];
-    char output[1024];
+    char output[4096];
     char streamedBody[128];
     char streamingAuthorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
     char streamingHost[LocalHttpStreamingRequest::HOST_CAPACITY];
@@ -793,7 +793,9 @@ public:
             return {"200 OK", "application/octet-stream", 3};
         }
         if (mode == 4) {
-            static const char staticBody[] = "external";
+            static char staticBody[3074];
+            memset(staticBody, 'x', sizeof(staticBody) - 1);
+            staticBody[sizeof(staticBody) - 1] = '\0';
             return {
                 "200 OK", "text/plain", sizeof(staticBody) - 1,
                 NULL, NULL, false, staticBody
@@ -1266,10 +1268,19 @@ void testWorkerRequests() {
     fake.handlerMode = 4;
     fakeMutex.unlock();
     queueRequest(request, sizeof(request) - 1);
-    expect(waitForCount(&FakeHttpPlatform::closeClientCount, 5) &&
-               outputContains("Content-Length: 8\r\n") &&
-               outputContains("\r\n\r\nexternal"),
-           "static response bodies are sent without copying into the worker buffer");
+    bool externalCompleted =
+        waitForCount(&FakeHttpPlatform::closeClientCount, 5);
+    fakeMutex.lock();
+    bool externalBody = fake.outputLength >= 3073;
+    for (size_t index = 0; externalBody && index < 3073; ++index) {
+        externalBody =
+            fake.output[fake.outputLength - 3073 + index] == 'x';
+    }
+    fakeMutex.unlock();
+    expect(externalCompleted &&
+               outputContains("Content-Length: 3073\r\n") &&
+               externalBody,
+           "external response bodies larger than the worker buffer are sent intact");
 }
 
 void testRequestLineBoundary() {
