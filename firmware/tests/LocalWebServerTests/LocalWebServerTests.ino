@@ -1333,6 +1333,7 @@ void testHomepageConditionalRequest() {
         sizeof(request),
         "GET / HTTP/1.1\r\n"
         "Host: az3166.local\r\n"
+        "If-None-Match: \"other\"\r\n"
         "If-None-Match: %s\r\n\r\n",
         homepage.etag);
     expect(
@@ -1346,11 +1347,11 @@ void testHomepageConditionalRequest() {
     snprintf(etagHeader, sizeof(etagHeader), "ETag: %s\r\n", homepage.etag);
     expect(waitForCount(&FakeHttpPlatform::closeClientCount, 1) &&
                outputContains("HTTP/1.1 304 Not Modified\r\n") &&
-               outputContains("Content-Length: 0\r\n") &&
+               !outputContains("Content-Length:") &&
                outputContains("Cache-Control: no-cache\r\n") &&
                outputContains(etagHeader) &&
                outputContains("\r\n\r\n"),
-           "server parses If-None-Match and sends a bodyless 304 response");
+           "server combines repeated validators and sends a bodyless 304 without a length");
 }
 
 void testRequestLineBoundary() {

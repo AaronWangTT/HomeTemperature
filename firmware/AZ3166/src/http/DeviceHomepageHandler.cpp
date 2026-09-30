@@ -350,7 +350,7 @@ LocalHttpResponse DeviceHomepageHandler::handleRequest(
     size_t bodySize) {
     const char *requestLine = request.requestLine;
     if (exactGet(requestLine, "/")) {
-        if (request.ifNoneMatchCount == 1 &&
+        if (request.ifNoneMatchCount > 0 &&
             etagMatches(request.ifNoneMatch, homepageEtag_)) {
             return {
                 "304 Not Modified",
