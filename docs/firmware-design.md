@@ -314,9 +314,10 @@ Address tracking does not change cloud upload gating or local HTTP handling.
 
 ### 6.4 Local mDNS Discovery
 
-The fixed host label is `az3166`, advertised as `az3166.local`. The local URL is
-`http://az3166.local/api/telemetry`; the existing HTTP API and cloud identity do
-not change. The initial version assumes a single device using that name per LAN
+The fixed host label is `az3166`, advertised as `az3166.local`. The local homepage
+is `http://az3166.local/`; the raw API remains
+`http://az3166.local/api/telemetry`, and the cloud identity does not change.
+The initial version assumes a single device using that name per LAN
 and does not implement custom collision resolution or automatic renaming.
 
 `LocalDiscovery::update(serviceAvailable, address)` is called only by the HTTP
@@ -358,7 +359,7 @@ firmware does not modify the installed library or board package.
 name, port, and TXT metadata; the controller no longer includes `AppConfig` or
 hard-codes telemetry. This application's descriptor publishes the current IPv4
 A record and an `_http._tcp.local.` service on the matching HTTP port with TXT
-`path=/api/telemetry`. The current platform backend has one responder per device.
+`path=/`. The current platform backend has one responder per device.
 Address and unique service records carry cache-flush and a 120-second TTL.
 Registration announces immediately, a worker sends a follow-up after one second,
 and the library refreshes services every 90 seconds. Service goodbye records are
@@ -568,6 +569,15 @@ GET /api/telemetry
 The trailing space is part of the match and separates the path from the HTTP
 version. Other methods and paths are not routed to telemetry.
 
+`DeviceHomepageHandler` wraps the telemetry adapter and adds exact `GET /` and
+`GET /api/device` routes for HTTP/1.0 and HTTP/1.1. The root response points
+directly to a process-lifetime static HTML body in Flash. `/api/device` builds a
+bounded JSON response containing the device ID, mDNS name, current IPv4 address,
+Wi-Fi MAC address, firmware version, configured location/region, port, and
+online state. Its mutable network snapshot is protected by a mutex because the
+main loop updates it while the HTTP worker reads it. `LocalOtaHttpHandler`
+remains the outer adapter and delegates unrelated requests to this chain.
+
 The HTTP worker handles one client at a time, using nonblocking socket readiness
 checks and short RTOS waits when I/O cannot progress:
 
@@ -579,8 +589,10 @@ checks and short RTOS waits when I/O cannot progress:
   sensor or shared state lock.
 - `LocalHttpHandler::handle()` receives the request line and a 3072-byte response
   buffer, and returns status, content type, and exact body byte count. Application
-  handlers can return text or binary data; returned metadata strings must remain
-  valid until the response is sent. Handler work itself must be bounded.
+  handlers can return text or binary data in that buffer, or point to a
+  process-lifetime read-only body such as the static homepage. Returned body
+  pointers and metadata strings must remain valid until the response is sent.
+  Handler work itself must be bounded.
 - Telemetry uses `application/json`; custom handlers can choose other types.
   Every response has an explicit `Content-Length` and `Connection: close`.
 - Partial writes are completed within the response deadline. Invalid body bounds
@@ -591,6 +603,8 @@ checks and short RTOS waits when I/O cannot progress:
 
 | Condition | HTTP status | Body |
 | --- | --- | --- |
+| Valid homepage request | `200 OK` | Static responsive HTML |
+| Valid device information request | `200 OK` | Current identity and network JSON |
 | Valid telemetry request | `200 OK` | Current telemetry JSON |
 | Incomplete, empty, or timed-out request | `400 Bad Request` | `{"error":"bad request"}` |
 | Unknown route | `404 Not Found` | `{"error":"not found"}` |

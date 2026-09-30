@@ -8,6 +8,7 @@
 #include "src/config/AppConfig.h"
 #include "src/http/LocalWebServer.h"
 #include "src/http/Az3166LocalWebServerOperations.h"
+#include "src/http/DeviceHomepageHandler.h"
 #include "src/telemetry/TelemetryHttpHandler.h"
 #include "src/telemetry/TelemetryService.h"
 
@@ -383,7 +384,7 @@ struct FakeHttpPlatform {
     osThreadId handlerThread;
     osThreadId streamingThread;
     char input[2300];
-    char output[1024];
+    char output[4096];
     char streamedBody[128];
     char streamingAuthorization[LocalHttpStreamingRequest::AUTHORIZATION_CAPACITY];
     char streamingHost[LocalHttpStreamingRequest::HOST_CAPACITY];
@@ -791,10 +792,101 @@ public:
             body[2] = 'b';
             return {"200 OK", "application/octet-stream", 3};
         }
+        if (mode == 4) {
+            static char staticBody[3074];
+            memset(staticBody, 'x', sizeof(staticBody) - 1);
+            staticBody[sizeof(staticBody) - 1] = '\0';
+            return {
+                "200 OK", "text/plain", sizeof(staticBody) - 1,
+                NULL, NULL, false, staticBody
+            };
+        }
         strcpy(body, "example");
         return {"200 OK", "text/plain", 7};
     }
 };
+
+class HomepageFallbackHandler : public LocalHttpHandler {
+public:
+    int requestCount = 0;
+
+    LocalHttpResponse handle(
+        const char *, char *body, size_t bodySize) override {
+        ++requestCount;
+        const char responseBody[] = "{\"error\":\"fallback\"}";
+        if (body == NULL || sizeof(responseBody) > bodySize) {
+            return {"500 Internal Server Error", "application/json", 0};
+        }
+        memcpy(body, responseBody, sizeof(responseBody));
+        return {"404 Not Found", "application/json", sizeof(responseBody) - 1};
+    }
+};
+
+void testDeviceHomepageHandler() {
+    HomepageFallbackHandler fallback;
+    DeviceHomepageHandler handler(
+        fallback,
+        "az3166",
+        "Living \"Room",
+        "Line\nTwo",
+        "1.2.3",
+        80);
+    expect(handler.begin("az3166-00112233445566778899AABB"),
+           "homepage accepts the bounded device identity");
+
+    const uint8_t macAddress[6] = {0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E};
+    handler.updateNetwork(true, 0xC0000209UL, macAddress);
+
+    char body[512] = "unchanged";
+    LocalHttpResponse response =
+        handler.handle("GET / HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               strcmp(response.contentType, "text/html; charset=utf-8") == 0 &&
+               response.body != NULL && response.bodyLength > 3072 &&
+               strstr(response.body, "/api/device") != NULL &&
+               strstr(response.body, "window.location.hash.slice(1)") != NULL &&
+               strstr(response.body, "nextAttempt") != NULL &&
+               strstr(response.body, "state.inFlight") != NULL &&
+               strstr(response.body, "await device()") != NULL &&
+               strstr(response.body, "document.execCommand(\"copy\")") != NULL &&
+               strcmp(body, "unchanged") == 0,
+           "homepage includes bounded refresh scheduling and copy fallback");
+
+    response = handler.handle("GET /api/device HTTP/1.0", body, sizeof(body));
+    const char expected[] =
+        "{\"deviceId\":\"az3166-00112233445566778899AABB\","
+        "\"mdnsName\":\"az3166.local\","
+        "\"ipAddress\":\"192.0.2.9\","
+        "\"macAddress\":\"00:1A:2B:3C:4D:5E\","
+        "\"firmwareVersion\":\"1.2.3\","
+        "\"location\":\"Living \\\"Room\","
+        "\"region\":\"Line\\u000ATwo\","
+        "\"httpPort\":80,\"online\":true}";
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               strcmp(response.contentType, "application/json") == 0 &&
+               response.body == NULL && strcmp(body, expected) == 0,
+           "device endpoint formats identity, mDNS, IPv4, MAC, version, and location");
+
+    handler.updateNetwork(false, 0, NULL);
+    response = handler.handle("GET /api/device HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "200 OK") == 0 &&
+               strstr(body, "\"ipAddress\":\"\"") != NULL &&
+               strstr(body, "\"macAddress\":\"00:1A:2B:3C:4D:5E\"") != NULL &&
+               strstr(body, "\"online\":false") != NULL,
+           "device endpoint clears disconnected IP state and retains the stable MAC");
+
+    response = handler.handle(
+        "GET /api/device?ignored=true HTTP/1.1", body, sizeof(body));
+    expect(strcmp(response.status, "404 Not Found") == 0 &&
+               fallback.requestCount == 1,
+           "homepage routes reject query strings and preserve fallback handling");
+
+    char tiny[8] = "filled";
+    response = handler.handle("GET /api/device HTTP/1.1", tiny, sizeof(tiny));
+    expect(strcmp(response.status, "500 Internal Server Error") == 0 &&
+               response.bodyLength == 0 && tiny[0] == '\0',
+           "device endpoint fails safely when its response buffer is too small");
+}
 
 class OtaFramingGuardHandler : public LocalHttpHandler {
 public:
@@ -1171,6 +1263,24 @@ void testWorkerRequests() {
         memcmp(fake.output + fake.outputLength - 3, "a\0b", 3) == 0;
     fakeMutex.unlock();
     expect(binary, "binary response bytes are preserved");
+
+    fakeMutex.lock();
+    fake.handlerMode = 4;
+    fakeMutex.unlock();
+    queueRequest(request, sizeof(request) - 1);
+    bool externalCompleted =
+        waitForCount(&FakeHttpPlatform::closeClientCount, 5);
+    fakeMutex.lock();
+    bool externalBody = fake.outputLength >= 3073;
+    for (size_t index = 0; externalBody && index < 3073; ++index) {
+        externalBody =
+            fake.output[fake.outputLength - 3073 + index] == 'x';
+    }
+    fakeMutex.unlock();
+    expect(externalCompleted &&
+               outputContains("Content-Length: 3073\r\n") &&
+               externalBody,
+           "external response bodies larger than the worker buffer are sent intact");
 }
 
 void testRequestLineBoundary() {
@@ -2011,6 +2121,7 @@ void setup() {
     testNativePeerIpv4Lookup();
     testDisconnectedPolling();
     testTelemetryHandler();
+    testDeviceHomepageHandler();
     testSocketScopeAndReset();
     testSocketRelease();
     testSocketMoveOwnership();

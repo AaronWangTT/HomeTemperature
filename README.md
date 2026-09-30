@@ -76,7 +76,9 @@ composition, then [docs/firmware-design.md](docs/firmware-design.md) for compone
 boundaries and test coverage. Local sensing, HTTP, and discovery can be used
 without deploying the hosted server or configuring cloud credentials. On an
 mDNS-capable LAN client, the running device is accessible at
-`http://az3166.local/api/telemetry`.
+`http://az3166.local/`. The device homepage shows current readings, local time,
+configured location, network identity, and firmware version. The raw telemetry
+API remains available at `http://az3166.local/api/telemetry`.
 
 These are reusable source components, not a separately packaged or
 board-independent SDK. Hardware adapters target AZ3166 Core 3.1.3 and
