@@ -78,8 +78,15 @@ const q=id=>document.getElementById(id),state={updated:0,nextAttempt:0,inFlight:
 static_assert(sizeof(HOMEPAGE) < 20000, "Homepage exceeds its flash budget");
 const char HOMEPAGE_CACHE_CONTROL[] = "no-cache";
 const char API_CACHE_CONTROL[] = "no-store";
-// Increment whenever the embedded homepage representation changes.
-const char HOMEPAGE_ETAG_VERSION[] = "1";
+
+uint32_t homepageHash() {
+    uint32_t hash = 2166136261UL;
+    for (size_t index = 0; index < sizeof(HOMEPAGE) - 1; ++index) {
+        hash ^= static_cast<uint8_t>(HOMEPAGE[index]);
+        hash *= 16777619UL;
+    }
+    return hash;
+}
 
 bool appendBytes(
     char *body,
@@ -156,9 +163,8 @@ DeviceHomepageHandler::DeviceHomepageHandler(
     snprintf(
         homepageEtag_,
         sizeof(homepageEtag_),
-        "\"homepage-%s-%s\"",
-        HOMEPAGE_ETAG_VERSION,
-        firmwareVersion_ == NULL ? "" : firmwareVersion_);
+        "\"homepage-%08lX\"",
+        static_cast<unsigned long>(homepageHash()));
 }
 
 bool DeviceHomepageHandler::begin(const char *deviceId) {

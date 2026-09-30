@@ -80,9 +80,11 @@ sketch calls `begin(deviceId)` after identity initialization and
 `updateNetwork()` after connection, disconnection, or IPv4 changes. The page
 uses browser-local date/time, reads telemetry immediately and every 60 seconds,
 and links to the existing `/ota` route. The homepage uses `Cache-Control:
-no-cache` with a page-and-firmware-specific `ETag`; a matching `If-None-Match`
-returns a bodyless `304 Not Modified`. Dynamic `/api/device` and
-`/api/telemetry` responses use `Cache-Control: no-store`.
+no-cache` with an `ETag` derived from the embedded page bytes; any HTML, CSS,
+or JavaScript change therefore invalidates the cached representation
+automatically. A matching `If-None-Match` returns a bodyless `304 Not Modified`.
+Dynamic `/api/device` and `/api/telemetry` responses use `Cache-Control:
+no-store`.
 
 ## Optional Request-Body Streaming
 
