@@ -204,8 +204,9 @@ $editorVersion = Get-RequiredMatchValue `
     -Pattern 'stm32f4/(?<value>\d+\.\d+\.\d+)$' `
     -Description "the editor Core version" `
     -SourcePath $editorPath
+$editorCompilerPath = ([string]$editorConfiguration.configurations[0].compilerPath).Replace("\", "/")
 $editorCompilerVersion = Get-RequiredMatchValue `
-    -Text ([string]$editorConfiguration.configurations[0].compilerPath) `
+    -Text $editorCompilerPath `
     -Pattern 'arm-none-eabi-gcc/(?<value>[^/]+)/bin/' `
     -Description "the editor compiler version" `
     -SourcePath $editorPath

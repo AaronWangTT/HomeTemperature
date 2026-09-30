@@ -5,7 +5,7 @@
     "configurations": [
         {
             "name": "AZ3166",
-            "compilerPath": "${env:LOCALAPPDATA}/Arduino15/packages/AZ3166/tools/arm-none-eabi-gcc/5_4-2016q3/bin/arm-none-eabi-g++.exe",
+            "compilerPath": "${env:LOCALAPPDATA}\\Arduino15\\packages\\AZ3166\\tools\\arm-none-eabi-gcc\\5_4-2016q3\\bin\\arm-none-eabi-g++.exe",
             "compilerArgs": [
                 "-mcpu=cortex-m4",
                 "-mthumb",
