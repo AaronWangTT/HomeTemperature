@@ -842,9 +842,11 @@ void testDeviceHomepageHandler() {
                strcmp(response.contentType, "text/html; charset=utf-8") == 0 &&
                response.body != NULL && response.bodyLength > 3072 &&
                strstr(response.body, "/api/device") != NULL &&
-               strstr(response.body, "60-Math.floor") != NULL &&
+               strstr(response.body, "nextAttempt") != NULL &&
+               strstr(response.body, "state.inFlight") != NULL &&
+               strstr(response.body, "document.execCommand(\"copy\")") != NULL &&
                strcmp(body, "unchanged") == 0,
-           "homepage is served directly from static storage with 60-second refresh");
+           "homepage includes bounded refresh scheduling and copy fallback");
 
     response = handler.handle("GET /api/device HTTP/1.0", body, sizeof(body));
     const char expected[] =
